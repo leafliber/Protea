@@ -1,0 +1,15 @@
+{
+  "name": "protea",
+  "version": "0.1.0",
+  "description": "AI-powered personal productivity platform",
+  "private": true,
+  "scripts": {
+    "dev:backend": "cd backend && npm run start:dev",
+    "build": "cd backend && npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/leafliber/Protea.git"
+  },
+  "license": "AGPL-3.0"
+}
