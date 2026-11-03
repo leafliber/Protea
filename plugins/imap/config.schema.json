@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["host", "user"],
+  "properties": {
+    "host": { "type": "string", "x-hot": false },
+    "port": { "type": "integer", "default": 993, "x-hot": false },
+    "secure": { "type": "boolean", "default": true, "x-hot": false, "description": "TLS from the start (993). false uses STARTTLS when offered." },
+    "user": { "type": "string", "x-hot": false },
+    "mailbox": { "type": "string", "default": "INBOX", "x-hot": false },
+    "mode": { "enum": ["idle", "poll"], "default": "idle", "x-hot": false, "description": "idle: the server pushes new mail; poll: check every pollSec." },
+    "pollSec": { "type": "integer", "minimum": 15, "default": 120 },
+    "level": { "enum": [2, 3, 4], "default": 2, "description": "Level of a new message." },
+    "bulkLevel": { "enum": [3, 4], "default": 4, "description": "Level of mailing-list and bulk mail (List-Unsubscribe, Precedence: bulk)." },
+    "important": { "type": "array", "items": { "type": "string" }, "description": "Sender addresses or @domains that always get `level`, even when they look like bulk mail." },
+    "snippetChars": { "type": "integer", "minimum": 0, "maximum": 2000, "default": 500 },
+    "rejectUnauthorized": { "type": "boolean", "default": true, "x-hot": false, "description": "false accepts self-signed certificates." }
+  }
+}

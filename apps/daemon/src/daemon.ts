@@ -15,13 +15,17 @@ import {
   MainSession,
   OwnerRegistry,
   PermissionGuard,
+  McpManager,
   PermissionPolicy,
   Scheduler,
+  SkillRegistry,
   SecretStore,
   SessionRepo,
   SystemSegments,
   ToolDispatcher,
+  ToolExposure,
   ToolRegistry,
+  ToolStatsRepo,
   Transcript,
   UsageRepo,
   approvalTools,
@@ -32,19 +36,23 @@ import {
   forkTools,
   isoInZone,
   kernelTools,
+  kvNamespace,
   loadConfig,
   loadPersona,
   mainTranscriptPath,
   newId,
+  normalizeMcpServer,
   openDatabase,
   reconcileDeliveries,
   resolveDevLoader,
   setConfigValue,
+  skillTools,
   systemClock,
   watchPaths,
   type Clock,
   type Db,
   type Logger,
+  type McpServerSettings,
   type PluginSettings,
   type ProteaConfig,
   type Provider,
@@ -87,6 +95,10 @@ export interface Daemon {
   budget: BudgetTracker;
   console: ConsolePlugin;
   tools: ToolRegistry;
+  mcp: McpManager;
+  skills: SkillRegistry;
+  /** Resolves once the MCP servers configured at start have been tried (they start in the background). */
+  mcpReady: Promise<void>;
   status(): StatusResponse;
   /** Re-read config.yaml now (the file watcher also does this on change). */
   reloadConfig(): Promise<void>;
@@ -114,7 +126,7 @@ function devLoader(env: NodeJS.ProcessEnv): string | null {
 export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const env = opts.env ?? process.env;
   const dataDir = path.resolve(opts.dataDir);
-  for (const d of ['sessions/forks', 'runs', 'plugins', 'plugin-data', 'overrides']) fs.mkdirSync(path.join(dataDir, d), { recursive: true });
+  for (const d of ['sessions/forks', 'runs', 'plugins', 'plugin-data', 'overrides', 'skills', 'workspace']) fs.mkdirSync(path.join(dataDir, d), { recursive: true });
   const lock = acquireLock(dataDir);
 
   const runId = newId();
@@ -215,10 +227,32 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   await plugins.rescan(settingsOf);
 
   // Permissions, approvals and audit (docs/10-architecture/14-security-and-permissions.md).
+  // MCP servers (docs/10-architecture/09-mcp-integration.md); they start in the background below.
+  let controlUrl = '';
+  const mcp = new McpManager({
+    tools,
+    bus,
+    log: log.child({ component: 'mcp' }),
+    clock,
+    dataDir,
+    version: VERSION,
+    secrets,
+    settings: () => config.mcp,
+    supervision: () => config.pluginHost,
+    pushInternal: (input) => {
+      plugins.pushInternal(input);
+    },
+    pushEvent: (server, input) => {
+      plugins.push({ source: `mcp:${server}`, maxLevel: 4 }, { ...input, ts: new Date(clock.now()).toISOString() });
+    },
+    redirectUrl: () => `${(config.control.publicUrl ?? controlUrl).replace(/\/$/, '')}/api/mcp/oauth/callback`,
+  });
+
   const audit = new AuditLog(db, clock);
   const policy = new PermissionPolicy(config.permissions, {
     askByDefault: (def) => plugins.isAskByDefault(def),
     ownerConfigured: () => owner.hasAny(),
+    annotations: (def) => mcp.policyFor(def),
   });
   const approvals = new ApprovalService({
     db,
@@ -242,6 +276,24 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     plugins.pushInternal(input);
   };
 
+  // Skills (docs/10-architecture/10-skills.md): built-in → data volume → plugins → MCP prompts.
+  const skills = new SkillRegistry({
+    roots: () => [
+      { dir: path.join(assets, 'skills'), origin: 'builtin' },
+      { dir: path.join(dataDir, 'skills'), origin: 'user' },
+      ...plugins.skillRoots(),
+    ],
+    userDir: path.join(dataDir, 'skills'),
+    disabled: () => new Set(config.skills.disabled),
+    mcpPrompts: () => config.skills.mcpPrompts,
+    toolNames: () => tools.list().map((t) => t.name),
+    prompts: mcp,
+    kv: kvNamespace(kv, 'skills'),
+    log: log.child({ component: 'skills' }),
+    clock,
+    onChanged: (names) => bus.emit('skills.changed', { names }),
+  });
+
   const budget = new BudgetTracker({ usage, settings: config.budget, bus, log: log.child({ component: 'budget' }), clock, pushInternal });
   const segments = new SystemSegments({
     persona,
@@ -250,11 +302,30 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     overridesDir: path.join(dataDir, 'overrides'),
     log: log.child({ component: 'context' }),
     permissions: () => policy.summary(tools.list()),
+    extraEnv: () => mcp.envSegments(),
+    skills: () => skills.catalog(),
   });
-  // Plugin and policy changes reach the system prefix at the next turn boundary.
-  bus.on('plugin.changed', () => segments.refresh());
+  // Plugin, MCP, skill and policy changes reach the system prefix at the next turn boundary.
+  bus.on('plugin.changed', () => {
+    skills.rescan();
+    segments.refresh();
+  });
+  bus.on('mcp.changed', () => {
+    skills.rescan();
+    segments.refresh();
+  });
+  bus.on('skills.changed', () => segments.refresh());
   const dispatcher = new ToolDispatcher(tools, log.child({ component: 'tools' }));
   dispatcher.setGuard(new PermissionGuard(policy, approvals, audit));
+  const toolStats = new ToolStatsRepo(db);
+  dispatcher.observe((name, ms, failed) => toolStats.record(name, ms, failed, new Date(clock.now()).toISOString()));
+  // Tool search: past context.toolSearch.threshold tools, MCP tools load on demand.
+  const exposure = new ToolExposure({
+    tools,
+    settings: () => config.context.toolSearch,
+    usage: (name) => toolStats.calls(name),
+    supported: (role) => provider.supportsToolSearch?.(role) ?? false,
+  });
   const effort = config.providers.anthropic.effort;
   const forks = new ForkManager({
     dir: path.join(dataDir, 'sessions', 'forks'),
@@ -264,6 +335,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     bus,
     provider,
     tools,
+    exposure,
     dispatcher,
     log: log.child({ component: 'forks' }),
     clock,
@@ -293,6 +365,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         ...(h.problem !== undefined ? { problem: h.problem } : {}),
       },
       plugins: plugins.status(),
+      mcp: mcp.status(),
+      skills: { listed: skills.listedNames().length, rejected: skills.list().filter((k) => k.errors.length > 0).length },
+      tools: { total: tools.list().length, deferred: provider.supportsToolSearch?.('main') ? exposure.deferredNames().length : 0 },
       usage24h: usage.totalsSince(clock.now() - 86_400_000),
       forks: forks.list(),
       budget: budget.status(),
@@ -301,7 +376,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   for (const spec of kernelTools({ store, status })) tools.register('core', spec);
   for (const spec of forkTools(forks, { maxTurns: config.scheduler.forks.maxTurns })) tools.register('core', spec);
   for (const spec of approvalTools({ approvals, policy, tools })) tools.register('core', spec);
+  for (const spec of skillTools(skills)) tools.register('core', spec);
   await plugins.startAll();
+  skills.rescan();
+  const mcpReady = mcp.apply(config.mcp.servers).catch((err: unknown) => log.error({ err: errorMessage(err) }, 'MCP servers not applied'));
 
   main = new MainSession({
     transcript,
@@ -310,7 +388,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     usage,
     bus,
     provider,
-    assembler: new ContextAssembler(segments, tools),
+    assembler: new ContextAssembler(segments, tools, exposure),
     dispatcher,
     log: log.child({ component: 'session' }),
     clock,
@@ -346,11 +424,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     const h = provider.health();
     if (!h.ready) reasons.push(`provider: ${h.problem ?? 'not ready'}`);
     for (const p of plugins.status()) if (p.enabled && p.state === 'failed') reasons.push(`plugin ${p.id}: ${p.error ?? 'failed'}`);
+    for (const m of mcp.status()) if (m.enabled && m.state === 'failed') reasons.push(`mcp ${m.id}: ${m.error ?? 'failed'}`);
     return { ready: reasons.length === 0, reasons };
   };
 
   // Hot configuration (docs/30-specs/04-config-reference.md §4).
-  const HOT_SECTIONS = new Set(['owner', 'permissions', 'plugins']);
+  const HOT_SECTIONS = new Set(['owner', 'permissions', 'plugins', 'mcp', 'skills', 'context']);
   const reloadConfig = async (): Promise<void> => {
     let next: ProteaConfig;
     try {
@@ -373,6 +452,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         log.error({ plugin: id, err: errorMessage(err) }, 'plugin settings not applied');
       }
     }
+    try {
+      await mcp.apply(next.mcp.servers);
+    } catch (err) {
+      log.error({ err: errorMessage(err) }, 'MCP settings not applied');
+    }
+    skills.rescan();
     const cold = (Object.keys(next) as Array<keyof ProteaConfig>).filter(
       (k) => !HOT_SECTIONS.has(k) && JSON.stringify(prev[k]) !== JSON.stringify(next[k]),
     );
@@ -383,6 +468,29 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     await plugins.updateConfig(id, cfg);
     config.plugins[id] = { enabled: plugins.get(id)?.enabled ?? false, config: cfg };
     persist(['plugins', id, 'config'], cfg);
+  };
+  const putMcpServer = async (id: string, entry: Record<string, unknown> | null): Promise<void> => {
+    const servers: Record<string, McpServerSettings> = { ...config.mcp.servers };
+    if (entry === null) delete servers[id];
+    else servers[id] = normalizeMcpServer(id, entry);
+    config.mcp = { ...config.mcp, servers };
+    persist(['mcp', 'servers', id], entry ?? undefined);
+    await mcp.apply(servers);
+  };
+  const setMcpEnabled = async (id: string, enabled: boolean): Promise<void> => {
+    const cur = config.mcp.servers[id];
+    if (!cur) throw new Error(`MCP server ${id} is not configured`);
+    config.mcp = { ...config.mcp, servers: { ...config.mcp.servers, [id]: { ...cur, enabled } } };
+    persist(['mcp', 'servers', id, 'enabled'], enabled);
+    await mcp.apply(config.mcp.servers);
+  };
+  const setSkillEnabled = (name: string, enabled: boolean): void => {
+    const disabled = new Set(config.skills.disabled);
+    if (enabled) disabled.delete(name);
+    else disabled.add(name);
+    config.skills = { ...config.skills, disabled: [...disabled].sort() };
+    persist(['skills', 'disabled'], config.skills.disabled);
+    skills.refreshCatalog();
   };
   const app = createControlApp({
     adminToken: token.value,
@@ -395,6 +503,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     approvals,
     rescanPlugins: () => plugins.rescan(settingsOf),
     setPluginConfig,
+    mcp,
+    putMcpServer,
+    setMcpEnabled,
+    skills,
+    setSkillEnabled,
     status,
     ready,
     pushConsole: (req, senderKey) =>
@@ -408,7 +521,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   let server: ControlServer;
   try {
     server = await startControlServer(app, opts.listen ?? config.control.listen);
+    controlUrl = server.url;
   } catch (err) {
+    await mcp.stopAll();
     await plugins.stopAll();
     transcript.close();
     db.close();
@@ -434,6 +549,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       debounceMs: 500,
       onError: (err) => log.warn({ err: err.message }, 'plugin directory watcher error'),
     }),
+    watchPaths([{ path: path.join(dataDir, 'skills'), recursive: true }], () => skills.rescan(), {
+      debounceMs: 300,
+      onError: (err) => log.warn({ err: err.message }, 'skills directory watcher error'),
+    }),
   ];
   const expiry = setInterval(() => approvals.expireDue(), 60_000);
   expiry.unref();
@@ -453,6 +572,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       const graceMs = config.daemon.shutdown.graceMs;
       const [finished] = await Promise.all([main.drain(graceMs), forks.stop(graceMs)]);
       if (!finished) log.warn('the running batch was aborted at shutdown; it resumes on the next start');
+      await mcp.stopAll();
       await plugins.stopAll();
       await server.close();
       transcript.close();
@@ -484,6 +604,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     budget,
     console: consolePlugin,
     tools,
+    mcp,
+    skills,
+    mcpReady,
     status,
     reloadConfig,
     stop,

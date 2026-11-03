@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
 import { LEVELS, type Level } from '@protea/protocol';
+import { normalizeMcpServer } from '../mcp/settings.js';
 import { isValidTimeZone } from '../util/time.js';
 import { defaultConfig, STARTER_CONFIG_YAML } from './defaults.js';
 import type { ProteaConfig } from './types.js';
@@ -116,6 +117,26 @@ function validate(cfg: ProteaConfig, warnings: string[]): void {
   if (!(soft > 0 && hard >= soft)) throw new Error('session.rounds requires 0 < soft <= hard');
   if (!Array.isArray(cfg.owner.identities)) throw new Error('owner.identities must be a list');
   if (!['5m', '1h'].includes(cfg.providers.anthropic.cacheTtl)) throw new Error('providers.anthropic.cacheTtl must be 5m or 1h');
+  if (cfg.control.publicUrl !== null) {
+    try {
+      new URL(cfg.control.publicUrl);
+    } catch {
+      throw new Error('control.publicUrl must be a URL or null');
+    }
+  }
+  if (!isPlainObject(cfg.mcp.servers)) throw new Error('mcp.servers must be a mapping');
+  for (const [id, raw] of Object.entries(cfg.mcp.servers)) cfg.mcp.servers[id] = normalizeMcpServer(id, raw);
+  if (!(cfg.mcp.pingIntervalMs >= 0) || !(cfg.mcp.listChangedDebounceMs >= 0)) {
+    throw new Error('mcp.pingIntervalMs and mcp.listChangedDebounceMs must be non-negative');
+  }
+  if (!Array.isArray(cfg.skills.disabled) || !cfg.skills.disabled.every((n) => typeof n === 'string')) {
+    throw new Error('skills.disabled must be a list of names');
+  }
+  if (typeof cfg.skills.mcpPrompts !== 'boolean') throw new Error('skills.mcpPrompts must be a boolean');
+  const ts = cfg.context.toolSearch;
+  if (!['auto', 'always', 'never'].includes(ts.mode)) throw new Error('context.toolSearch.mode must be auto, always or never');
+  if (!(Number.isInteger(ts.threshold) && ts.threshold >= 0)) throw new Error('context.toolSearch.threshold must be a non-negative integer');
+  if (!(Number.isInteger(ts.keepPerServer) && ts.keepPerServer >= 0)) throw new Error('context.toolSearch.keepPerServer must be a non-negative integer');
   for (const [id, p] of Object.entries(cfg.plugins)) {
     if (p.enabled === undefined) p.enabled = false; // plugins without built-in defaults start disabled
     if (typeof p.enabled !== 'boolean') throw new Error(`plugins.${id}.enabled must be a boolean`);

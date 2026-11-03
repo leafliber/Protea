@@ -1,6 +1,8 @@
 # Skills
 
-> 状态：Draft · 更新：2026-11-03 · 规范：[../30-specs/07-skill-format.md](../30-specs/07-skill-format.md)
+> 状态：Accepted（M3）· 更新：2026-11-03 · 规范：[../30-specs/07-skill-format.md](../30-specs/07-skill-format.md)
+
+> **实现状态（M3）**：注册表、目录段、`skill_load` / `skill_read`、热加载、本地安装与 3 个内置 Skill 已实现（`packages/core/src/skills/`，内置 Skill 在仓库的 `skills/`）。`shell` 工具（执行 Skill 脚本）、Git 安装、例程以 Skill 为 Fork 目标、描述诊断尚未实现。
 
 ## 1. 定位
 
@@ -36,8 +38,9 @@ metadata:
 
 - `name`：目录名一致，`[a-z0-9-]+`。
 - `description`：**触发条件 + 做什么**，≤ 1024 字符；它是模型在目录中看到的唯一信息，质量决定 Skill 是否被正确触发。
-- `allowed-tools`（可选）：加载该 Skill 后建议的工具子集；Core 不强制，但在 Fork 中可用作 `tools` 过滤。
+- `allowed-tools`（可选）：加载该 Skill 后建议的工具子集；Core 不强制（回执里列为"Suggested tools"），以后在 Fork 中可用作 `tools` 过滤。
 - `metadata.level`（Protea 扩展，可选）：该 Skill 运行时的建议等级（用于派生 Fork）。
+- `metadata.requires-tools`（Protea 扩展，可选）：所需工具（名称或 glob）都存在时才进入目录，例如内置的 `memory-hygiene` 要等 M4 的记忆工具。
 
 ## 3. 渐进式披露
 
@@ -45,18 +48,19 @@ metadata:
 |---|---|---|---|
 | L1 目录 | 所有 Skill 的 `name` + `description` | 始终（系统前缀 `skills-catalog` 段） | ~100 token / Skill |
 | L2 正文 | `SKILL.md` 全文 + 目录内文件清单 | 模型调用 `skill_load {name}` | < 5000 token 建议 |
-| L3 资源 | `references/*`、`scripts/*` | 模型用 `read_file` / `shell` 按需读取或执行 | 不限 |
+| L3 资源 | `references/*`、`scripts/*` | 模型用 `skill_read {name, path}` 按需读取（限制在 Skill 目录内，最多 256 KB）；执行脚本需要 `shell` 工具（未实现） | 不限 |
 
-`skill_load` 的回执是工具结果，进入历史（只追加）；同一会话重复加载同一 Skill 时，回执只返回"已加载，见 #cursor"以节省 token。
+`skill_load` 的回执是工具结果，进入历史（只追加）；同一会话重复加载同一 Skill 且内容未变时，回执只返回"已在本会话加载（工具调用 id）"以节省 token；内容变了则重新给出正文并注明"已更新"。主会话的加载记录存在 kv 表里，重启后仍有效；换转录（M4 交接）时清空。
 
 ## 4. 注册表与热加载
 
-- 扫描目录：`/app/skills/*`（内置）→ `/data/skills/*`（用户）→ 各插件目录下 `skills/*`（插件自带）→ MCP prompts（只读、虚拟）。同名后者覆盖前者。
-- 文件监视：`SKILL.md` 变化 → 重新解析 frontmatter → 目录分段在**下一回合边界**重建（缓存失效一次）。
-- 校验失败（无 frontmatter、name 不匹配、description 为空）→ 不注册，控制台显示原因。
-- 目录分段按 `name` 排序，保证字节稳定。
+- 扫描目录：`<assets>/skills/*`（内置，镜像里是 `/app/skills`）→ `/data/skills/*`（用户）→ 已启用插件目录下的 `skills/*`（清单字段 `skills` 可改目录）→ MCP prompts（只读、虚拟）。同名后者覆盖前者，并在列表里给出警告。
+- 文件监视：`/data/skills` 有变化（300 ms 去抖）、插件或 MCP 服务器状态变化时重新扫描；目录文本变了才重建系统前缀，在**下一回合边界**生效（缓存失效一次），没变则前缀不动。
+- 校验失败（无 frontmatter、YAML 错误、name 缺失/不合法/与目录名不一致、description 为空、目录里没有 SKILL.md）→ 不注册，`protea skills` 与 `/api/skills` 显示原因。
+- 目录分段按 `name` 排序，保证字节稳定；它是系统前缀的最后一段（在各 `env:*` 段之后）。
+- 启用/禁用只改 `skills.disabled`（写回 `config.yaml`），不删文件。
 
-## 5. 执行脚本
+## 5. 执行脚本（未实现）
 
 Skill 的脚本通过内核 `shell` 工具在容器内执行（受限用户、工作目录 `/data/workspace`、超时、输出截断）。镜像提供 Node、Python、常用 CLI（`rg`、`jq`、`curl`、`git`）；Skill 需要额外依赖时在 `SKILL.md` 中说明安装命令，由模型在首次使用时执行（受 `shell` 的策略约束）。
 
@@ -66,14 +70,14 @@ Skill 的脚本通过内核 `shell` 工具在容器内执行（受限用户、�
 
 ## 7. 控制台
 
-- 列表：名称、描述、来源（内置/用户/插件/MCP）、状态、最近加载时间与次数。
-- 操作：启用/禁用（禁用只是从目录移除，不删文件）、查看正文、从 Git URL 安装。
-- 诊断：description 过长/过短、与其他 Skill 描述高度相似（触发歧义）的提示。
+- 列表：名称、描述、来源（内置/用户/插件/MCP）、状态（listed / hidden / disabled / invalid）、加载次数与最近加载时间（M3：`protea skills`、`GET /api/skills`）。
+- 操作：启用/禁用、查看正文与文件、从本地目录安装、删除用户 Skill（M3：CLI 与 API）；从 Git URL 安装（M5）。
+- 诊断：description 过长/过短、与其他 Skill 描述高度相似（触发歧义）的提示（M5）。
 
-## 8. 示例目录（内置，M3）
+## 8. 内置 Skills（M3）
 
 | Skill | 用途 |
 |---|---|
-| `protea-self-ops` | 让助理知道如何用 `self_status`、`events_query`、`schedule_*` 管理自己 |
-| `daily-brief` | 晨报流程模板（示例例程） |
-| `memory-hygiene` | 定期整理记忆目录的做法（去重、归档、更新 INDEX.md） |
+| `protea-self-ops` | 让助理知道如何用 `self_status`、`events_query`、`schedule_*`、`fork_*` 与审批管理自己 |
+| `daily-brief` | 晨报流程模板（与 cron 的 morning-brief 例程配合） |
+| `memory-hygiene` | 定期整理记忆目录的做法（去重、归档、更新 INDEX.md）；`requires-tools: memory memory_search`，M4 之前不进目录 |

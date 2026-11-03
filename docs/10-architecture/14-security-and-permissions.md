@@ -19,7 +19,7 @@
 1. `permissions.tools.<exactName>`（精确）
 2. `permissions.tools.<glob>`（如 `mcp__github__*`；更长的模式优先）
 3. 插件清单 `sideEffectTools` 的默认：`ask`
-4. MCP 注解：`readOnlyHint` → `allow`；`destructiveHint` → `ask`（M3）
+4. MCP 注解与服务器信任（M3，[09-mcp-integration.md](09-mcp-integration.md) §6）：`readOnlyHint` → `allow`；`trust: low` 的服务器其余工具 → `ask`；`trust: normal` 时显式 `destructiveHint` → `ask`；`trust: high` 不加规则。没有 `readOnlyHint` 的 MCP 工具都带 `sideEffect` 标志（第 0 条与审计都适用）
 5. 全局默认 `permissions.default`（出厂 `allow`）
 
 约定：给主人发消息的出口工具（`con_send`、`tg_send`）不在 `sideEffectTools` 里，默认 `allow`；给第三方发的（`tg_send_chat`）在里面，默认 `ask`。内置插件的清单都按此审查过。
@@ -51,7 +51,7 @@ M2 实现细节：
 ## 4. 秘密
 
 - 存储：`/data/secrets/` 下每个秘密一个文件（0600），或环境变量 `PROTEA_SECRET_<NAME>`。控制台/CLI 只能写与列名，不能读值。
-- 使用：插件清单声明 `secrets`，启动时注入其环境变量（缺失则插件启动失败）；配置文件中以 `${secret:NAME}` 引用，解析只发生在传给插件/MCP 的那一刻。插件子进程只继承最小环境，不会拿到守护进程的其他秘密（M2 已实现）。
+- 使用：插件清单声明 `secrets`，启动时注入其环境变量（缺失则插件启动失败）；配置文件中以 `${secret:NAME}` 引用，解析只发生在传给插件/MCP 的那一刻。插件子进程只继承最小环境，不会拿到守护进程的其他秘密（M2 已实现）；stdio MCP 服务器同样只拿到 SDK 的默认环境加配置的 `env`（M3）。MCP 的 OAuth 令牌存在 `secrets/mcp-oauth/<id>.json`（0600），OAuth 回调只认正在进行的授权的 `state`。
 - **不入上下文**：Core 在构造 Provider 请求前对所有文本做一次秘密值扫描（精确匹配所有已知秘密值），命中即替换为 `[REDACTED:<NAME>]` 并记 `internal` 警告事件（I-7）。日志同样过滤。
 - 工具回执里出现秘密（例如 `env` 命令输出）同样被过滤。
 

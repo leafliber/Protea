@@ -15,6 +15,8 @@ export interface ProviderRequest {
   system: SystemSegment[];
   messages: TranscriptMessage[];
   tools: ProviderToolDef[];
+  /** Some tools are deferred: declare the provider's tool search tool. */
+  toolSearch?: boolean;
   effort: Effort;
 }
 
@@ -59,6 +61,8 @@ export interface Provider {
   readonly id: string;
   modelFor(role: ModelRole): string;
   health(): ProviderHealth;
+  /** Can search deferred tool definitions (`deferLoading`) for this role. */
+  supportsToolSearch?(role: ModelRole): boolean;
   /** Streams internally; resolves with the complete message. Throws ProviderError or an abort error. */
   generate(req: ProviderRequest, opts: { signal: AbortSignal; onText?: (delta: string) => void }): Promise<ProviderResponse>;
 }

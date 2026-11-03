@@ -9,14 +9,15 @@ Protea 是一个 **24/7 常驻、事件流驱动、可热插拔** 的云端个�
 
 设计参考了 [Cortico](https://github.com/Pal-AI-Lab/Cortico) 的事件流 harness 思想，完整设计见 [docs/README.md](docs/README.md)，进度见 [路线图](docs/40-plan/01-roadmap.md)。
 
-## 当前状态：M2 插件系统与热插拔
+## 当前状态：M3 MCP 与 Skills
 
 已可运行：
 - **M0**：事件库与门禁、批窗口调度、主会话代理循环（Claude，流式 + 自适应思考 + 提示缓存）、append-only 转录与崩溃恢复、console 与 cron 两个内置插件、HTTP 控制 API（含 SSE 实时流）与 CLI。
 - **M1**：抢占矩阵（`preempt` 取消模型调用并合并重发，`interrupt` 停止回合并保留部分回执）、抢占风暴冷却、老化、按等级的预算统计、后台 Fork（主人对话时自动让路，可在重启后续跑）。
 - **M2**：进程外插件（JSON-RPC over stdio）的发现、监督与热插拔（安装/启用/禁用/重载/卸载，配置热更新）；TypeScript 与 Python 插件 SDK；内置 `telegram`、`webhook`、`filewatch`；工具权限策略、经 Telegram 或终端的审批流与审计。
+- **M3**：MCP 客户端（stdio、Streamable HTTP、SSE；bearer 与 OAuth；运行中增删，工具名 `mcp__<服务器>__<工具>`）；工具很多时启用 Claude 的工具搜索，MCP 工具按需加载；Skills 注册表（`SKILL.md`，热加载、`skill_load`）与 3 个内置 Skills；内置来源 `rss`、`imap`。
 
-MCP、Skills、记忆、控制台与 Docker 镜像按路线图在 M3–M6 实现。
+记忆与交接、控制台与 Docker 镜像按路线图在 M4–M6 实现。
 
 ## 快速开始
 
@@ -75,6 +76,32 @@ PROTEA_DATA_DIR=.dev-data pnpm protea plugins
 ```
 
 需要审批的操作（例如 `tg_send_chat` 发到群里）会在 Telegram 里问你，回复 `/approve a1` 即可；也可以在终端运行 `protea approvals approve a1`。
+
+## 接入 MCP 服务器
+
+运行中添加，下一回合模型就能调用；`--` 之后是启动命令：
+
+```bash
+PROTEA_DATA_DIR=.dev-data pnpm protea mcp add fetch -- uvx mcp-server-fetch
+```
+
+```bash
+PROTEA_DATA_DIR=.dev-data pnpm protea mcp add files --trust low -- npx -y @modelcontextprotocol/server-filesystem /path/to/folder
+```
+
+远程服务器用 `--http <url>`，需要登录的加 `--oauth`（`protea mcp auth <id>` 打印授权链接）或 `--bearer <秘密名>`。`protea mcp ls`、`protea mcp tools <id>` 查看状态与工具，`protea mcp rm <id>` 移除。添加的服务器写进 `config.yaml` 的 `mcp.servers`，直接改文件也会立即生效。
+
+`trust` 决定没有 `readOnlyHint` 的工具的默认策略：`low` 一律要审批，`normal`（默认）只有标了 `destructiveHint` 的要审批，`high` 不额外限制。
+
+## Skills
+
+Skill 是一个带 `SKILL.md` 的目录（Agent Skills 格式）。拷进 `.dev-data/skills/` 下一回合就出现在模型的目录里，模型用 `skill_load` 读取正文：
+
+```bash
+PROTEA_DATA_DIR=.dev-data pnpm protea skills
+```
+
+格式有问题的 Skill 不会注册，`protea skills` 会显示原因。MCP 服务器提供的 prompts 也会以 `mcp:<服务器>/<名字>` 出现在目录里。
 
 ## 写一个插件
 

@@ -1,6 +1,6 @@
 # 规范：控制 API
 
-> 状态：Draft（M0–M2 部分已实现，见文末）· 更新：2026-11-03 · 设计：[../10-architecture/13-control-plane.md](../10-architecture/13-control-plane.md)
+> 状态：Draft（M0–M3 部分已实现，见文末）· 更新：2026-11-03 · 设计：[../10-architecture/13-control-plane.md](../10-architecture/13-control-plane.md)
 
 基址 `http://host:7788`。JSON；错误形态 `{ error: { code, message, details? } }`。鉴权 `Authorization: Bearer <token>`。分页用 `?cursor=&limit=`（事件按游标）或 `?page=&size=`。
 
@@ -45,12 +45,17 @@
 | DELETE | `/api/plugins/:id?keepData=true` | 卸载（须先禁用）；返回 `{ ok, replacedBy }`（重新出现的同名内置插件） |
 | GET/PATCH | `/api/plugins/:id/config` | 按 schema 校验（M2：`PATCH {config}` 整体替换并写回 `config.yaml`） |
 | GET | `/api/plugins/:id/logs?limit=` | |
-| GET/POST/DELETE | `/api/mcp/servers[/:id]` | 增删查 |
-| GET | `/api/mcp/servers/:id/tools` | |
-| POST | `/api/mcp/servers/:id/oauth/start` → `{ authorizeUrl }`；GET `/api/mcp/oauth/callback` | |
-| GET | `/api/skills` · `/api/skills/:name` | 列表、正文 |
-| POST | `/api/skills` | `{ gitUrl }` |
-| POST | `/api/skills/:name/enable` · `/disable` | |
+| GET | `/api/mcp/servers` · `/api/mcp/servers/:id` | `{ servers: McpServerStatus[] }` · `McpServerStatus` |
+| POST | `/api/mcp/servers` | `{ id, ...配置项 }`（同 `mcp.servers.<id>`）：校验、写回 `config.yaml`、启动并等它就绪或失败；新建 201、替换 200；配置无效 400 |
+| DELETE | `/api/mcp/servers/:id` | 停止、移除工具、从 `config.yaml` 删除 |
+| POST | `/api/mcp/servers/:id/enable` · `/disable` · `/restart` | 返回 `McpServerStatus`；`restart` 从 failed 恢复 |
+| GET | `/api/mcp/servers/:id/tools` | `{ tools: McpToolInfo[] }`（含被 allow/deny 过滤掉的，标 `filtered`） |
+| POST | `/api/mcp/servers/:id/oauth/start` | `{ authorizeUrl?, state }`：开始或继续 OAuth 授权 |
+| GET | `/api/mcp/oauth/callback?code&state` | **不需要管理令牌**（浏览器回跳，靠 `state` 匹配）；返回一页 HTML；未知 state 400 |
+| GET | `/api/skills` · `/api/skills/<name>` | `{ skills: SkillInfo[] }`（含被拒绝的目录及原因）· 详情加 `body` 与 `files`；名字是路径的剩余部分（MCP prompt 型 Skill 的名字含 `:` 与 `/`，需 URL 编码） |
+| POST | `/api/skills` | `{ path }` 从本地目录安装（M3）；`{ gitUrl }`（M5）；201 返回 `SkillInfo` |
+| POST | `/api/skills/<name>/enable` · `/disable` | 写回 `skills.disabled` |
+| DELETE | `/api/skills/<name>` | 删除用户 Skill（`/data/skills/<name>`）；返回 `{ ok, replacedBy }` |
 
 ## 配置、秘密、权限、预算
 
@@ -89,14 +94,15 @@
 
 ## 实时流
 
-**SSE（M0 起）** `GET /api/stream?since=<cursor>`。连接后先发 `hello {runId}`；带 `since` 时先按游标补发之后的事件，再转为实时。事件名：`event`（id 为游标）、`settled`、`phase`、`batch.started`、`batch.extended`（M1 起带 `level`）、`batch.ended`、`output`（插件输出，如 `con_send`）、`scheduler`（M1：`preempt` / `interrupt` / `aged` / `storm_cooldown` / `fork_yield` / `fork_resume`）、`fork`（M1：`ForkInfo` 变化）、`plugin`（M2：`PluginStatus` 变化）、`approval`（M2：`ApprovalInfo` 变化）、`ping`（15 s 保活）。载荷形态见 `@protea/protocol` 的 `StreamMessage` 与 `SchedulerAction`。
+**SSE（M0 起）** `GET /api/stream?since=<cursor>`。连接后先发 `hello {runId}`；带 `since` 时先按游标补发之后的事件，再转为实时。事件名：`event`（id 为游标）、`settled`、`phase`、`batch.started`、`batch.extended`（M1 起带 `level`）、`batch.ended`、`output`（插件输出，如 `con_send`）、`scheduler`（M1：`preempt` / `interrupt` / `aged` / `storm_cooldown` / `fork_yield` / `fork_resume`）、`fork`（M1：`ForkInfo` 变化）、`plugin`（M2：`PluginStatus` 变化）、`approval`（M2：`ApprovalInfo` 变化）、`mcp`（M3：`McpServerStatus` 变化）、`skills`（M3：目录变化，`{ names }`）、`ping`（15 s 保活）。载荷形态见 `@protea/protocol` 的 `StreamMessage` 与 `SchedulerAction`。
 
 已实现的 HTTP 端点：
 - M0：`/healthz`、`/readyz`、`GET /api/status`、`POST|GET /api/events`、`GET /api/events/:cursor`、`GET /api/stream`。
 - M1：`GET /api/sessions`、`GET /api/sessions/:id/transcript?from=&limit=`、`GET /api/sessions/forks`、`GET /api/sessions/forks/:id`、`POST /api/sessions/forks/:id/cancel`。
 - M2：`GET /api/plugins`、`GET /api/plugins/:id`、`POST /api/plugins`、`POST /api/plugins/:id/enable|disable|reload|restart`、`PATCH /api/plugins/:id/config`、`DELETE /api/plugins/:id`、`GET /api/approvals`、`POST /api/approvals/:id/decide`、`/hooks/<name>`。`PluginStatus`：`{ id, kind, state, enabled, origin: inproc|builtin|data, version?, tools, pid?, restarts?, error? }`。
+- M3：`/api/mcp/servers*`、`/api/mcp/oauth/callback`、`/api/skills*`（见上表）。`McpServerStatus`：`{ id, transport, state（PluginState 或 auth_required）, enabled, trust, origin: config, server?: {name, version}, tools, prompts, resources, pid?, restarts?, error?, authorizeUrl?, avgLatencyMs? }`；`SkillInfo`：`{ name, description, origin: builtin|user|plugin|mcp, owner?, version?, enabled, listed, errors, warnings, allowedTools, requiresTools, level?, loads, lastLoadedAt? }`。`/api/status` 增加 `mcp`、`skills: {listed, rejected}`、`tools: {total, deferred}`；`/readyz` 也报告 `failed` 的已启用 MCP 服务器。
 
-其余端点在 M2–M5 实现。
+其余端点在 M4–M5 实现。
 
 ### WebSocket `/ws`（M5）
 

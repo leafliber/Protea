@@ -5,6 +5,7 @@ import type {
   EventEnvelope,
   ForkInfo,
   Level,
+  McpServerStatus,
   PluginStatus,
   RunPhase,
   SchedulerAction,
@@ -34,6 +35,9 @@ export interface BusTopics {
   'fork.changed': ForkInfo;
   'plugin.changed': PluginStatus;
   'approval.changed': ApprovalInfo;
+  'mcp.changed': McpServerStatus;
+  /** The Skills catalog changed (listed names). */
+  'skills.changed': { names: string[] };
 }
 
 export type BusTopic = keyof BusTopics;

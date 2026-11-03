@@ -1,3 +1,5 @@
+import { DEFAULT_TOOL_SEARCH } from '../context/tool-search.js';
+import { DEFAULT_MCP_SETTINGS } from '../mcp/settings.js';
 import { DEFAULT_PLUGIN_HOST_SETTINGS } from '../plugins/host.js';
 import { defaultTimeZone } from '../util/time.js';
 import type { ProteaConfig } from './types.js';
@@ -5,7 +7,7 @@ import type { ProteaConfig } from './types.js';
 export function defaultConfig(): ProteaConfig {
   return {
     daemon: { timezone: defaultTimeZone(), language: 'zh', shutdown: { graceMs: 25_000 } },
-    control: { listen: '0.0.0.0:7788', adminTokenSecret: 'PROTEA_ADMIN_TOKEN' },
+    control: { listen: '0.0.0.0:7788', adminTokenSecret: 'PROTEA_ADMIN_TOKEN', publicUrl: null },
     owner: { identities: [{ plugin: 'console', senderKey: '*' }] },
     scheduler: {
       levels: {
@@ -43,6 +45,9 @@ export function defaultConfig(): ProteaConfig {
     },
     pluginHost: { ...DEFAULT_PLUGIN_HOST_SETTINGS, restartBackoffMs: [...DEFAULT_PLUGIN_HOST_SETTINGS.restartBackoffMs] },
     permissions: { default: 'allow', tools: {}, approvalTtlMs: 86_400_000 },
+    mcp: { ...DEFAULT_MCP_SETTINGS, servers: {} },
+    skills: { disabled: [], mcpPrompts: true },
+    context: { toolSearch: { ...DEFAULT_TOOL_SEARCH } },
     observability: { logLevel: 'info', logFormat: 'auto', logEventText: false },
   };
 }
@@ -77,4 +82,12 @@ export const STARTER_CONFIG_YAML = `# Protea configuration. Every key is optiona
 
 # permissions:
 #   tools: { tg_send_chat: ask }    # allow | ask | deny; globs like "mcp__*" work too
+
+# mcp:
+#   servers:                  # add with "protea mcp add"; tools appear as mcp__<server>__<tool>
+#     fetch: { command: uvx, args: [mcp-server-fetch] }
+#     files: { command: npx, args: ["-y", "@modelcontextprotocol/server-filesystem", "/data/workspace"], trust: low }
+
+# skills:
+#   disabled: []              # names hidden from the catalog; skills live in /data/skills/<name>/SKILL.md
 `;

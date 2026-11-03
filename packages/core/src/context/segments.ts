@@ -12,13 +12,18 @@ export interface SegmentSourceOptions {
   plugins: { envSources(): EnvPromptSource[] };
   /** The permission summary (P3: restrictions are stated in advance); null when nothing is restricted. */
   permissions?: () => string | null;
+  /** Extra environment segments after the plugins' (MCP servers: `env:mcp:<id>`), already ordered. */
+  extraEnv?: () => SystemSegment[];
+  /** The Skills catalog; null when no skill is listed. */
+  skills?: () => string | null;
   timezone: string;
   overridesDir: string;
   log: Logger;
 }
 
 /**
- * System prefix: identity → runtime → operating → permissions → owner → env:<plugin>…
+ * System prefix: identity → runtime → operating → permissions → owner → env:<plugin>… →
+ * env:mcp:<server>… → skills-catalog.
  * Built once and rebuilt only on explicit refresh (at a turn boundary), so the
  * prefix stays byte-identical between requests.
  */
@@ -73,6 +78,9 @@ export class SystemSegments implements SegmentSource {
         this.o.log.warn({ plugin: p.id, err: errorMessage(err) }, 'environment prompt failed; omitted');
       }
     }
+    for (const seg of this.o.extraEnv?.() ?? []) segs.push(seg);
+    const catalog = this.o.skills?.();
+    if (catalog) segs.push({ id: 'skills-catalog', text: catalog });
     return segs;
   }
 }

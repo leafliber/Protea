@@ -8,13 +8,16 @@ import {
   type ApprovalInfo,
   type EventEnvelope,
   type ForkInfo,
+  type McpServerStatus,
+  type McpToolInfo,
   type PluginStatus,
+  type SkillInfo,
   type PushEventResponse,
   type StatusResponse,
 } from '@protea/protocol';
 import { api, defaultDataDir, resolveClient, stream, type ClientOptions } from './client.js';
 import { devPlugin } from './dev-plugin.js';
-import { bold, dim, formatApproval, formatEvent, formatFork, formatPlugin, formatStatus, green, red, yellow } from './format.js';
+import { bold, dim, formatApproval, formatEvent, formatFork, formatMcp, formatMcpTool, formatPlugin, formatSkill, formatStatus, green, red, yellow } from './format.js';
 
 const HELP = `protea — Protea personal assistant runtime
 
@@ -34,6 +37,20 @@ Usage:
   protea plugins enable|disable|reload|restart <id>
   protea plugins config <id> <json>             replace a plugin's configuration (validated, saved)
   protea plugins uninstall <id> [--keep-data]   remove a disabled data-volume plugin
+  protea mcp [ls]                               list MCP servers
+  protea mcp add <id> [--env K=V]… [--trust T] -- <command> [args…]
+                                                add a local (stdio) MCP server, e.g. -- uvx mcp-server-fetch
+  protea mcp add <id> --http URL [--header K=V]… [--bearer SECRET] [--oauth] [--trust T]
+                                                add a remote (Streamable HTTP) MCP server
+  protea mcp rm <id>                            remove a server (its tools leave at the next turn)
+  protea mcp tools <id>                         list a server's tools
+  protea mcp enable|disable|restart <id>
+  protea mcp auth <id>                          start the OAuth authorization; prints the URL to open
+  protea skills [ls]                            list skills (and rejected skill directories)
+  protea skills show <name>                     print a skill's SKILL.md and files
+  protea skills install <dir>                   copy a skill directory into the data volume
+  protea skills enable|disable <name>           show or hide a skill in the catalog
+  protea skills rm <name>                       remove an installed skill
   protea approvals [ls] [--state S]             list approval requests
   protea approvals approve|deny <id>            decide an approval request
   protea dev-plugin <dir> [--check] [--config JSON] [--owner KEY]
@@ -64,6 +81,12 @@ const { values, positionals } = parseArgs({
     check: { type: 'boolean' },
     config: { type: 'string' },
     owner: { type: 'string' },
+    env: { type: 'string', multiple: true },
+    header: { type: 'string', multiple: true },
+    http: { type: 'string' },
+    bearer: { type: 'string' },
+    oauth: { type: 'boolean' },
+    trust: { type: 'string' },
     help: { type: 'boolean', short: 'h' },
     version: { type: 'boolean', short: 'v' },
   },
@@ -286,6 +309,116 @@ async function plugins(sub: string | undefined, args: string[]): Promise<number>
   throw new Error(`unknown plugins command: ${sub}`);
 }
 
+function pairs(list: string[] | undefined, what: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const item of list ?? []) {
+    const i = item.indexOf('=');
+    if (i <= 0) throw new Error(`--${what} takes KEY=VALUE, got "${item}"`);
+    out[item.slice(0, i)] = item.slice(i + 1);
+  }
+  return out;
+}
+
+async function mcp(sub: string | undefined, args: string[]): Promise<number> {
+  const o = client();
+  const id = args[0];
+  if (sub === undefined || sub === 'ls') {
+    const { servers } = await api<{ servers: McpServerStatus[] }>(o, 'GET', '/api/mcp/servers');
+    if (servers.length === 0) console.log(dim('no MCP servers; add one with: protea mcp add <id> -- <command> [args…]'));
+    for (const m of servers) console.log(formatMcp(m));
+    return 0;
+  }
+  if (!id) throw new Error(`mcp ${sub} needs a server id`);
+  const path = `/api/mcp/servers/${encodeURIComponent(id)}`;
+  switch (sub) {
+    case 'add': {
+      const entry: Record<string, unknown> = {};
+      if (values.http) {
+        entry['transport'] = 'streamable-http';
+        entry['url'] = values.http;
+        const headers = pairs(values.header, 'header');
+        if (Object.keys(headers).length) entry['headers'] = headers;
+        if (values.bearer) entry['auth'] = { type: 'bearer', token: `\${secret:${values.bearer}}` };
+        if (values.oauth) entry['auth'] = { type: 'oauth' };
+      } else {
+        const [command, ...cmdArgs] = args.slice(1);
+        if (!command) throw new Error('mcp add needs a command after "--", e.g. protea mcp add fetch -- uvx mcp-server-fetch');
+        entry['command'] = command;
+        entry['args'] = cmdArgs;
+        const env = pairs(values.env, 'env');
+        if (Object.keys(env).length) entry['env'] = env;
+      }
+      if (values.trust) entry['trust'] = values.trust;
+      if (values.disabled) entry['enabled'] = false;
+      const t0 = Date.now();
+      const s = await api<McpServerStatus>(o, 'POST', '/api/mcp/servers', { id, ...entry });
+      console.log(formatMcp(s));
+      if (s.state === 'running') console.log(dim(`ready in ${((Date.now() - t0) / 1000).toFixed(1)}s; the model sees ${s.tools.length} tools from the next turn`));
+      if (s.state === 'auth_required') console.log(yellow(`open the URL above to authorize, or run: protea mcp auth ${id}`));
+      return s.state === 'running' || s.state === 'auth_required' || s.state === 'stopped' ? 0 : 1;
+    }
+    case 'rm':
+      await api(o, 'DELETE', path);
+      console.log(`removed ${id}`);
+      return 0;
+    case 'tools': {
+      const { tools } = await api<{ tools: McpToolInfo[] }>(o, 'GET', `${path}/tools`);
+      if (tools.length === 0) console.log(dim('no tools'));
+      for (const t of tools) console.log(formatMcpTool(t));
+      return 0;
+    }
+    case 'enable':
+    case 'disable':
+    case 'restart':
+      console.log(formatMcp(await api<McpServerStatus>(o, 'POST', `${path}/${sub}`)));
+      return 0;
+    case 'auth': {
+      const r = await api<{ authorizeUrl?: string; state: string }>(o, 'POST', `${path}/oauth/start`);
+      if (r.authorizeUrl) console.log(`Open this URL to authorize ${id}:\n\n  ${r.authorizeUrl}\n`);
+      else console.log(`${id}: ${r.state}`);
+      return 0;
+    }
+  }
+  throw new Error(`unknown mcp command: ${sub}`);
+}
+
+async function skills(sub: string | undefined, args: string[]): Promise<number> {
+  const o = client();
+  const name = args[0];
+  if (sub === undefined || sub === 'ls') {
+    const { skills: all } = await api<{ skills: SkillInfo[] }>(o, 'GET', '/api/skills');
+    if (all.length === 0) console.log(dim('no skills'));
+    for (const k of all) console.log(formatSkill(k));
+    return 0;
+  }
+  if (!name) throw new Error(`skills ${sub} needs ${sub === 'install' ? 'a directory' : 'a skill name'}`);
+  const path = `/api/skills/${encodeURIComponent(name)}`;
+  switch (sub) {
+    case 'show': {
+      const k = await api<SkillInfo & { body?: string; files?: Array<{ path: string; bytes: number }> }>(o, 'GET', path);
+      console.log(formatSkill(k));
+      if (k.body) console.log(`\n${k.body}`);
+      if (k.files?.length) console.log(dim(`files: ${k.files.map((f) => f.path).join(', ')}`));
+      return 0;
+    }
+    case 'install': {
+      const { resolve } = await import('node:path');
+      console.log(formatSkill(await api<SkillInfo>(o, 'POST', '/api/skills', { path: resolve(name) })));
+      return 0;
+    }
+    case 'enable':
+    case 'disable':
+      console.log(formatSkill(await api<SkillInfo>(o, 'POST', `${path}/${sub}`)));
+      return 0;
+    case 'rm': {
+      const r = await api<{ replacedBy: SkillInfo | null }>(o, 'DELETE', path);
+      console.log(`removed ${name}${r.replacedBy ? ` (the ${r.replacedBy.origin} ${name} is back)` : ''}`);
+      return 0;
+    }
+  }
+  throw new Error(`unknown skills command: ${sub}`);
+}
+
 async function approvals(sub: string | undefined, id: string | undefined): Promise<number> {
   const o = client();
   if (sub === undefined || sub === 'ls') {
@@ -328,6 +461,10 @@ async function main(): Promise<number> {
       return forks(sub, rest[0]);
     case 'plugins':
       return plugins(sub, rest);
+    case 'mcp':
+      return mcp(sub, rest);
+    case 'skills':
+      return skills(sub, rest);
     case 'approvals':
       return approvals(sub, rest[0]);
     case 'dev-plugin':

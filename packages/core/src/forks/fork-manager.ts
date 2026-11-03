@@ -17,6 +17,7 @@ import {
 import type { Bus } from '../bus.js';
 import type { ForkSchedulerSettings } from '../config/types.js';
 import { mergeConsecutive } from '../context/assembler.js';
+import type { ToolExposure } from '../context/tool-search.js';
 import type { SessionRepo, UsageRepo } from '../db/repos.js';
 import type { Logger } from '../observability/logger.js';
 import { ProviderError, type Provider, type ProviderResponse, type SystemSegment } from '../providers/types.js';
@@ -90,6 +91,8 @@ export interface ForkManagerOptions {
   bus: Bus;
   provider: Provider;
   tools: ToolRegistry;
+  /** Tool search for fork requests (deferred MCP tools); without it every allowed tool loads. */
+  exposure?: ToolExposure;
   dispatcher: ToolDispatcher;
   log: Logger;
   clock: Clock;
@@ -452,11 +455,13 @@ export class ForkManager {
       if (f.cp.rounds >= f.cp.maxTurns) {
         return { kind: 'completed', summary: `Stopped at the limit of ${f.cp.maxTurns} rounds without a final summary.` };
       }
+      const toolSet = o.exposure?.forRequest(t.messages, { role: f.cp.model, allowed });
       const res = await this.callModel(f, {
         role: f.cp.model,
         system: o.system(),
         messages: mergeConsecutive(t.messages),
-        tools: o.tools.forProvider((d) => allowed.has(d.name)),
+        tools: toolSet ? toolSet.tools : o.tools.forProvider((d) => allowed.has(d.name)),
+        ...(toolSet?.toolSearch ? { toolSearch: true } : {}),
         effort: o.effortFor(f.cp.model),
       });
       if ('kind' in res) return res;

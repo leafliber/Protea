@@ -23,24 +23,29 @@ Protea/
 │   │   │   ├── scheduler/       批窗口与投递、抢占矩阵（preemption.ts）、风暴防护、老化、预算统计（budget.ts）
 │   │   │   ├── forks/           Fork 管理器（排队、让渡/恢复、检查点、重启恢复）与 fork_* 工具
 │   │   │   ├── session/         主会话循环、转录与修复、启动对账
-│   │   │   ├── context/         系统分段、运行时说明、环境提示模板、请求装配
+│   │   │   ├── context/         系统分段、运行时说明、环境提示模板、请求装配、工具搜索（tool-search.ts）
 │   │   │   ├── tools/           工具注册表、分发器、内核工具
 │   │   │   ├── providers/       Provider 接口、anthropic、echo、scripted、价格表
 │   │   │   ├── plugins/         PluginHost（生命周期、监督、事件网关）、清单与发现、子进程运行时、一致性检查、开发加载器
 │   │   │   ├── permissions/     权限策略、审批、审计、权限守卫、approval_request 工具
+│   │   │   ├── mcp/             MCP 客户端管理器（连接、监督、工具命名与注册、资源与 prompts、OAuth）
+│   │   │   ├── skills/          SKILL.md 解析、Skills 注册表与目录段、skill_load / skill_read
 │   │   │   ├── persona/         人格文件加载
 │   │   │   ├── config/          默认值、层叠加载、环境变量映射、秘密
-│   │   │   ├── db/              SQLite 打开与内嵌迁移、仓储（batches/usage/kv/sessions）
+│   │   │   ├── db/              SQLite 打开与内嵌迁移、仓储（batches/usage/kv/sessions/tool_stats）
 │   │   │   ├── observability/   pino 日志（TTY 美化 + 运行目录 JSON）
 │   │   │   └── util/            时间与时区、id、中止、错误
-│   │   └── test/                单元、组件、属性测试与测试夹具
+│   │   └── test/                单元、组件、属性测试与测试夹具（含可编排的 MCP 测试服务器与假 OAuth 服务器）
 │   └── control/                 @protea/control：Hono HTTP API 与 SSE
 ├── plugins/
 │   ├── console/                 进程内连接器：控制台输入、con_send 输出、审批请求显示
 │   ├── cron/                    进程内来源：日程与 sleep_until
 │   ├── telegram/                进程外连接器（protea.plugin.json + src/ + test/，含模拟 Bot API）
 │   ├── webhook/                 进程外来源：/hooks/<name>
-│   └── filewatch/               进程外来源：监视 /data/inbox
+│   ├── filewatch/               进程外来源：监视 /data/inbox
+│   ├── rss/                     进程外来源：RSS / Atom 订阅
+│   └── imap/                    进程外来源：IMAP 邮箱（imapflow + mailparser；测试用假 IMAP 服务器）
+├── skills/                      内置 Skills（protea-self-ops、daily-brief、memory-hygiene）
 ├── apps/
 │   ├── daemon/                  组装 Core + 控制平面 + 内置插件；单实例锁；崩溃端到端测试
 │   └── cli/                     `protea` 命令（serve 直接启动守护进程；dev-plugin 本地运行插件；其余经 HTTP API）

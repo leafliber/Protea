@@ -295,6 +295,16 @@ export class PluginHost {
     return out;
   }
 
+  /** Skill directories shipped by enabled out-of-process plugins (manifest `skills`, default `skills/`). */
+  skillRoots(): Array<{ dir: string; origin: 'plugin'; owner: string }> {
+    const out: Array<{ dir: string; origin: 'plugin'; owner: string }> = [];
+    for (const e of [...this.entries.values()].sort((a, b) => a.id.localeCompare(b.id))) {
+      if (!e.enabled || !e.loaded?.manifest) continue;
+      out.push({ dir: path.resolve(e.loaded.dir, e.loaded.manifest.skills ?? 'skills'), origin: 'plugin', owner: e.id });
+    }
+    return out;
+  }
+
   /** Tools whose default policy is `ask` (manifest `sideEffectTools`). */
   isAskByDefault(def: ToolDef): boolean {
     const e = this.entries.get(def.owner);

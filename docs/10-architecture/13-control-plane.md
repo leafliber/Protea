@@ -70,8 +70,8 @@ protea status
 protea events tail [--level 1] [--source telegram]
 protea events push "text" [--level 1 --trigger flush]
 protea plugins ls|install <dir>|enable|disable|reload|restart|config|uninstall <id>   # M2 ✓
-protea mcp ls|add|rm|tools <id>
-protea skills ls|install <git-url>
+protea mcp ls|add|rm|tools|enable|disable|restart|auth <id>   # M3 ✓（add <id> -- <command…> 或 --http URL）
+protea skills ls|show|install <dir>|enable|disable|rm <name>   # M3 ✓（Git URL 安装在 M5）
 protea config get|set <path> [value]
 protea secrets set <NAME>       # 从 stdin 读值
 protea approvals ls|approve|deny <id>                  # M2 ✓

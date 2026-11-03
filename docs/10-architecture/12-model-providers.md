@@ -55,8 +55,13 @@ type ModelRole = 'main' | 'fork' | 'cheap';
 
 工具搜索把"加载工具定义"变成追加动作，因此 MCP 服务器增删造成的工具表变化对缓存前缀的影响被限制在"非延迟工具集合"内。策略：
 
-- 非延迟集合 = 内核工具 + 每个连接器的出口工具 + 每个 MCP 服务器调用频次前 k（默认 3）的工具。
-- 该集合的变化仍只在回合边界应用，并触发一次缓存失效（可接受）。
+- 非延迟集合 = 内核工具 + 所有插件工具 + 每个 MCP 服务器调用频次前 k（`context.toolSearch.keepPerServer`，默认 3）的工具。只有 MCP 工具会被延迟（M3）。
+- 频次来自 `tool_stats` 表；某个服务器的前 k 名只在它的工具列表变化时重算，其他服务器的增删不会让它变化，避免前缀因调用次数波动而失效。
+- 该集合的变化仍只在回合边界应用，并触发一次缓存失效（可接受）。延迟工具的增删不进入缓存前缀。
+- 请求形态（Anthropic）：延迟的工具带 `defer_loading: true`，`tools` 末尾追加 `{ type: "tool_search_tool_regex_20251119", name: "tool_search_tool_regex" }`，无需 beta 头。模型的搜索结果（`server_tool_use` 与 `tool_search_tool_result` 块）原样留在历史里。
+- 历史里一旦出现过工具搜索，之后的请求都保持声明搜索工具；搜索结果引用过、但已经消失的工具（服务器被移除）以占位定义保留（`defer_loading: true`，描述为"No longer available …"），否则 API 会因找不到被引用的工具而拒绝请求。
+- `Provider.supportsToolSearch(role)` 报告能力：Anthropic Provider 对 Claude 4.5 及以后的模型为真；echo 与不支持的模型不延迟任何工具。Fork 的请求同样适用，只是工具集合是该 Fork 允许的子集。
+- 验收用的缓存模拟见 `packages/core/test/tool-search.test.ts`：按"工具 → system → messages 的最长公共前缀、延迟工具不进前缀"计算，100 次推送、78 个 MCP 工具时为无 MCP 时的 98%。
 
 ## 5. 用量与成本
 

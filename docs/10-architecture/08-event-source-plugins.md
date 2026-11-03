@@ -73,8 +73,8 @@ Approvals: the owner replies "/approve <id>" or "/deny <id>"; those replies arri
 | `webhook` | source | L2 | HTTP 入站（`/hooks/<name>`），签名校验（GitHub/通用 HMAC/token） | M2 ✓ |
 | `telegram` | connector | L1 | Bot API 长轮询（无需入站端口）；owner 由用户 id 映射 | M2 ✓ |
 | `filewatch` | source | L3 | 监视 `/data/inbox` 等目录 | M2 ✓ |
-| `rss` | source | L4 | 定时抓取，按条目去重 | M3 |
-| `imap` | source | L2 | IDLE/轮询；邮件到达事件 + `mail_fetch` 工具 | M3 |
+| `rss` | source | L4 | 定时抓取，按条目去重 | M3 ✓ |
+| `imap` | source | L2 | IDLE/轮询；邮件到达事件 + `mail_fetch` 工具 | M3 ✓ |
 | `slack` / `discord` | connector | L1 | 社区实现优先 | M7+ |
 | `caldav` | source+tool | L2 | 日历提醒事件 + 查询工具 | M7+ |
 
@@ -89,6 +89,12 @@ Approvals: the owner replies "/approve <id>" or "/deny <id>"; those replies arri
 **webhook**：配置 `hooks: [{ name, verify: github | hmac-sha256 | token | none, secret: "${secret:NAME}", header?, level?, trigger?, maxTextChars? }]`（`x-hot: false`）。事件类型 `webhook.<name>`；GitHub 事件（push、pull_request、issues、issue_comment、workflow_run、release、ping）写成一行事实描述并附截断的负载，其他请求附前 2000 字符；`dedupeKey` 取 `X-GitHub-Delivery` / `X-Request-Id` / `Idempotency-Key`，否则取请求体哈希。默认 L2 `flush`（L3 用 `debounce`）。返回 202 `{cursor, deduped}`；校验失败 401，不入库。
 
 **filewatch**：配置 `paths`（默认 `["inbox"]`，相对数据目录）、`debounceMs`（默认 2 s）、`level`（3 或 4）、`ignore`（默认跳过点文件、`*~`、`*.tmp`、`*.part`、`*.swp`）。一段安静期内的所有变化合并成一个 `filewatch.changed` 事件（列出 `+` 新增、`~` 修改、`-` 删除及大小）；停机期间的变化在启动时补报（快照存 kv）。工具 `fw_list`、`fw_read`（只读，限制在被监视的目录内）。
+
+### 6.2 M3 内置来源
+
+**rss**：配置 `feeds: [{ url, name?, intervalMin?, level? }]`、`intervalMin`（默认 30）、`level`（4 = `piggyback`，默认；3 = `debounce`）、`firstRunItems`（默认 3）、`maxItemsPerPoll`（默认 10）、`timeoutSec`。解析 RSS 2.0、Atom、RSS 1.0（RDF）；用 `ETag` / `Last-Modified` 做条件请求。每个新条目一个 `rss.item` 事件（标题、链接、发布时间、去掉 HTML 的摘要前 400 字符），`dedupeKey` 由订阅名与条目 id 派生，按发布时间从旧到新推送；某个订阅第一次读取时只报最新 `firstRunItems` 条，其余记为已读。已读集合（每个订阅最多 1000 个）在事件入库后才写入 kv，崩溃重启只会重报、不会丢。工具 `rss_feeds`（每个订阅的状态与最近错误）、`rss_items`（最近条目）。
+
+**imap**（秘密 `IMAP_PASSWORD`）：配置 `host`、`port`（993）、`secure`（true；false 时服务器提供 STARTTLS 才升级）、`user`、`mailbox`（`INBOX`）、`mode`（`idle` 默认，或 `poll` + `pollSec`）、`level`（默认 2）、`bulkLevel`（默认 4）、`important`（地址或 `@域名`，始终用 `level`）、`snippetChars`（500）、`rejectUnauthorized`。邮箱以只读方式打开（EXAMINE），不会把邮件标为已读。第一次连接只记录邮箱当前的 UID 位置；之后每封新邮件一个 `mail.received` 事件（发件人、主题、日期、收件人、正文开头、附件清单；`senderKey: mail:<地址>`，`dedupeKey: msg:<uidvalidity>:<uid>`）；邮件列表与自动邮件（`List-*`、`Precedence: bulk|list|junk`、`Auto-Submitted`）用 `bulkLevel`。位置在事件入库后才前移；`UIDVALIDITY` 变了就从当前末尾重新开始。连接断开后按 5 s 到 5 min 的退避重连，并补报期间到达的邮件；邮件服务器不可达不影响插件的健康检查（插件自己重连，不会被宿主当作崩溃重启）。工具 `mail_fetch {uid}`（完整正文，默认截断到 20000 字符）、`mail_search {from?, subject?, since?, unseen?}`。发件地址不能证明身份，邮件事件不会成为 L1。
 
 ## 7. 编写一个最小事件源（TypeScript）
 

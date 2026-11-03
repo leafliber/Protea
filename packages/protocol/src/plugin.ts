@@ -33,6 +33,8 @@ export interface PluginManifest {
   secrets?: string[];
   configSchema?: string;
   envPrompt?: string;
+  /** Directory of skills the plugin ships (default `skills/`), relative to the plugin. */
+  skills?: string;
   healthcheck?: { intervalMs?: number; timeoutMs?: number };
   resources?: { maxMemoryMb?: number; maxCpu?: number; maxFds?: number };
   homepage?: string;

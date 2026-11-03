@@ -117,19 +117,33 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 - Python SDK 尚未发布到 PyPI；宿主把仓库（或镜像）里的 `sdks/python` 放进 Python 插件的 `PYTHONPATH`。
 - 进程内插件（console、cron）的配置变更一律重载该插件。
 
-## M3 · MCP 与 Skills（2 周）
+## M3 · MCP 与 Skills（2 周）· 状态：已实现（2026-11-03），一项验收待复核
 
 **目标**：接入现成能力。
 
-- MCP 客户端管理器：stdio + Streamable HTTP、健康、重启、工具命名空间、资源/提示词映射、`list_changed` 在回合边界应用、OAuth（基础）。
-- 工具搜索与 `defer_loading` 策略。
-- Skills 注册表：扫描、校验、目录段、`skill_load`、热加载、内置 3 个 Skills。
-- 内置来源：`rss`、`imap`。
+- [x] MCP 客户端管理器（`packages/core/src/mcp/`，官方 `@modelcontextprotocol/sdk`）：stdio、Streamable HTTP、SSE；与进程外插件相同的监督语义（20 s 握手超时、退避重启、连续崩溃 5 次 → `failed`、30 s ping 连续 3 次失败 → 重启）；工具命名 `mcp__<server>__<tool>`；`tools.allow/deny`；`list_changed` 合并 500 ms 后重读；资源（`mcp_resource_list` / `mcp_resource_read`、订阅更新 → L4 事件）；prompts 映射为只读 Skill；roots 声明 `<data>/workspace`；服务器日志进结构化日志；bearer（秘密）与 OAuth（授权码 + PKCE + 动态注册，回调 `/api/mcp/oauth/callback`）。
+- [x] 工具搜索：工具总数超过 `context.toolSearch.threshold`（默认 40）时，MCP 工具标 `defer_loading`，每个服务器调用次数最多的 3 个保持加载；Anthropic Provider 声明 `tool_search_tool_regex_20251119`。
+- [x] Skills 注册表（`packages/core/src/skills/`）：扫描内置 → 数据卷 → 插件 → MCP prompts，校验，`skills-catalog` 段，`skill_load` / `skill_read`，目录监视热加载；内置 `protea-self-ops`、`daily-brief`、`memory-hygiene`（后者等 M4 的记忆工具出现后才进目录）。
+- [x] 内置来源：`rss`（RSS 2.0 / Atom / RDF，条件请求，按条目去重）、`imap`（imapflow，IDLE 或轮询，`mail_fetch` / `mail_search`）。
+- [x] CLI `protea mcp ls|add|rm|tools|enable|disable|restart|auth`、`protea skills ls|show|install|enable|disable|rm`；控制 API `/api/mcp/*`、`/api/skills*`；`mcp`、`skills`、`context` 三节配置可热更新。
 
 **验收**：
-- [ ] 通过 CLI 添加 `uvx mcp-server-fetch` 与 `npx @modelcontextprotocol/server-filesystem`，≤ 10 s 内模型可调用；移除后工具在下一回合消失。
-- [ ] 60 个以上 MCP 工具时启用工具搜索，缓存命中率不低于无 MCP 时的 90%。
-- [ ] 拷贝一个 Skill 目录进数据卷，下一回合目录中出现；`skill_load` 回执正确；损坏的 SKILL.md 被拒绝并显示原因。
+- [~] 通过 CLI 添加 `uvx mcp-server-fetch` 与 `npx @modelcontextprotocol/server-filesystem`，≤ 10 s 内模型可调用；移除后工具在下一回合消失。
+  - 用测试服务器（`packages/core/test/fixtures/mcp-server.mjs`）在真实守护进程里验证：经控制 API 添加后 0.1 s 就绪，模型调用成功，移除后下一回合工具消失（`apps/daemon/test/mcp-skills.e2e.test.ts`）。
+  - 真实服务器（`PROTEA_REAL_MCP=1` 才运行的同名测试）：两个服务器都启动成功，首次运行含下载分别用了 13.3 s（fetch，1 个工具）和 5.9 s（filesystem，14 个工具）；模型调用 filesystem 读文件成功；**fetch 的调用在 60 s 内没有拿到期望的结果，原因未查明**，复跑与"有缓存时是否 ≤ 10 s"待复核。
+- [x] 60 个以上 MCP 工具时启用工具搜索，缓存命中率不低于无 MCP 时的 90%（`packages/core/test/tool-search.test.ts`）：100 次推送、两个服务器共 78 个 MCP 工具、其间一个服务器中途接入又离开、一次 `list_changed`。按"工具 → system → messages 的最长公共前缀、延迟加载的工具不进前缀"模拟缓存，无 MCP 时 98.5%，有 MCP 时 96.5%（为前者的 98%）。真实 API 下的命中率需要 API key 复核。
+- [x] 拷贝一个 Skill 目录进数据卷，下一回合目录中出现；`skill_load` 回执正确；损坏的 SKILL.md 被拒绝并显示原因（e2e 与 `packages/core/test/skills.test.ts`）。
+
+**M3 与原设计的差异**（已同步进各文档）：
+- MCP 服务器只能在 `config.yaml` 的 `mcp.servers` 里声明（CLI 与 API 写的也是这里）；插件目录里的 `kind: mcp` 清单留到 M5（随 Git 安装一起做）。
+- 服务器的"信任等级"命名为 `trust: low | normal | high`（待决问题 Q1 的结论）：`low` 时没有 `readOnlyHint` 的工具一律 `ask`，`normal` 时只有显式 `destructiveHint` 的工具 `ask`，`high` 不加限制；`readOnlyHint` 工具默认 `allow`。所有没有 `readOnlyHint` 的 MCP 工具都按"有副作用"审计，没有 owner 时被拒绝。
+- 不声明 sampling 与 elicitation 能力（服务器不应发起这两类请求）；elicitation 转审批留到以后。Anthropic 服务端 MCP 连接器（`remote-passthrough`）未实现。
+- 工具表变化没有单独的"待应用队列"：每次模型请求都在回合边界组装，变化自然在下一回合生效；`list_changed` 合并 500 ms。
+- 只有 MCP 工具会被延迟加载（插件工具总是加载）；"常用前 k 个"按新表 `tool_stats` 的调用次数计算，只在该服务器的工具列表变化时重算，避免前缀抖动。历史里出现过工具搜索结果后，工具搜索保持开启，已消失的被引用工具以"不可用"的延迟占位定义保留，避免请求被拒。
+- 工具描述覆盖为 `descriptionOverrides`（按服务器的原工具名）；描述过长的提示留到控制台（M5）。
+- Skills 增加 `skill_read`（读取 Skill 目录内的文件，限制在目录内）；`shell` 工具尚未实现，Skill 的脚本暂时无法执行。重复加载的回执改为"已在本会话加载（工具调用 id）"。Protea 扩展 `metadata.requires-tools`：所需工具不存在时不进目录。
+- Skills 只能从本地目录安装；Git URL 留到 M5。例程把 Skill 作为 Fork 目标、描述相似度诊断未实现。
+- `rss` 默认 L4 `piggyback`（可配 L3 `debounce`），首次读取只报最新 3 条；`imap` 默认 L2 `flush`，邮件列表与自动邮件（`List-*`、`Precedence: bulk`、`Auto-Submitted`）降为 L4，首次连接只记录邮箱当前位置。
 
 ## M4 · 记忆、交接、人格（2 周）
 

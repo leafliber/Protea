@@ -38,7 +38,13 @@ export async function devPlugin(dir: string, opts: { check: boolean; config?: Re
   const pythonPath = path.join(assetsDir(), 'sdks', 'python');
 
   if (opts.check) {
-    const r = await checkConformance(root, { ...(dev ? { dev } : {}), pythonPath, ...(opts.config ? { probe: { config: opts.config } } : {}) });
+    // Secrets the manifest declares come from the developer's environment (NAME or PROTEA_SECRET_NAME).
+    const secrets: Record<string, string> = {};
+    for (const name of loadManifest(root, 'data').manifest?.secrets ?? []) {
+      const v = process.env[`PROTEA_SECRET_${name}`] ?? process.env[name];
+      if (v !== undefined) secrets[name] = v;
+    }
+    const r = await checkConformance(root, { ...(dev ? { dev } : {}), pythonPath, env: secrets, ...(opts.config ? { probe: { config: opts.config } } : {}) });
     for (const c of r.checks) console.log(`${c.ok ? green('✓') : red('✗')} ${c.name}${c.detail && !c.ok ? `\n    ${dim(c.detail)}` : ''}`);
     console.log(r.ok ? green(`${r.plugin}: all ${r.checks.length} checks passed`) : red(`${r.plugin}: ${r.checks.filter((c) => !c.ok).length} check(s) failed`));
     return r.ok ? 0 : 1;

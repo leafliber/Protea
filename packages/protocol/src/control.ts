@@ -44,6 +44,60 @@ export interface PluginStatus {
   error?: string;
 }
 
+export type McpServerState = PluginState | 'auth_required';
+
+export interface McpToolInfo {
+  /** Name the model sees: `mcp__<server>__<tool>`. */
+  name: string;
+  /** The server's own name for the tool. */
+  mcpName: string;
+  description: string;
+  readOnly: boolean;
+  destructive: boolean;
+  /** Excluded by `tools.allow` / `tools.deny`. */
+  filtered?: boolean;
+}
+
+export interface McpServerStatus {
+  id: string;
+  transport: 'stdio' | 'streamable-http' | 'sse';
+  state: McpServerState;
+  enabled: boolean;
+  trust: 'low' | 'normal' | 'high';
+  /** `config` (mcp.servers) or `plugin` (a `kind: mcp` plugin directory). */
+  origin: 'config' | 'plugin';
+  server?: { name: string; version: string };
+  tools: string[];
+  prompts: number;
+  resources: boolean;
+  pid?: number;
+  restarts?: number;
+  error?: string;
+  /** Pending OAuth authorization: open this URL to grant access. */
+  authorizeUrl?: string;
+  /** Mean latency of the recent tool calls (ms). */
+  avgLatencyMs?: number;
+}
+
+export interface SkillInfo {
+  name: string;
+  description: string;
+  /** builtin (shipped), user (data/skills), plugin (a plugin's skills/), mcp (an MCP prompt, read-only). */
+  origin: 'builtin' | 'user' | 'plugin' | 'mcp';
+  owner?: string;
+  version?: string;
+  enabled: boolean;
+  /** Valid and shown in the catalog (enabled, and its required tools exist). */
+  listed: boolean;
+  errors: string[];
+  warnings: string[];
+  allowedTools: string[];
+  requiresTools: string[];
+  level?: Level;
+  loads: number;
+  lastLoadedAt?: string;
+}
+
 export interface ApprovalInfo {
   id: string;
   tool: string;
@@ -66,6 +120,10 @@ export interface StatusResponse {
   pending: Record<Level, number>;
   provider: { id: string; mainModel: string; ready: boolean; problem?: string };
   plugins: PluginStatus[];
+  mcp: McpServerStatus[];
+  skills: { listed: number; rejected: number };
+  /** Tools sent to the model, and how many of them sit behind tool search. */
+  tools: { total: number; deferred: number };
   usage24h: UsageTotals;
   /** Non-terminal forks first, then the most recently ended ones. */
   forks: ForkInfo[];
@@ -127,6 +185,8 @@ export type StreamMessage =
   | { topic: 'output'; data: { plugin: string; channel?: string; text: string; at: string } }
   | { topic: 'scheduler'; data: SchedulerAction }
   | { topic: 'fork'; data: ForkInfo }
+  | { topic: 'mcp'; data: McpServerStatus }
+  | { topic: 'skills'; data: { names: string[] } }
   | { topic: 'plugin'; data: PluginStatus }
   | { topic: 'approval'; data: ApprovalInfo };
 

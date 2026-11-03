@@ -15,6 +15,13 @@ import { ProviderError, type Provider, type ProviderHealth, type ProviderRequest
 
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 
+const TOOL_SEARCH_TOOL = { type: 'tool_search_tool_regex_20251119', name: 'tool_search_tool_regex' } as const;
+
+/** Tool search needs Claude 4.5 or later. */
+function supportsToolSearchModel(model: string): boolean {
+  return !/^claude-(3|2|instant)|^claude-(opus|sonnet)-4(-[01])?(-\d{8})?$/.test(model);
+}
+
 /** Models without server-side fallback support (sending `fallbacks` to them is pointless or rejected). */
 function supportsFallbacks(model: string): boolean {
   return !model.startsWith('claude-haiku');
@@ -47,6 +54,10 @@ export class AnthropicProvider implements Provider {
     return this.settings.models[role];
   }
 
+  supportsToolSearch(role: ModelRole): boolean {
+    return supportsToolSearchModel(this.modelFor(role));
+  }
+
   health(): ProviderHealth {
     return this.client ? { ready: true } : { ready: false, problem: `secret ${this.settings.apiKeySecret} is not set` };
   }
@@ -62,7 +73,10 @@ export class AnthropicProvider implements Provider {
       description: t.description,
       input_schema: t.inputSchema as BetaTool['input_schema'],
       eager_input_streaming: true,
+      ...(t.deferLoading ? { defer_loading: true } : {}),
     }));
+    // Deferred definitions stay out of the cached prefix; the search tool itself always loads.
+    if (req.toolSearch) tools.push({ ...TOOL_SEARCH_TOOL });
     const params: BetaMessageStreamParams = {
       model,
       max_tokens: this.settings.maxOutputTokens,

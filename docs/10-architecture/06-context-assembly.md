@@ -42,7 +42,8 @@
 | `operating` | `persona/OPERATING.md` | 低 | 同 identity |
 | `owner` | `persona/USER.md` | 低 | 同上 |
 | `env:<plugin>` | 插件 `envPrompt()` 模板 + `envPromptVars()` | 低（插件启停时） | 插件生命周期事件 → 回合边界重建 |
-| `skills-catalog` | Skills 注册表 | 低 | 目录变化 → 回合边界重建 |
+| `env:mcp:<server>` | MCP 服务器配置里的 `envPrompt`（M3） | 低（服务器启停时） | 服务器状态变化 → 回合边界重建 |
+| `skills-catalog` | Skills 注册表（M3） | 低 | 目录文本变化 → 回合边界重建 |
 | `memory-index` | `memory/INDEX.md` | 中 | 文件变化 → 回合边界重建 |
 
 **重建代价**：任何分段变化都会让该分段之后的缓存失效。因此变动频繁的内容（记忆索引）放在最后一段；真正高频的内容（今天的待办）不进前缀，而是由模型通过 `memory_read` 按需取。
@@ -53,9 +54,9 @@
 
 ## 4. 工具表
 
-- 工具定义按"内核 → 插件（按 ID）→ MCP（按 server、tool）"排序后序列化，保证字节稳定。
-- 工具表只在**回合边界**更新；期间插件/MCP 的增删进入"待应用"队列。
-- 工具数量超过 `context.toolSearchThreshold`（默认 40）时，启用 Provider 的**工具搜索**：超出部分（优先 MCP 工具）标记 `defer_loading: true`，模型按需搜索加载。工具搜索是追加式的，不破坏缓存前缀（[12-model-providers.md](12-model-providers.md) §4）。
+- 工具定义按"内核 → 插件（按 ID）→ MCP（按 server、tool；资源工具 `mcp_resource_*` 在最前）"排序后序列化，保证字节稳定。
+- 工具表只在**回合边界**生效：插件/MCP 的增删直接改工具表，而每个模型请求都在回合边界（批开始或工具结果之后）组装，所以变化总在下一回合出现，进行中的请求不受影响（M3 实现；没有单独的"待应用"队列）。
+- 工具数量超过 `context.toolSearch.threshold`（默认 40）时，启用 Provider 的**工具搜索**：MCP 工具标记 `defer_loading: true`（每个服务器最常用的 `keepPerServer` 个除外），模型按需搜索加载。工具搜索是追加式的，不破坏缓存前缀（[12-model-providers.md](12-model-providers.md) §4）。实现：`packages/core/src/context/tool-search.ts`。
 - 工具描述由插件/MCP 提供；Core 只加命名空间前缀，不改写描述。
 
 ## 5. 事件渲染

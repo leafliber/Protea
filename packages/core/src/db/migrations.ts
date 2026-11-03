@@ -148,4 +148,17 @@ CREATE TABLE audit (
 CREATE INDEX ix_audit_at ON audit(at);
 `,
   },
+  {
+    version: 3,
+    name: 'tool-stats',
+    sql: `
+CREATE TABLE tool_stats (
+  name        TEXT PRIMARY KEY,
+  calls       INTEGER NOT NULL,
+  failures    INTEGER NOT NULL,
+  total_ms    INTEGER NOT NULL,
+  last_at     TEXT NOT NULL
+);
+`,
+  },
 ];

@@ -103,6 +103,8 @@ describe('M2 acceptance: plugins are hot-pluggable while the main session keeps 
       'console',
       'cron',
       'filewatch',
+      'imap',
+      'rss',
       'telegram',
       'webhook',
     ]);

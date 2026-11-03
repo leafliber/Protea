@@ -11,7 +11,7 @@ import {
   type StatusResponse,
   type StreamMessage,
 } from '@protea/protocol';
-import type { ApprovalService, Bus, EventStore, ForkManager, Logger, PluginHost, PushResult, Transcript } from '@protea/core';
+import type { ApprovalService, Bus, EventStore, ForkManager, Logger, McpManager, PluginHost, PushResult, SkillRegistry, Transcript } from '@protea/core';
 
 export interface ControlDeps {
   adminToken: string;
@@ -26,6 +26,13 @@ export interface ControlDeps {
   rescanPlugins?: () => Promise<void>;
   /** Validate, apply and persist a plugin's configuration. */
   setPluginConfig?: (id: string, config: Record<string, unknown>) => Promise<void>;
+  mcp?: McpManager;
+  /** Add or replace (a config entry) or remove (null) an MCP server: validated, persisted and applied. */
+  putMcpServer?: (id: string, entry: Record<string, unknown> | null) => Promise<void>;
+  setMcpEnabled?: (id: string, enabled: boolean) => Promise<void>;
+  skills?: SkillRegistry;
+  /** Persist `skills.disabled` and update the catalog. */
+  setSkillEnabled?: (name: string, enabled: boolean) => void;
   status: () => StatusResponse;
   ready: () => { ready: boolean; reasons: string[] };
   /** Deliver an operator message through the console plugin. */
@@ -96,6 +103,24 @@ export function createControlApp(d: ControlDeps): Hono {
   };
   app.all('/hooks/:name', hook);
   app.all('/hooks/:name/*', hook);
+
+  // OAuth: the owner's browser returns here from an MCP server's authorization server (state-checked, no token).
+  app.get('/api/mcp/oauth/callback', async (c) => {
+    const page = (status: 200 | 400, title: string, text: string) =>
+      c.html(`<!doctype html><meta charset="utf-8"><title>${title}</title><body style="font-family:system-ui;margin:3em"><h1>${title}</h1><p>${text}</p></body>`, status);
+    const code = c.req.query('code');
+    const state = c.req.query('state');
+    const err = c.req.query('error');
+    if (err) return page(400, 'Authorization failed', `The server answered: ${err.replace(/[<>&]/g, '')}`);
+    if (!code || !state || !d.mcp) return page(400, 'Authorization failed', 'The request has no code or state.');
+    try {
+      const s = await d.mcp.finishAuth(state, code);
+      return page(200, 'Authorized', `Protea can now use the MCP server ${s.id} (${s.state}). You can close this tab.`);
+    } catch (e) {
+      d.log.warn({ err: e instanceof Error ? e.message : String(e) }, 'MCP OAuth callback failed');
+      return page(400, 'Authorization failed', 'This authorization is unknown or has expired. Start it again with: protea mcp auth &lt;server&gt;');
+    }
+  });
 
   app.use('/api/*', async (c, next) => {
     const header = c.req.header('authorization');
@@ -251,6 +276,97 @@ export function createControlApp(d: ControlDeps): Hono {
     }
   });
 
+  // MCP servers.
+  const noMcp = (c: Context) => c.json({ error: { code: 'not_found', message: 'no such MCP server' } }, 404);
+  app.get('/api/mcp/servers', (c) => c.json({ servers: d.mcp?.status() ?? [] }));
+  app.get('/api/mcp/servers/:id', (c) => {
+    const s = d.mcp?.get(c.req.param('id'));
+    return s ? c.json(s) : noMcp(c);
+  });
+  app.get('/api/mcp/servers/:id/tools', (c) => {
+    const tools = d.mcp?.toolsOf(c.req.param('id'));
+    return tools ? c.json({ tools }) : noMcp(c);
+  });
+  app.post('/api/mcp/servers', async (c) => {
+    if (!d.putMcpServer || !d.mcp) return noMcp(c);
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    const id = body?.['id'];
+    if (!body || typeof id !== 'string') return c.json({ error: { code: 'bad_request', message: 'id is required' } }, 400);
+    const { id: _id, ...entry } = body;
+    const existed = d.mcp.get(id) !== undefined;
+    try {
+      await d.putMcpServer(id, entry);
+    } catch (err) {
+      return errorJson(c, 400, 'invalid_server', err);
+    }
+    return c.json(d.mcp.get(id), existed ? 200 : 201);
+  });
+  app.delete('/api/mcp/servers/:id', async (c) => {
+    const id = c.req.param('id');
+    if (!d.mcp?.get(id) || !d.putMcpServer) return noMcp(c);
+    await d.putMcpServer(id, null);
+    return c.json({ ok: true });
+  });
+  for (const action of ['enable', 'disable', 'restart'] as const) {
+    app.post(`/api/mcp/servers/:id/${action}`, async (c) => {
+      const id = c.req.param('id');
+      if (!d.mcp?.get(id)) return noMcp(c);
+      try {
+        if (action === 'restart') return c.json(await d.mcp.restart(id));
+        await d.setMcpEnabled?.(id, action === 'enable');
+        return c.json(d.mcp.get(id));
+      } catch (err) {
+        return errorJson(c, 409, `${action}_failed`, err);
+      }
+    });
+  }
+  app.post('/api/mcp/servers/:id/oauth/start', async (c) => {
+    const id = c.req.param('id');
+    if (!d.mcp?.get(id)) return noMcp(c);
+    try {
+      return c.json(await d.mcp.authorize(id));
+    } catch (err) {
+      return errorJson(c, 409, 'oauth_failed', err);
+    }
+  });
+
+  // Skills. Names of MCP prompt skills contain ":" and "/", so the name is the rest of the path.
+  const skillName = (c: Context, suffix = ''): string => decodeURIComponent(c.req.path.slice('/api/skills/'.length, suffix ? -suffix.length : undefined));
+  const noSkill = (c: Context) => c.json({ error: { code: 'not_found', message: 'no such skill' } }, 404);
+  app.get('/api/skills', (c) => c.json({ skills: d.skills?.list() ?? [] }));
+  app.post('/api/skills', async (c) => {
+    if (!d.skills) return noSkill(c);
+    const body = (await c.req.json().catch(() => null)) as { path?: unknown } | null;
+    if (!body || typeof body.path !== 'string') return c.json({ error: { code: 'bad_request', message: 'path is required (git sources arrive later)' } }, 400);
+    try {
+      return c.json(d.skills.install(body.path), 201);
+    } catch (err) {
+      return errorJson(c, 400, 'install_failed', err);
+    }
+  });
+  app.get('/api/skills/*', (c) => {
+    const s = d.skills?.get(skillName(c));
+    return s ? c.json(s) : noSkill(c);
+  });
+  app.post('/api/skills/*', (c) => {
+    const action = c.req.path.endsWith('/enable') ? 'enable' : c.req.path.endsWith('/disable') ? 'disable' : null;
+    if (!action) return c.json({ error: { code: 'bad_request', message: 'POST /api/skills/<name>/enable or /disable' } }, 400);
+    const name = skillName(c, `/${action}`);
+    if (!d.skills?.get(name) || !d.setSkillEnabled) return noSkill(c);
+    d.setSkillEnabled(name, action === 'enable');
+    return c.json(d.skills.get(name));
+  });
+  app.delete('/api/skills/*', (c) => {
+    const name = skillName(c);
+    if (!d.skills?.get(name)) return noSkill(c);
+    try {
+      d.skills.uninstall(name);
+      return c.json({ ok: true, replacedBy: d.skills.get(name) ?? null });
+    } catch (err) {
+      return errorJson(c, 409, 'uninstall_failed', err);
+    }
+  });
+
   // Approvals.
   app.get('/api/approvals', (c) => {
     const state = c.req.query('state');
@@ -304,6 +420,8 @@ export function createControlApp(d: ControlDeps): Hono {
         d.bus.on('fork.changed', (f) => push({ topic: 'fork', data: f })),
         d.bus.on('plugin.changed', (p) => push({ topic: 'plugin', data: p })),
         d.bus.on('approval.changed', (a) => push({ topic: 'approval', data: a })),
+        d.bus.on('mcp.changed', (m) => push({ topic: 'mcp', data: m })),
+        d.bus.on('skills.changed', (k) => push({ topic: 'skills', data: k })),
       ];
       stream.onAbort(() => {
         for (const u of unsubs) u();

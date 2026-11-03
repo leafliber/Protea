@@ -1,4 +1,6 @@
 import type { Effort, Level, ModelRole } from '@protea/protocol';
+import type { ToolSearchSettings } from '../context/tool-search.js';
+import type { McpSettings } from '../mcp/settings.js';
 import type { PermissionSettings } from '../permissions/policy.js';
 import type { PluginHostSettings } from '../plugins/host.js';
 
@@ -72,9 +74,21 @@ export interface PluginSettings {
   config: Record<string, unknown>;
 }
 
+export interface SkillsSettings {
+  /** Skill names hidden from the catalog (the files stay). */
+  disabled: string[];
+  /** MCP prompts appear in the catalog as read-only skills `mcp:<server>/<prompt>`. */
+  mcpPrompts: boolean;
+}
+
+export interface ContextSettings {
+  toolSearch: ToolSearchSettings;
+}
+
 export interface ProteaConfig {
   daemon: { timezone: string; language: string; shutdown: { graceMs: number } };
-  control: { listen: string; adminTokenSecret: string };
+  /** `publicUrl`: how a browser reaches the control plane (OAuth redirects); null derives it from `listen`. */
+  control: { listen: string; adminTokenSecret: string; publicUrl: string | null };
   owner: { identities: OwnerIdentity[] };
   scheduler: { levels: Record<Level, LevelSettings>; preemptStorm: PreemptStormSettings; forks: ForkSchedulerSettings };
   budget: BudgetSettings;
@@ -87,5 +101,8 @@ export interface ProteaConfig {
   plugins: Record<string, PluginSettings>;
   pluginHost: PluginHostSettings;
   permissions: PermissionSettings;
+  mcp: McpSettings;
+  skills: SkillsSettings;
+  context: ContextSettings;
   observability: { logLevel: string; logFormat: 'json' | 'pretty' | 'auto'; logEventText: boolean };
 }

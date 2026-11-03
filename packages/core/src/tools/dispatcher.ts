@@ -8,6 +8,9 @@ import type { ToolContext, ToolOutcome } from './types.js';
 export const MAX_RESULT_CHARS = 100_000;
 export const INTERRUPT_GRACE_MS = 5_000;
 
+/** Called after every executed call (not for calls that were blocked or never started). */
+export type ToolCallObserver = (name: string, ms: number, failed: boolean) => void;
+
 export interface DispatchResult {
   results: ToolResultBlock[];
   endsTurn: boolean;
@@ -41,6 +44,7 @@ function truncate(text: string): string {
  */
 export class ToolDispatcher {
   private guard: ToolGuard | null = null;
+  private observer: ToolCallObserver | null = null;
 
   constructor(
     private readonly registry: ToolRegistry,
@@ -51,6 +55,10 @@ export class ToolDispatcher {
   /** Permission policy, approvals and audit (docs/10-architecture/14-security-and-permissions.md). */
   setGuard(guard: ToolGuard | null): void {
     this.guard = guard;
+  }
+
+  observe(observer: ToolCallObserver | null): void {
+    this.observer = observer;
   }
 
   async runAll(uses: readonly ToolUseBlock[], ctx: DispatchContext): Promise<DispatchResult> {
@@ -147,10 +155,12 @@ export class ToolDispatcher {
       ]);
       const outcome: ToolOutcome = typeof raced === 'string' ? { text: raced } : raced;
       this.log.debug({ tool: use.name, callId: use.id, ms: Date.now() - started, failed: !!outcome.failed }, 'tool done');
+      this.notify(use.name, Date.now() - started, !!outcome.failed);
       const block: ToolResultBlock = { type: 'tool_result', tool_use_id: use.id, content: truncate(outcome.text) };
       if (outcome.failed) block.is_error = true;
       return { block, endsTurn: !outcome.failed && (!!def.flags?.endsTurn || !!outcome.endsTurn) };
     } catch (err) {
+      this.notify(use.name, Date.now() - started, true);
       if (timedOut) return fail(`${use.name} timed out after ${Math.round(timeoutMs / 1000)}s`);
       if (ctx.signal.aborted) return fail(`${use.name} was cancelled`);
       if (softAbort?.aborted) return fail(`${use.name} was interrupted before it returned a partial result`);
@@ -160,6 +170,14 @@ export class ToolDispatcher {
       clearTimeout(timer);
       ctx.signal.removeEventListener('abort', onParentAbort);
       softAbort?.removeEventListener('abort', onInterrupt);
+    }
+  }
+
+  private notify(name: string, ms: number, failed: boolean): void {
+    try {
+      this.observer?.(name, ms, failed);
+    } catch (err) {
+      this.log.warn({ tool: name, err: errorMessage(err) }, 'tool call observer failed');
     }
   }
 }

@@ -1,0 +1,15 @@
+{
+  "id": "imap",
+  "kind": "source",
+  "api": 1,
+  "version": "0.1.0",
+  "displayName": "Email (IMAP)",
+  "description": "Reports new mail in an IMAP mailbox (IDLE, or polling) and lets the assistant read and search it.",
+  "runtime": { "exec": "node", "args": ["dist/main.js"], "dev": { "args": ["src/main.ts"] } },
+  "level": 2,
+  "triggers": ["flush", "debounce", "piggyback", "store"],
+  "tools": ["mail_fetch", "mail_search"],
+  "secrets": ["IMAP_PASSWORD"],
+  "configSchema": "./config.schema.json",
+  "envPrompt": "./ENV_PROMPT.md"
+}

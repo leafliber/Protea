@@ -73,18 +73,23 @@ describe('daemon', () => {
       'console:running',
       'cron:running',
       'filewatch:loaded',
+      'imap:loaded',
+      'rss:loaded',
       'telegram:loaded',
       'webhook:loaded',
     ]);
 
-    // The system prefix: persona, runtime notes, then plugin environment prompts; kernel and plugin tools.
+    // The system prefix: persona, runtime notes, plugin environment prompts, then the Skills catalog; kernel and plugin tools.
     const req = provider.calls[0];
-    expect(req?.system.map((s) => s.id)).toEqual(['identity', 'runtime', 'operating', 'owner', 'env:console', 'env:cron']);
+    expect(req?.system.map((s) => s.id)).toEqual(['identity', 'runtime', 'operating', 'owner', 'env:console', 'env:cron', 'skills-catalog']);
+    expect(req?.system.at(-1)?.text).toMatch(/- daily-brief: .*\(source: builtin\)\n- protea-self-ops: .*\(source: builtin\)$/);
     expect(req?.tools.map((t) => t.name)).toEqual([
-      'approval_request', 'events_promote', 'events_query', 'fork_cancel', 'fork_spawn', 'fork_status', 'idle', 'self_status',
+      'approval_request', 'events_promote', 'events_query', 'fork_cancel', 'fork_spawn', 'fork_status', 'idle', 'self_status', 'skill_load', 'skill_read',
       'con_send', 'schedule_create', 'schedule_delete', 'schedule_list', 'sleep_until',
     ]);
+    expect(req?.toolSearch).toBeUndefined();
     expect(status['forks']).toEqual([]);
+    expect(status).toMatchObject({ mcp: [], skills: { listed: 2, rejected: 0 }, tools: { total: 15, deferred: 0 } });
     expect((status['budget'] as { enforced: boolean }).enforced).toBe(false);
   });
 

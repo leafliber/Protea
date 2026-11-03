@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import type { ToolDef } from '../tools/types.js';
+import { globToRegExp } from '../util/glob.js';
 
 export type Policy = 'allow' | 'ask' | 'deny';
 
@@ -23,11 +24,8 @@ export interface PolicyDeps {
   askByDefault: (def: ToolDef) => boolean;
   /** At least one owner identity is configured; otherwise side effects are denied. */
   ownerConfigured: () => boolean;
-}
-
-function globToRegExp(glob: string): RegExp {
-  const body = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
-  return new RegExp(`^${body}$`);
+  /** Defaults from tool annotations and server trust (MCP), after the manifest rule. */
+  annotations?: (def: ToolDef) => PolicyDecision | null;
 }
 
 /** Tool permission policy (docs/10-architecture/14-security-and-permissions.md §2). */
@@ -63,6 +61,8 @@ export class PermissionPolicy {
     const glob = this.globs.find((g) => g.re.test(def.name));
     if (glob) return { policy: glob.policy, rule: `permissions.tools."${glob.pattern}"` };
     if (this.deps.askByDefault(def)) return { policy: 'ask', rule: `sideEffectTools of plugin ${def.owner}` };
+    const annotated = this.deps.annotations?.(def);
+    if (annotated) return annotated;
     return { policy: this.settings.default, rule: 'permissions.default' };
   }
 

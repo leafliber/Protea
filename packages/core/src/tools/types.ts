@@ -36,6 +36,10 @@ export interface ToolSpec<I = unknown> {
   inputSchema: JsonSchema;
   flags?: ToolFlags;
   timeoutMs?: number;
+  /** May be deferred behind the provider's tool search when there are many tools (MCP tools). */
+  deferrable?: boolean;
+  /** The schema comes from elsewhere (an MCP server): if it does not compile, skip local validation. */
+  externalSchema?: boolean;
   handler(input: I, ctx: ToolContext): Promise<ToolOutcome | string> | ToolOutcome | string;
 }
 

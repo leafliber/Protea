@@ -2,7 +2,7 @@
 
 > 状态：Accepted（M2）· 更新：2026-11-03 · 决策：[ADR-0005](../20-decisions/ADR-0005-plugin-isolation-out-of-process.md) · 规范：[../30-specs/02-plugin-manifest.md](../30-specs/02-plugin-manifest.md) · [../30-specs/03-plugin-protocol.md](../30-specs/03-plugin-protocol.md)
 
-> **实现状态（M2）**：`source` / `connector` / `tool` 三类进程外插件已实现（`packages/core/src/plugins/`：`manifest.ts` 清单与发现，`process.ts` 子进程与协议，`host.ts` 生命周期、监督与事件网关，`conformance.ts` 一致性检查）；`mcp`、`skill` 在 M3，`provider` 插件在 M7。进程内插件只有 `console` 与 `cron`，由守护进程在代码里注册。
+> **实现状态（M2）**：`source` / `connector` / `tool` 三类进程外插件已实现（`packages/core/src/plugins/`：`manifest.ts` 清单与发现，`process.ts` 子进程与协议，`host.ts` 生命周期、监督与事件网关，`conformance.ts` 一致性检查）；MCP 服务器由 MCP 管理器运行（M3，[09-mcp-integration.md](09-mcp-integration.md)；服务器在 `mcp.servers` 里声明，`kind: mcp` 清单在 M5），Skills 由 Skills 注册表管理（M3，[10-skills.md](10-skills.md)），`provider` 插件在 M7。进程内插件只有 `console` 与 `cron`，由守护进程在代码里注册。
 
 ## 1. 插件种类
 

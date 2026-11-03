@@ -167,6 +167,10 @@ export function loadManifest(dir: string, origin: LoadedManifest['origin']): Loa
     }
   } else if (m['configSchema'] !== undefined) errors.push('configSchema must be a path');
 
+  if (m['skills'] !== undefined) {
+    const skillsDir = typeof m['skills'] === 'string' ? path.resolve(dir, m['skills']) : '';
+    if (!skillsDir.startsWith(path.resolve(dir) + path.sep)) errors.push('skills must be a directory inside the plugin directory');
+  }
   const envPrompt = path.resolve(dir, typeof m['envPrompt'] === 'string' ? m['envPrompt'] : 'ENV_PROMPT.md');
   if (fs.existsSync(envPrompt)) out.envPromptFile = envPrompt;
 

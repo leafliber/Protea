@@ -1,6 +1,6 @@
 # 规范：存储 Schema
 
-> 状态：Accepted（M0）· 更新：2026-11-03 · 设计：[../10-architecture/03-event-store-and-bus.md](../10-architecture/03-event-store-and-bus.md)
+> 状态：Accepted（M0–M3）· 更新：2026-11-03 · 设计：[../10-architecture/03-event-store-and-bus.md](../10-architecture/03-event-store-and-bus.md)
 
 ## 1. SQLite（/data/protea.db）
 
@@ -103,7 +103,18 @@ CREATE TABLE audit (                                    -- 只追加（I-8）
 
 `input_hash` = sha256(工具名 + 换行 + 键排序后的 JSON 输入)。`summary` 与 `reason` 写入前经过秘密扫描。插件的 kv 状态（例如 Telegram 的偏移量、filewatch 的快照）在 `kv` 表的 `plugin:<id>` 命名空间。
 
-### 1.3 后续迁移（计划）
+### 1.3 迁移 3：`tool-stats`（M3）
+
+```sql
+CREATE TABLE tool_stats (                               -- 每个工具一行，调度器每次执行后累加
+  name TEXT PRIMARY KEY, calls INTEGER NOT NULL, failures INTEGER NOT NULL,
+  total_ms INTEGER NOT NULL, last_at TEXT NOT NULL
+);
+```
+
+工具搜索用 `calls` 决定每个 MCP 服务器哪几个工具保持加载。Skills 的加载统计与"本会话已加载"记录在 `kv` 表的 `skills` 命名空间（`stats`、`loaded:main`）。
+
+### 1.4 后续迁移（计划）
 
 | 表 | 用途 | 里程碑 |
 |---|---|---|
@@ -121,10 +132,14 @@ CREATE TABLE audit (                                    -- 只追加（I-8）
 | `sessions/forks/<id>.checkpoint.json` | JSON | Fork 检查点，每回合与状态变化后以"临时文件 + rename"原子替换（字段见 [05-sessions-and-agent-loop.md](../10-architecture/05-sessions-and-agent-loop.md) §5.3） |
 | `plugins/<id>/` | 目录 | 安装到数据卷的插件（覆盖同名内置插件）；`.install-*` 是安装中的临时目录 |
 | `plugin-data/<id>/` | 目录 | 插件的可写数据目录（初始化参数 `dataDir`） |
+| `plugin-data/mcp/<id>/` | 目录 | stdio MCP 服务器的默认工作目录 |
+| `skills/<name>/` | 目录 | 用户 Skills（`SKILL.md` + 附带文件）；`.install-*` 是安装中的临时目录 |
+| `workspace/` | 目录 | 向 MCP 服务器声明的根目录（roots） |
 | `inbox/` | 目录 | `filewatch` 默认监视的目录 |
 | `runs/<runId>/log.jsonl` | NDJSON | 本次运行的结构化日志 |
 | `runs/<runId>/transcript.jsonl` | NDJSON | 启动修复时移出的内容（`truncated-tail`、`orphan-result-drop`） |
 | `secrets/<NAME>` | 文本，0600 | 秘密 |
+| `secrets/mcp-oauth/<id>.json` | JSON，0600 | MCP 服务器的 OAuth 客户端注册、令牌与 PKCE verifier |
 | `persona/*.md` | Markdown | 人格文件，首次启动从默认人格复制 |
 | `protea.lock` | 文本 | 单实例锁（pid） |
 

@@ -17,7 +17,9 @@ import {
   ScriptedProvider,
   SessionRepo,
   ToolDispatcher,
+  ToolExposure,
   ToolRegistry,
+  ToolStatsRepo,
   Transcript,
   UsageRepo,
   defaultConfig,
@@ -34,6 +36,7 @@ import {
   type PreemptStormSettings,
   type Provider,
   type ScriptStep,
+  type ToolSearchSettings,
   type ToolSpec,
 } from '../src/index.js';
 
@@ -70,6 +73,8 @@ export interface HarnessOptions {
   forks?: Partial<ForkSchedulerSettings>;
   budget?: Partial<BudgetSettings>;
   outputTap?: (delta: string) => void;
+  /** Tool search over deferrable (MCP) tools, ranked by call counts. */
+  toolSearch?: ToolSearchSettings;
 }
 
 /** A Core assembled the way the daemon does it, minus HTTP, with a scripted provider. */
@@ -150,7 +155,11 @@ export function makeHarness(opts: HarnessOptions = {}) {
   tools.register('test', say);
   for (const t of opts.extraTools ?? []) tools.register('test', t);
 
-  const assembler = new ContextAssembler({ segments: () => [{ id: 'identity', text: 'You are a test assistant.' }] }, tools);
+  const stats = new ToolStatsRepo(db);
+  dispatcher.observe((name, ms, failed) => stats.record(name, ms, failed, new Date().toISOString()));
+  const toolSearch = opts.toolSearch;
+  const exposure = toolSearch ? new ToolExposure({ tools, settings: () => toolSearch, usage: (n) => stats.calls(n), supported: () => true }) : undefined;
+  const assembler = new ContextAssembler({ segments: () => [{ id: 'identity', text: 'You are a test assistant.' }] }, tools, exposure);
   const main: MainSession = new MainSession({
     transcript,
     store,

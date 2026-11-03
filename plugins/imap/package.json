@@ -1,0 +1,24 @@
+{
+  "name": "@protea/plugin-imap",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist",
+    "protea.plugin.json",
+    "config.schema.json",
+    "ENV_PROMPT.md"
+  ],
+  "scripts": {
+    "build": "node ../../scripts/bundle-plugin.mjs ."
+  },
+  "dependencies": {
+    "@protea/plugin-sdk": "workspace:*",
+    "@protea/protocol": "workspace:*",
+    "imapflow": "^2.10.0",
+    "mailparser": "^3.14.1"
+  },
+  "devDependencies": {
+    "@types/mailparser": "^3.9.0"
+  }
+}

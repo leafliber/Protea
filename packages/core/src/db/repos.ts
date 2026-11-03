@@ -136,6 +136,44 @@ export interface LevelUsage {
 }
 
 /** Small namespaced key-value store for component state (JSON values). */
+export interface ToolStat {
+  name: string;
+  calls: number;
+  failures: number;
+  totalMs: number;
+  lastAt: string;
+}
+
+/** Per-tool call counts: rank MCP tools for tool search and report latency. */
+export class ToolStatsRepo {
+  private cache: Map<string, ToolStat> | null = null;
+
+  constructor(private readonly db: Db) {}
+
+  record(name: string, ms: number, failed: boolean, at: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO tool_stats (name, calls, failures, total_ms, last_at) VALUES (?, 1, ?, ?, ?)
+         ON CONFLICT(name) DO UPDATE SET calls = calls + 1, failures = failures + excluded.failures,
+           total_ms = total_ms + excluded.total_ms, last_at = excluded.last_at`,
+      )
+      .run(name, failed ? 1 : 0, Math.round(ms), at);
+    this.cache = null;
+  }
+
+  get(name: string): ToolStat | undefined {
+    if (!this.cache) {
+      const rows = this.db.prepare('SELECT name, calls, failures, total_ms AS totalMs, last_at AS lastAt FROM tool_stats').all() as ToolStat[];
+      this.cache = new Map(rows.map((r) => [r.name, r]));
+    }
+    return this.cache.get(name);
+  }
+
+  calls(name: string): number {
+    return this.get(name)?.calls ?? 0;
+  }
+}
+
 export class KvRepo {
   constructor(private readonly db: Db) {}
 

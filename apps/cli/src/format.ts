@@ -1,4 +1,4 @@
-import type { ApprovalInfo, EventEnvelope, ForkInfo, PluginStatus, StatusResponse } from '@protea/protocol';
+import type { ApprovalInfo, EventEnvelope, ForkInfo, McpServerStatus, McpToolInfo, PluginStatus, SkillInfo, StatusResponse } from '@protea/protocol';
 
 const tty = process.stdout.isTTY;
 const paint = (code: string) => (s: string): string => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
@@ -38,6 +38,40 @@ export function formatPlugin(p: PluginStatus): string {
   return `${bold(p.id.padEnd(12))} ${state.padEnd(10)} ${dim(meta)}${p.error ? `\n${' '.repeat(13)}${red(oneLine(p.error, 160))}` : ''}`;
 }
 
+export function formatMcp(m: McpServerStatus): string {
+  const state = m.state === 'running' ? green(m.state) : ['failed', 'crashed', 'auth_required'].includes(m.state) ? red(m.state) : yellow(m.state);
+  const meta = [
+    m.transport,
+    m.enabled ? '' : 'disabled',
+    `trust ${m.trust}`,
+    `${m.tools.length} tools`,
+    m.prompts ? `${m.prompts} prompts` : '',
+    m.resources ? 'resources' : '',
+    m.server ? `${m.server.name} ${m.server.version}` : '',
+    m.pid ? `pid ${m.pid}` : '',
+    m.restarts ? `${m.restarts} restarts` : '',
+    m.avgLatencyMs !== undefined ? `~${m.avgLatencyMs} ms/call` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  const extra = m.authorizeUrl ? `\n${' '.repeat(13)}${yellow(`authorize: ${m.authorizeUrl}`)}` : m.error ? `\n${' '.repeat(13)}${red(oneLine(m.error, 160))}` : '';
+  return `${bold(m.id.padEnd(12))} ${state.padEnd(10)} ${dim(meta)}${extra}`;
+}
+
+export function formatMcpTool(t: McpToolInfo): string {
+  const tags = [t.readOnly ? 'read-only' : '', t.destructive ? red('destructive') : '', t.filtered ? yellow('filtered') : ''].filter(Boolean).join(' ');
+  return `${bold(t.name)}${tags ? ` ${tags}` : ''}\n  ${dim(oneLine(t.description, 160))}`;
+}
+
+export function formatSkill(k: SkillInfo): string {
+  const state = k.errors.length ? red('invalid') : !k.enabled ? dim('disabled') : k.listed ? green('listed') : yellow('hidden');
+  const meta = [k.origin + (k.owner ? `:${k.owner}` : ''), k.version ? `v${k.version}` : '', k.loads ? `${k.loads} loads` : '', !k.listed && k.requiresTools.length && k.enabled && !k.errors.length ? `needs ${k.requiresTools.join(' ')}` : '']
+    .filter(Boolean)
+    .join(' · ');
+  const detail = k.errors.length ? red(k.errors.join('; ')) : dim(oneLine(k.description, 140));
+  return `${bold(k.name.padEnd(18))} ${state.padEnd(9)} ${dim(meta)}\n${' '.repeat(19)}${detail}${k.warnings.length ? `\n${' '.repeat(19)}${yellow(k.warnings.join('; '))}` : ''}`;
+}
+
 export function formatApproval(a: ApprovalInfo): string {
   const state = a.state === 'pending' ? yellow(a.state) : a.state === 'approved' || a.state === 'used' ? green(a.state) : dim(a.state);
   return `${bold(a.id.padEnd(5))} ${state.padEnd(9)} ${oneLine(a.summary, 100)}${a.reason ? dim(` — ${oneLine(a.reason, 60)}`) : ''}${dim(`  (expires ${a.expiresAt}${a.decidedBy ? `, by ${a.decidedBy}` : ''})`)}`;
@@ -54,6 +88,8 @@ export function formatStatus(s: StatusResponse): string {
     `pending    ${pending}`,
     `provider   ${s.provider.id}/${s.provider.mainModel} ${s.provider.ready ? green('ready') : red(`not ready: ${s.provider.problem ?? ''}`)}`,
     `plugins    ${s.plugins.map((p) => `${p.id}:${p.state === 'running' ? green(p.state) : red(p.state)}`).join('  ')}`,
+    `mcp        ${s.mcp.length ? s.mcp.map((m) => `${m.id}:${m.state === 'running' ? green(m.state) : red(m.state)}`).join('  ') : dim('none')}`,
+    `tools      ${s.tools.total}${s.tools.deferred ? ` (${s.tools.deferred} behind tool search)` : ''} · skills ${s.skills.listed} listed${s.skills.rejected ? red(` · ${s.skills.rejected} rejected`) : ''}`,
     `usage 24h  ${u.calls} calls · ${u.inputTokens} in · ${u.outputTokens} out · cache read ${u.cacheReadTokens} / write ${u.cacheWriteTokens}` +
       `${u.cacheHitRatio === null ? '' : ` · hit ${(u.cacheHitRatio * 100).toFixed(1)}%`} · ~$${u.costUsd.toFixed(4)}`,
     `budget     ${Object.entries(s.budget.levels)

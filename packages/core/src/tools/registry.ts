@@ -8,11 +8,20 @@ export interface ProviderToolDef {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  /** Not loaded up front; the model finds it through the provider's tool search. */
+  deferLoading?: boolean;
+}
+
+/** Sort rank of a tool owner: kernel, then plugins, then MCP servers (owners "mcp" and "mcp:<id>"). */
+function ownerRank(owner: string): string {
+  if (owner === 'core') return '0';
+  return owner === 'mcp' || owner.startsWith('mcp:') ? '2' : '1';
 }
 
 /**
  * All tools visible to the model. Ordering is deterministic (core, then plugins by id,
- * then by name) so the serialized tool list is byte-stable for prompt caching.
+ * then MCP servers by id, each by name) so the serialized tool list is byte-stable for
+ * prompt caching.
  */
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolDef>();
@@ -26,10 +35,33 @@ export class ToolRegistry {
     if (!NAME_RE.test(spec.name)) throw new Error(`invalid tool name "${spec.name}"`);
     const existing = this.tools.get(spec.name);
     if (existing) throw new Error(`tool name "${spec.name}" is already declared by ${existing.owner}`);
-    this.validators.set(spec.name, this.ajv.compile(spec.inputSchema));
+    this.validators.set(spec.name, this.compile(spec));
     this.tools.set(spec.name, { ...(spec as ToolSpec), owner });
     this.tombstones.delete(spec.name);
     this.version++;
+  }
+
+  /** Replace every tool of one owner at once (all or none); returns the names that went away. */
+  replaceOwner(owner: string, specs: readonly ToolSpec<never>[], reason: string): string[] {
+    const before = new Map([...this.tools].filter(([, d]) => d.owner === owner));
+    for (const name of before.keys()) {
+      this.tools.delete(name);
+      this.validators.delete(name);
+    }
+    try {
+      this.registerAll(owner, specs);
+    } catch (err) {
+      for (const [name, def] of before) {
+        this.tools.set(name, def);
+        this.validators.set(name, this.compile(def));
+      }
+      throw err;
+    }
+    const kept = new Set(specs.map((s) => s.name));
+    const gone = [...before.keys()].filter((n) => !kept.has(n));
+    for (const n of gone) this.tombstones.set(n, reason);
+    this.version++;
+    return gone;
   }
 
   /** Register several tools of one owner, all or none. */
@@ -63,6 +95,16 @@ export class ToolRegistry {
     return removed;
   }
 
+  private compile(spec: ToolSpec<never> | ToolSpec): ValidateFunction {
+    try {
+      return this.ajv.compile(spec.inputSchema);
+    } catch (err) {
+      if (!spec.externalSchema) throw err;
+      const pass = (() => true) as unknown as ValidateFunction;
+      return pass;
+    }
+  }
+
   /** Why `name` is not available, if it once was. */
   unavailableReason(name: string): string | undefined {
     return this.tombstones.get(name);
@@ -91,7 +133,7 @@ export class ToolRegistry {
   }
 
   list(): ToolDef[] {
-    const rank = (d: ToolDef): string => `${d.owner === 'core' ? '0' : '1'}:${d.owner}:${d.name}`;
+    const rank = (d: ToolDef): string => `${ownerRank(d.owner)}:${d.owner}:${d.name}`;
     return [...this.tools.values()].sort((a, b) => (rank(a) < rank(b) ? -1 : rank(a) > rank(b) ? 1 : 0));
   }
 

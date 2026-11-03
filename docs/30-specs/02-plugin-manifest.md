@@ -25,7 +25,7 @@
 | `secrets` | string[] | 否 | 需要注入的秘密名 |
 | `configSchema` | path | 否 | JSON Schema；支持 `x-hot: false`、`x-secret: true` 扩展关键字 |
 | `envPrompt` | path | 否 | 默认 `ENV_PROMPT.md` |
-| `skills` | path | 否 | 插件自带 Skills 目录，默认 `skills/` |
+| `skills` | path | 否 | 插件自带 Skills 目录，默认 `skills/`；必须在插件目录内。插件启用时其中的 Skills 进入目录（M3） |
 | `healthcheck.intervalMs` / `timeoutMs` | integer | 否 | 默认 30000 / 5000 |
 | `resources.maxMemoryMb` / `maxCpu` / `maxFds` | number | 否 | 默认 256 / 1.0 / 256 |
 | `mcp` | object | kind=mcp 必需 | `{ transport, command, args, env, url, auth, tools: { allow, deny } }` |
@@ -34,7 +34,7 @@
 
 ## 2. 校验规则
 
-- `kind=skill` 的清单可省略（目录含 `SKILL.md` 即可）；存在时只允许 `id/kind/api/version/displayName`。M2 的插件宿主只运行 `source`、`connector`、`tool`；其他 kind 暂判为 `invalid`（附说明），MCP 与 Skills 在 M3。
+- `kind=skill` 的清单可省略（目录含 `SKILL.md` 即可）；存在时只允许 `id/kind/api/version/displayName`。插件宿主只运行 `source`、`connector`、`tool`；其他 kind 判为 `invalid`（附说明）。M3 的 MCP 服务器在 `config.yaml` 的 `mcp.servers` 里声明，`kind: mcp` 清单留到 M5；Skills 直接放进 `/data/skills/<name>/` 或插件的 `skills/`，不需要清单。
 - `tools` 中每个名称必须匹配 `^[a-z0-9]{2,4}_[a-z0-9_]+$` 且前缀在插件内一致；与已加载插件、内核工具冲突 → `invalid` 并给出冲突方。
 - `level` 为 0 → `invalid`。
 - `runtime.inproc: true` → `invalid`（进程内插件由守护进程在代码中注册）。
