@@ -1,6 +1,6 @@
 # 事件源插件
 
-> 状态：Draft · 更新：2026-11-03
+> 状态：Draft（`webhook`、`telegram`、`filewatch` 已在 M2 实现）· 更新：2026-11-03
 
 本文描述 `source` 与 `connector` 两类插件的契约与最佳实践，并列出 v1 内置来源。通用插件机制见 [07-plugin-system.md](07-plugin-system.md)。
 
@@ -70,13 +70,25 @@ Approvals: the owner replies "/approve <id>" or "/deny <id>"; those replies arri
 | `console` | connector | L1 | 控制台/CLI 输入输出；开发与运维必备 | M0 |
 | `cron` | source | L3 | cron 表达式与一次性定时（`sleep_until`、`schedule_create` 的后端）；支持例程派生 | M0 |
 | `internal` | source | L0 | Core 专用：生命周期、预算、抢占通知 | M0 |
-| `webhook` | source | L2 | HTTP 入站（`/hooks/<name>`），签名校验（GitHub/通用 HMAC） | M2 |
-| `telegram` | connector | L1 | Bot API 长轮询（无需入站端口）；owner 由 chat id 映射 | M2 |
-| `filewatch` | source | L3 | 监视 `/data/inbox` 等目录 | M2 |
+| `webhook` | source | L2 | HTTP 入站（`/hooks/<name>`），签名校验（GitHub/通用 HMAC/token） | M2 ✓ |
+| `telegram` | connector | L1 | Bot API 长轮询（无需入站端口）；owner 由用户 id 映射 | M2 ✓ |
+| `filewatch` | source | L3 | 监视 `/data/inbox` 等目录 | M2 ✓ |
 | `rss` | source | L4 | 定时抓取，按条目去重 | M3 |
 | `imap` | source | L2 | IDLE/轮询；邮件到达事件 + `mail_fetch` 工具 | M3 |
 | `slack` / `discord` | connector | L1 | 社区实现优先 | M7+ |
 | `caldav` | source+tool | L2 | 日历提醒事件 + 查询工具 | M7+ |
+
+### 6.1 M2 内置插件的行为
+
+**telegram**（秘密 `TELEGRAM_BOT_TOKEN`；在 `owner.identities` 加 `{ plugin: telegram, senderKey: "telegram:<你的用户 id>" }`）：
+- 长轮询 `getUpdates`，每个更新先入库（`dedupeKey: update:<id>`），再把偏移量写入 kv，因此崩溃重启只会重读、不会丢；网络故障按 1 s→30 s 退避，遵守 `retry_after`。
+- 主人私聊 → L1 `flush`；消息正好是停止词（默认 `stop`、`wait`、`停`、`停下`、`等一下`、`别说了`，可配 `stopWords`）→ L1 `interrupt`；`/approve aN`、`/deny aN` → 审批决定，不产生消息事件；陌生人私聊 → L2 `flush`；群里 @机器人或回复机器人 → L2 `flush`；其他群消息 → L4 `store`（`groupMentionsOnly: false` 时为 L2）。
+- 主人私聊的 chat id 从主人的第一条消息学到（或配置 `ownerChatId`）。工具：`tg_send`（发给主人，超过 3500 字符自动分段）、`tg_send_chat`（发给其他聊天，默认需要审批）、`tg_react`。
+- 配置：`apiBase`（`x-hot: false`）、`pollTimeoutSec`、`ownerChatId`、`stopWords`、`groupMentionsOnly`。
+
+**webhook**：配置 `hooks: [{ name, verify: github | hmac-sha256 | token | none, secret: "${secret:NAME}", header?, level?, trigger?, maxTextChars? }]`（`x-hot: false`）。事件类型 `webhook.<name>`；GitHub 事件（push、pull_request、issues、issue_comment、workflow_run、release、ping）写成一行事实描述并附截断的负载，其他请求附前 2000 字符；`dedupeKey` 取 `X-GitHub-Delivery` / `X-Request-Id` / `Idempotency-Key`，否则取请求体哈希。默认 L2 `flush`（L3 用 `debounce`）。返回 202 `{cursor, deduped}`；校验失败 401，不入库。
+
+**filewatch**：配置 `paths`（默认 `["inbox"]`，相对数据目录）、`debounceMs`（默认 2 s）、`level`（3 或 4）、`ignore`（默认跳过点文件、`*~`、`*.tmp`、`*.part`、`*.swp`）。一段安静期内的所有变化合并成一个 `filewatch.changed` 事件（列出 `+` 新增、`~` 修改、`-` 删除及大小）；停机期间的变化在启动时补报（快照存 kv）。工具 `fw_list`、`fw_read`（只读，限制在被监视的目录内）。
 
 ## 7. 编写一个最小事件源（TypeScript）
 
@@ -104,12 +116,12 @@ export default definePlugin({
 });
 ```
 
-Python 版本只是协议实现不同：`protea_plugin.Plugin` 基类 + 同名方法。
+Python 版本只是协议实现不同：`protea_plugin.Plugin` 基类 + 同名方法（`start`、`stop`、`tools`、`env_prompt_vars` …），见 `examples/plugins/py-notes`。
 
 ## 8. 测试要求
 
 每个内置来源必须有：
 
-- 协议级测试：用 `@protea/plugin-sdk/testing` 的 `FakeHost` 验证推送的事件信封合法、等级不越权、`dedupeKey` 稳定。
+- 协议级测试：用 `@protea/plugin-sdk/testing` 的 `FakeHost` 验证推送的事件信封合法、等级不越权、`dedupeKey` 稳定（M2 的三个内置插件都有，见 `plugins/*/test`；Telegram 用模拟的 Bot API 服务器）。
 - 重放测试：录制一段真实输入（脱敏）→ 回放 → 事件序列快照一致。
 - 故障测试：外部服务不可用时插件不崩溃、退避重连、心跳保持。

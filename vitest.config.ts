@@ -7,6 +7,8 @@ export default defineConfig({
   resolve: {
     alias: {
       '@protea/protocol': r('./packages/protocol/src/index.ts'),
+      '@protea/plugin-sdk/testing': r('./packages/plugin-sdk/src/testing.ts'),
+      '@protea/plugin-sdk': r('./packages/plugin-sdk/src/index.ts'),
       '@protea/core': r('./packages/core/src/index.ts'),
       '@protea/control': r('./packages/control/src/index.ts'),
       '@protea/plugin-console': r('./plugins/console/src/index.ts'),

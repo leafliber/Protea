@@ -90,22 +90,32 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 - Fork 的 `seed`、`stopWhen.maxTokens|deadline`、`wrapUpHint`、经 API 派生与暂停/恢复尚未实现；已结束 Fork 的转录暂不清理（`scheduler.retention` 留到 M5）。
 - Fork 端点放在 `/api/sessions/forks` 下（与控制 API 规范一致）。
 
-## M2 · 插件系统与热插拔（3 周）
+## M2 · 插件系统与热插拔（3 周）· 状态：已实现（2026-11-03）
 
 **目标**：不重启换零件。
 
-- 清单校验、发现（内置 + 数据卷 + 文件监视）、生命周期状态机、子进程监督、协议实现（TS SDK + Python SDK）。
-- 热操作：安装/启用/禁用/重载/卸载；配置热更新与 `x-hot`。
-- 内置插件：`telegram`（连接器）、`webhook`、`filewatch`。
-- 权限策略引擎 + 审批流（经 Telegram）。
-- `protea dev-plugin`。
+- [x] 清单校验（`protea.plugin.json`）、发现（内置 `plugins/` + 数据卷 `/data/plugins` + 目录监视）、生命周期状态机、子进程监督（心跳、退避重启、排空、`stop` → SIGTERM → SIGKILL）、协议实现（`@protea/plugin-sdk` + Python `protea_plugin`）。
+- [x] 热操作：安装（本地目录）/启用/禁用/重载/重启/卸载；`config.yaml` 热更新（owner、permissions、plugins 立即生效），`x-hot: false` 的键变更自动重载插件；通过 API 做的修改写回 `config.yaml` 并保留注释。
+- [x] 内置插件：`telegram`（连接器，长轮询）、`webhook`（`/hooks/<name>`，GitHub/HMAC/token 校验）、`filewatch`（默认 `/data/inbox`）。三者都打包为单文件 `dist/main.js`。
+- [x] 权限策略引擎（`allow` / `ask` / `deny`，精确名 → glob → 清单 `sideEffectTools` → 默认；没有 owner 时副作用一律拒绝）+ 审批流（经 Telegram 或控制台，`/approve aN`，绑定输入哈希、一次性、24 h 过期）+ `audit` 审计表 + `approval_request` 内核工具。
+- [x] `protea dev-plugin <dir>`（交互式最小宿主）与 `protea dev-plugin <dir> --check`（协议一致性检查）；CLI `plugins`、`approvals` 命令；控制 API 插件、审批与 `/hooks` 端点。
 
 **验收**：
-- [ ] 运行中安装 Telegram 插件 → 主人发消息得到回复；禁用插件 → 其工具消失；重载代码 → 新版本生效；全程主会话不重启。
-- [ ] 插件进程被 `kill -9` 后自动重启，期间入库事件不丢；连续崩溃 5 次进入 `failed` 并在控制台/日志可见。
-- [ ] `ask` 策略的工具调用 → Telegram 收到审批请求 → `/approve` 后执行；24 h 过期。
-- [ ] Python 示例插件通过协议一致性测试。
-- [ ] 不变量 I-6、I-8 测试通过。
+- [x] 运行中安装 Telegram 插件 → 主人发消息得到回复；禁用插件 → 其工具消失；重载代码 → 新版本生效；全程主会话不重启（`apps/daemon/test/plugins.e2e.test.ts`：真实守护进程 + 模拟 Telegram Bot API；安装的是打包后的插件，覆盖同名内置插件；运行号、转录文件与批次全程不变）。
+- [x] 插件进程被 `kill -9` 后自动重启，期间发来的消息不丢（偏移量在事件入库后才前移）；连续崩溃 5 次进入 `failed`，`/api/plugins` 与日志可见，并以 L2 `plugin.failed` 事件告知主会话（`packages/core/test/plugin-host.test.ts`）。
+- [x] `ask` 策略的工具调用 → Telegram 收到审批请求 → `/approve a1` 后同一输入执行一次；24 h 过期（e2e 与 `permissions.test.ts`）。
+- [x] Python 示例插件（`examples/plugins/py-notes`，Python 3.9+）与 TypeScript 示例（`examples/plugins/ts-notes`）通过 14 项协议一致性检查（`packages/core/test/conformance.test.ts`）；故意违规的插件被检出。
+- [x] 不变量 I-6（插件在工具调用中途崩溃 → 失败回执，其他插件与主会话不受影响）、I-8（属性测试：每个有副作用或受限的调用恰有一条审计记录；只有 `allow` 或匹配的审批才会执行，审批只用一次）测试通过；I-8 做过变异检验。
+
+**M2 与原设计的差异**（已同步进各文档）：
+- 安装来源只支持本地目录；Git URL 与 tarball 留到 M5（控制台）。
+- 数据卷插件必须自包含（打包或自带 `node_modules`）；内置插件用 `scripts/bundle-plugin.mjs`（esbuild）打包。开发模式下内置插件按清单 `runtime.dev` 直接跑源码。
+- 目录监视用 Node 自带的 `fs.watch`，不用 chokidar。
+- 资源上限（`ulimit` / cgroup）、`events/pushDeferred`、`events/pushCandidate`、`blob/*`、`usage/report`、`plugin_state` 表尚未实现（M6 / 按需）。
+- 审批请求发给所有声明了 `approvals` 能力的运行中渠道（控制台 + Telegram），而不是只发"主人最近使用的渠道"。
+- 权限的附加条件（按批等级、按参数、按时间窗）与外发白名单尚未实现。
+- Python SDK 尚未发布到 PyPI；宿主把仓库（或镜像）里的 `sdks/python` 放进 Python 插件的 `PYTHONPATH`。
+- 进程内插件（console、cron）的配置变更一律重载该插件。
 
 ## M3 · MCP 与 Skills（2 周）
 

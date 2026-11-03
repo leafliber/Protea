@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "apiBase": { "type": "string", "default": "https://api.telegram.org", "x-hot": false, "description": "Bot API base URL (for a local Bot API server or tests)." },
+    "pollTimeoutSec": { "type": "integer", "minimum": 0, "maximum": 50, "default": 30 },
+    "ownerChatId": { "type": ["integer", "string"], "description": "The owner's private chat; learned from the owner's first message when unset." },
+    "stopWords": { "type": "array", "items": { "type": "string" }, "description": "Owner messages equal to one of these interrupt the current turn." },
+    "groupMentionsOnly": { "type": "boolean", "default": true, "description": "Group messages that do not mention the bot are stored, not delivered." }
+  }
+}

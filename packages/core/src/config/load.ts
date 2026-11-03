@@ -99,11 +99,25 @@ function validate(cfg: ProteaConfig, warnings: string[]): void {
     }
   }
   if (!(budget.warnAt > 0 && budget.warnAt <= 1)) throw new Error('budget.warnAt must be in (0, 1]');
+  const policies = ['allow', 'ask', 'deny'];
+  const perm = cfg.permissions;
+  if (!policies.includes(perm.default)) throw new Error('permissions.default must be allow, ask or deny');
+  if (typeof perm.tools !== 'object' || perm.tools === null || Array.isArray(perm.tools)) throw new Error('permissions.tools must be a mapping');
+  for (const [k, v] of Object.entries(perm.tools)) {
+    if (!policies.includes(v)) throw new Error(`permissions.tools.${k} must be allow, ask or deny`);
+  }
+  if (!(perm.approvalTtlMs > 0)) throw new Error('permissions.approvalTtlMs must be positive');
+  const ph = cfg.pluginHost;
+  if (!Array.isArray(ph.restartBackoffMs) || ph.restartBackoffMs.length === 0 || !ph.restartBackoffMs.every((n) => n >= 0)) {
+    throw new Error('pluginHost.restartBackoffMs must be a non-empty list of delays');
+  }
+  if (!(ph.maxCrashes >= 1)) throw new Error('pluginHost.maxCrashes must be at least 1');
   const { soft, hard } = cfg.session.rounds;
   if (!(soft > 0 && hard >= soft)) throw new Error('session.rounds requires 0 < soft <= hard');
   if (!Array.isArray(cfg.owner.identities)) throw new Error('owner.identities must be a list');
   if (!['5m', '1h'].includes(cfg.providers.anthropic.cacheTtl)) throw new Error('providers.anthropic.cacheTtl must be 5m or 1h');
   for (const [id, p] of Object.entries(cfg.plugins)) {
+    if (p.enabled === undefined) p.enabled = false; // plugins without built-in defaults start disabled
     if (typeof p.enabled !== 'boolean') throw new Error(`plugins.${id}.enabled must be a boolean`);
     p.config ??= {};
   }

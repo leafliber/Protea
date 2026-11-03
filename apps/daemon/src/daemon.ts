@@ -2,16 +2,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  ApprovalService,
+  AuditLog,
   Bus,
   BatchRepo,
   BudgetTracker,
   ContextAssembler,
   ForkManager,
   EventStore,
-  InprocPluginHost,
+  PluginHost,
   KvRepo,
   MainSession,
   OwnerRegistry,
+  PermissionGuard,
+  PermissionPolicy,
   Scheduler,
   SecretStore,
   SessionRepo,
@@ -20,6 +24,7 @@ import {
   ToolRegistry,
   Transcript,
   UsageRepo,
+  approvalTools,
   createLogger,
   createProvider,
   ensurePersona,
@@ -33,10 +38,14 @@ import {
   newId,
   openDatabase,
   reconcileDeliveries,
+  resolveDevLoader,
+  setConfigValue,
   systemClock,
+  watchPaths,
   type Clock,
   type Db,
   type Logger,
+  type PluginSettings,
   type ProteaConfig,
   type Provider,
 } from '@protea/core';
@@ -71,19 +80,31 @@ export interface Daemon {
   transcript: Transcript;
   main: MainSession;
   scheduler: Scheduler;
-  plugins: InprocPluginHost;
+  plugins: PluginHost;
+  approvals: ApprovalService;
+  audit: AuditLog;
   forks: ForkManager;
   budget: BudgetTracker;
   console: ConsolePlugin;
   tools: ToolRegistry;
   status(): StatusResponse;
+  /** Re-read config.yaml now (the file watcher also does this on change). */
+  reloadConfig(): Promise<void>;
   stop(reason?: string): Promise<void>;
 }
 
-function defaultPersonaDir(env: NodeJS.ProcessEnv): string {
-  if (env['PROTEA_ASSETS_DIR']) return path.join(env['PROTEA_ASSETS_DIR'], 'personas', 'default');
+/** Shipped assets (default persona, built-in plugins, Python SDK): $PROTEA_ASSETS_DIR or the repository root. */
+function assetsDir(env: NodeJS.ProcessEnv): string {
+  if (env['PROTEA_ASSETS_DIR']) return path.resolve(env['PROTEA_ASSETS_DIR']);
   // apps/daemon/{src,dist}/daemon.* → repository root
-  return fileURLToPath(new URL('../../../personas/default/', import.meta.url));
+  return fileURLToPath(new URL('../../../', import.meta.url));
+}
+
+/** Development mode runs plugin sources through tsx: PROTEA_DEV=1, or the daemon itself runs from source. */
+function devLoader(env: NodeJS.ProcessEnv): string | null {
+  if (env['PROTEA_DEV'] === '0') return null;
+  if (env['PROTEA_DEV'] === '1' || import.meta.url.endsWith('.ts')) return resolveDevLoader();
+  return null;
 }
 
 /**
@@ -93,13 +114,15 @@ function defaultPersonaDir(env: NodeJS.ProcessEnv): string {
 export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const env = opts.env ?? process.env;
   const dataDir = path.resolve(opts.dataDir);
-  for (const d of ['sessions/forks', 'runs', 'plugin-data', 'overrides']) fs.mkdirSync(path.join(dataDir, d), { recursive: true });
+  for (const d of ['sessions/forks', 'runs', 'plugins', 'plugin-data', 'overrides']) fs.mkdirSync(path.join(dataDir, d), { recursive: true });
   const lock = acquireLock(dataDir);
 
   const runId = newId();
   const runDir = path.join(dataDir, 'runs', runId);
   fs.mkdirSync(runDir, { recursive: true });
-  const { config, sources, warnings } = loadConfig(dataDir, env);
+  const loadedConfig = loadConfig(dataDir, env);
+  const { sources, warnings } = loadedConfig;
+  let config = loadedConfig.config;
   const log =
     opts.logger ??
     createLogger({
@@ -145,15 +168,77 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const secrets = new SecretStore(path.join(dataDir, 'secrets'), env);
   const provider = opts.provider ?? createProvider(config, secrets);
   const tools = new ToolRegistry();
-  const plugins = new InprocPluginHost({ store, bus, owner, kv, tools, log, clock, dataDir, timezone: tz });
+  const assets = assetsDir(env);
+  const loader = devLoader(env);
+  const settingsOf = (id: string): PluginSettings | undefined => config.plugins[id];
+  const persist = (keyPath: Array<string | number>, value: unknown): void => {
+    try {
+      setConfigValue(dataDir, keyPath, value);
+    } catch (err) {
+      log.error({ key: keyPath.join('.'), err: errorMessage(err) }, 'could not write config.yaml');
+    }
+  };
+  const plugins = new PluginHost({
+    store,
+    bus,
+    owner,
+    kv,
+    tools,
+    log: log.child({ component: 'plugins' }),
+    clock,
+    dataDir,
+    timezone: tz,
+    language: config.daemon.language,
+    settings: config.pluginHost,
+    secrets,
+    mainModel: () => provider.modelFor('main'),
+    roots: [
+      { dir: path.join(assets, 'plugins'), origin: 'builtin' },
+      { dir: path.join(dataDir, 'plugins'), origin: 'data' },
+    ],
+    ...(loader ? { dev: { loader } } : {}),
+    pythonPath: path.join(assets, 'sdks', 'python'),
+    // Keep the running configuration in step with the file, without waiting for the watcher.
+    onEnabledChanged: (id, enabled) => {
+      config.plugins[id] = { config: config.plugins[id]?.config ?? {}, enabled };
+      persist(['plugins', id, 'enabled'], enabled);
+    },
+    onUninstalled: (id) => {
+      delete config.plugins[id];
+      persist(['plugins', id], undefined);
+    },
+  });
   const consolePlugin = new ConsolePlugin();
-  if (config.plugins['console']?.enabled !== false) plugins.register(consolePlugin, config.plugins['console']?.config ?? {});
-  if (config.plugins['cron']?.enabled !== false) plugins.register(new CronPlugin(), config.plugins['cron']?.config ?? {});
+  const builtinSettings = (id: string): PluginSettings => config.plugins[id] ?? { enabled: true, config: {} };
+  plugins.register(consolePlugin, builtinSettings('console').config, builtinSettings('console').enabled);
+  plugins.register(new CronPlugin(), builtinSettings('cron').config, builtinSettings('cron').enabled);
+  await plugins.rescan(settingsOf);
+
+  // Permissions, approvals and audit (docs/10-architecture/14-security-and-permissions.md).
+  const audit = new AuditLog(db, clock);
+  const policy = new PermissionPolicy(config.permissions, {
+    askByDefault: (def) => plugins.isAskByDefault(def),
+    ownerConfigured: () => owner.hasAny(),
+  });
+  const approvals = new ApprovalService({
+    db,
+    bus,
+    audit,
+    clock,
+    log: log.child({ component: 'approvals' }),
+    ttlMs: () => config.permissions.approvalTtlMs,
+    deliver: (a) => plugins.requestApproval(a),
+    pushInternal: (input) => {
+      plugins.pushInternal(input);
+    },
+    redact: (text) => secrets.redact(text),
+  });
+  plugins.attachApprovals(approvals);
 
   const personaDir = path.join(dataDir, 'persona');
-  if (ensurePersona(personaDir, defaultPersonaDir(env)).created) log.info({ dir: personaDir }, 'installed the default persona');
+  if (ensurePersona(personaDir, path.join(assets, 'personas', 'default')).created) log.info({ dir: personaDir }, 'installed the default persona');
   const persona = loadPersona(personaDir);
-  const pushInternal = (input: Parameters<InprocPluginHost['pushInternal']>[0]): void => {
+  const pushInternal = (input: Parameters<PluginHost['pushInternal']>[0]): void => {
     plugins.pushInternal(input);
   };
 
@@ -164,8 +249,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     timezone: tz,
     overridesDir: path.join(dataDir, 'overrides'),
     log: log.child({ component: 'context' }),
+    permissions: () => policy.summary(tools.list()),
   });
+  // Plugin and policy changes reach the system prefix at the next turn boundary.
+  bus.on('plugin.changed', () => segments.refresh());
   const dispatcher = new ToolDispatcher(tools, log.child({ component: 'tools' }));
+  dispatcher.setGuard(new PermissionGuard(policy, approvals, audit));
   const effort = config.providers.anthropic.effort;
   const forks = new ForkManager({
     dir: path.join(dataDir, 'sessions', 'forks'),
@@ -211,6 +300,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   };
   for (const spec of kernelTools({ store, status })) tools.register('core', spec);
   for (const spec of forkTools(forks, { maxTurns: config.scheduler.forks.maxTurns })) tools.register('core', spec);
+  for (const spec of approvalTools({ approvals, policy, tools })) tools.register('core', spec);
   await plugins.startAll();
 
   main = new MainSession({
@@ -255,8 +345,44 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     const reasons: string[] = [];
     const h = provider.health();
     if (!h.ready) reasons.push(`provider: ${h.problem ?? 'not ready'}`);
-    for (const p of plugins.status()) if (p.state === 'failed') reasons.push(`plugin ${p.id}: ${p.error ?? 'failed'}`);
+    for (const p of plugins.status()) if (p.enabled && p.state === 'failed') reasons.push(`plugin ${p.id}: ${p.error ?? 'failed'}`);
     return { ready: reasons.length === 0, reasons };
+  };
+
+  // Hot configuration (docs/30-specs/04-config-reference.md §4).
+  const HOT_SECTIONS = new Set(['owner', 'permissions', 'plugins']);
+  const reloadConfig = async (): Promise<void> => {
+    let next: ProteaConfig;
+    try {
+      next = loadConfig(dataDir, env).config;
+    } catch (err) {
+      log.error({ err: errorMessage(err) }, 'config.yaml is invalid; keeping the running configuration');
+      return;
+    }
+    const prev = config;
+    if (JSON.stringify(prev) === JSON.stringify(next)) return;
+    config = next;
+    owner.update(next.owner.identities);
+    policy.update(next.permissions);
+    segments.refresh();
+    const ids = new Set([...Object.keys(prev.plugins), ...Object.keys(next.plugins), ...plugins.status().map((p) => p.id)]);
+    for (const id of ids) {
+      try {
+        await plugins.applySettings(id, next.plugins[id]);
+      } catch (err) {
+        log.error({ plugin: id, err: errorMessage(err) }, 'plugin settings not applied');
+      }
+    }
+    const cold = (Object.keys(next) as Array<keyof ProteaConfig>).filter(
+      (k) => !HOT_SECTIONS.has(k) && JSON.stringify(prev[k]) !== JSON.stringify(next[k]),
+    );
+    if (cold.length > 0) log.warn({ sections: cold }, 'these configuration changes take effect after a restart');
+    log.info('configuration reloaded');
+  };
+  const setPluginConfig = async (id: string, cfg: Record<string, unknown>): Promise<void> => {
+    await plugins.updateConfig(id, cfg);
+    config.plugins[id] = { enabled: plugins.get(id)?.enabled ?? false, config: cfg };
+    persist(['plugins', id, 'config'], cfg);
   };
   const app = createControlApp({
     adminToken: token.value,
@@ -265,6 +391,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     log: log.child({ component: 'control' }),
     transcript: () => transcript,
     forks,
+    plugins,
+    approvals,
+    rescanPlugins: () => plugins.rescan(settingsOf),
+    setPluginConfig,
     status,
     ready,
     pushConsole: (req, senderKey) =>
@@ -296,6 +426,17 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   scheduler.start();
   forks.recover();
   forks.start();
+  const unwatch = [
+    watchPaths([{ path: dataDir, filter: (name) => name === 'config.yaml' }], () => void reloadConfig(), {
+      onError: (err) => log.warn({ err: err.message }, 'config watcher error'),
+    }),
+    watchPaths([{ path: path.join(dataDir, 'plugins'), recursive: true }], () => void plugins.rescan(settingsOf), {
+      debounceMs: 500,
+      onError: (err) => log.warn({ err: err.message }, 'plugin directory watcher error'),
+    }),
+  ];
+  const expiry = setInterval(() => approvals.expireDue(), 60_000);
+  expiry.unref();
   log.info(
     { url: server.url, dataDir, provider: provider.id, model: provider.modelFor('main'), config: sources, providerReady: provider.health().ready },
     'daemon started',
@@ -305,6 +446,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const stop = (reason = 'stop requested'): Promise<void> => {
     stopping ??= (async () => {
       log.info({ reason }, 'stopping');
+      for (const off of unwatch) off();
+      clearInterval(expiry);
       plugins.pushInternal({ type: 'daemon.stopping', level: 4, trigger: 'store', text: `Daemon stopping: ${reason}.` });
       scheduler.drain();
       const graceMs = config.daemon.shutdown.graceMs;
@@ -325,7 +468,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     url: server.url,
     adminToken: token.value,
     dataDir,
-    config,
+    get config() {
+      return config;
+    },
     db,
     bus,
     store,
@@ -333,11 +478,14 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     main,
     scheduler,
     plugins,
+    approvals,
+    audit,
     forks,
     budget,
     console: consolePlugin,
     tools,
     status,
+    reloadConfig,
     stop,
   };
 }

@@ -1,0 +1,12 @@
+{
+  "name": "@protea/example-ts-notes",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node ../../../scripts/bundle-plugin.mjs ."
+  },
+  "dependencies": {
+    "@protea/plugin-sdk": "workspace:*"
+  }
+}

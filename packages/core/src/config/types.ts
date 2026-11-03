@@ -1,4 +1,6 @@
 import type { Effort, Level, ModelRole } from '@protea/protocol';
+import type { PermissionSettings } from '../permissions/policy.js';
+import type { PluginHostSettings } from '../plugins/host.js';
 
 export interface LevelSettings {
   /** Batch window; null means the level never opens a window (it only rides along). */
@@ -83,5 +85,7 @@ export interface ProteaConfig {
     echo: { delayMs: number };
   };
   plugins: Record<string, PluginSettings>;
+  pluginHost: PluginHostSettings;
+  permissions: PermissionSettings;
   observability: { logLevel: string; logFormat: 'json' | 'pretty' | 'auto'; logEventText: boolean };
 }

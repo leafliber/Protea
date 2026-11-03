@@ -7,14 +7,16 @@ pnpm workspace，TypeScript ESM，Node 22。
 ```
 Protea/
 ├── package.json                 workspace 根：build / typecheck / test / dev / protea
-├── pnpm-workspace.yaml          含 allowBuilds（better-sqlite3、esbuild 的安装脚本）
+├── pnpm-workspace.yaml          packages/*、plugins/*、apps/*、examples/plugins/*；allowBuilds（better-sqlite3、esbuild）
+├── scripts/bundle-plugin.mjs    把进程外插件打包成单文件 dist/main.js（esbuild）
 ├── tsconfig.base.json           各包共享的编译选项
 ├── tsconfig.json                全仓类型检查（paths 指向各包 src，noEmit）
 ├── vitest.config.ts             测试入口（alias 指向各包 src）
 ├── docs/                        设计文档
 ├── personas/default/            默认人格（SOUL.md、OPERATING.md、USER.md），首次启动复制到 /data/persona
 ├── packages/
-│   ├── protocol/                @protea/protocol：事件、会话、控制 API 的类型与事件 JSON Schema（无运行时依赖）
+│   ├── protocol/                @protea/protocol：事件、会话、控制 API、插件清单与协议的类型，事件 JSON Schema，JSON-RPC 对等端（rpc.ts，无运行时依赖）
+│   ├── plugin-sdk/              @protea/plugin-sdk：definePlugin / runPlugin，测试用 FakeHost（@protea/plugin-sdk/testing）
 │   ├── core/                    @protea/core：内核
 │   │   ├── src/
 │   │   │   ├── events/          校验（ajv）、门禁、主人映射、事件库、渲染
@@ -24,7 +26,8 @@ Protea/
 │   │   │   ├── context/         系统分段、运行时说明、环境提示模板、请求装配
 │   │   │   ├── tools/           工具注册表、分发器、内核工具
 │   │   │   ├── providers/       Provider 接口、anthropic、echo、scripted、价格表
-│   │   │   ├── plugins/         进程内插件宿主（M2 增加进程外监督与协议）
+│   │   │   ├── plugins/         PluginHost（生命周期、监督、事件网关）、清单与发现、子进程运行时、一致性检查、开发加载器
+│   │   │   ├── permissions/     权限策略、审批、审计、权限守卫、approval_request 工具
 │   │   │   ├── persona/         人格文件加载
 │   │   │   ├── config/          默认值、层叠加载、环境变量映射、秘密
 │   │   │   ├── db/              SQLite 打开与内嵌迁移、仓储（batches/usage/kv/sessions）
@@ -33,23 +36,29 @@ Protea/
 │   │   └── test/                单元、组件、属性测试与测试夹具
 │   └── control/                 @protea/control：Hono HTTP API 与 SSE
 ├── plugins/
-│   ├── console/                 进程内连接器：控制台输入、con_send 输出
-│   └── cron/                    进程内来源：日程与 sleep_until
+│   ├── console/                 进程内连接器：控制台输入、con_send 输出、审批请求显示
+│   ├── cron/                    进程内来源：日程与 sleep_until
+│   ├── telegram/                进程外连接器（protea.plugin.json + src/ + test/，含模拟 Bot API）
+│   ├── webhook/                 进程外来源：/hooks/<name>
+│   └── filewatch/               进程外来源：监视 /data/inbox
 ├── apps/
 │   ├── daemon/                  组装 Core + 控制平面 + 内置插件；单实例锁；崩溃端到端测试
-│   └── cli/                     `protea` 命令（serve 直接启动守护进程，其余经 HTTP API）
-└── (计划) packages/plugin-sdk, packages/plugin-sdk-py, apps/web, docker/, examples/, tests/e2e
+│   └── cli/                     `protea` 命令（serve 直接启动守护进程；dev-plugin 本地运行插件；其余经 HTTP API）
+├── sdks/python/protea_plugin/   Python 插件 SDK（宿主放进 Python 插件的 PYTHONPATH）
+├── examples/plugins/            py-notes（Python）、ts-notes（TypeScript）示例插件与一致性探针
+└── (计划) apps/web, docker/, tests/e2e
 ```
 
 ## 包依赖方向
 
-`protocol` ← `core` ← {`control`, 内置插件} ← `daemon` ← `cli`；`core` 不依赖 `control`、`daemon` 或任何插件。M2 起第三方插件只依赖 `plugin-sdk` 与 `protocol`；`web` 只依赖 `protocol` 的类型。
+`protocol` ← `core` ← {`control`, 进程内插件} ← `daemon` ← `cli`；`core` 不依赖 `control`、`daemon` 或任何插件。进程外插件（内置的与第三方的）只依赖 `plugin-sdk` 与 `protocol`，并打包成单文件；`web` 只依赖 `protocol` 的类型。
 
 ## 构建与运行
 
-- 开发：`pnpm dev`（tsx 直接运行源码，数据目录 `.dev-data`）；`pnpm protea <命令>` 调用 CLI。
-- 测试：`pnpm test`；类型检查：`pnpm typecheck`。
-- 构建：`pnpm build` 按依赖拓扑顺序对每个包运行 `tsc`，产物在各包 `dist/`，`node apps/cli/dist/main.js serve` 即可运行。
+- 开发：`pnpm dev`（`node --conditions=source --import tsx`，直接运行各包源码，无需构建；开发模式下内置插件也跑源码；数据目录 `.dev-data`）；`pnpm protea <命令>` 调用 CLI。各包 `exports` 带 `source` 条件指向 `src/index.ts`。
+- 测试：`pnpm test`（不需要先构建）；类型检查：`pnpm typecheck`。
+- 构建：`pnpm build` 按依赖拓扑顺序构建每个包：库用 `tsc` 输出到 `dist/`，进程外插件用 `scripts/bundle-plugin.mjs` 打包成 `dist/main.js`；`node apps/cli/dist/main.js serve` 即可运行。
+- 插件开发：`pnpm protea dev-plugin <dir>`（交互）/ `--check`（一致性检查）。
 
 ## 命名
 

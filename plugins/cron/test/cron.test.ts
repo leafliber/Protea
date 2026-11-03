@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   Bus,
   EventStore,
-  InprocPluginHost,
+  PluginHost,
   KvRepo,
   OwnerRegistry,
   ToolRegistry,
@@ -27,7 +27,7 @@ function host(config: Record<string, unknown> = {}) {
   const bus = new Bus();
   const store = new EventStore(db, bus, { runId: 'r', clock: systemClock });
   const tools = new ToolRegistry();
-  const plugins = new InprocPluginHost({
+  const plugins = new PluginHost({
     store,
     bus,
     owner: new OwnerRegistry([]),

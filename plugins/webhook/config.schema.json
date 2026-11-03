@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "hooks": {
+      "type": "array",
+      "x-hot": false,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "verify"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$" },
+          "verify": { "enum": ["github", "hmac-sha256", "token", "none"] },
+          "secret": { "type": "string", "x-secret": true, "description": "Write it as ${secret:NAME}." },
+          "header": { "type": "string", "description": "Signature header (hmac-sha256, default x-signature-256) or token header (token, default x-webhook-token)." },
+          "allowUnsigned": { "type": "boolean", "description": "Required for verify: none." },
+          "level": { "enum": [2, 3, 4] },
+          "trigger": { "enum": ["debounce", "flush", "piggyback", "store"] },
+          "maxTextChars": { "type": "integer", "minimum": 200, "maximum": 20000 }
+        }
+      }
+    }
+  }
+}

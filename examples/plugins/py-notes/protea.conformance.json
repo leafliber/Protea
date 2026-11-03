@@ -1,0 +1,8 @@
+{
+  "calls": [
+    { "tool": "nts_add", "input": { "text": "buy milk" }, "expect": "added note 1" },
+    { "tool": "nts_list", "input": {}, "expect": "1. buy milk" }
+  ],
+  "cancel": { "tool": "nts_wait", "input": { "seconds": 20 } },
+  "events": 1
+}

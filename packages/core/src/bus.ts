@@ -1,9 +1,11 @@
 import type {
+  ApprovalInfo,
   BatchEndReason,
   BatchReason,
   EventEnvelope,
   ForkInfo,
   Level,
+  PluginStatus,
   RunPhase,
   SchedulerAction,
   TerminalOutcome,
@@ -30,6 +32,8 @@ export interface BusTopics {
   'usage.recorded': UsageRecord;
   'scheduler.action': SchedulerAction;
   'fork.changed': ForkInfo;
+  'plugin.changed': PluginStatus;
+  'approval.changed': ApprovalInfo;
 }
 
 export type BusTopic = keyof BusTopics;

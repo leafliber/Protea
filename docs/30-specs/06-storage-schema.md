@@ -79,14 +79,36 @@ CREATE TABLE kv (ns TEXT NOT NULL, key TEXT NOT NULL, value TEXT, updated_at TEX
 
 `events.eff_trigger` 在老化与 `events_promote` 时会被改写（等级 `eff_level` 不变），`state` 可能从 `archived` 回到 `pending`。
 
-### 1.2 后续迁移（计划）
+### 1.2 迁移 2：`approvals-and-audit`（M2）
+
+```sql
+CREATE TABLE approvals (                                -- id 为 'a' || seq，例如 a12
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
+  tool TEXT NOT NULL, owner TEXT NOT NULL,              -- owner：声明该工具的插件
+  input_hash TEXT NOT NULL, summary TEXT NOT NULL, reason TEXT,
+  state TEXT NOT NULL CHECK (state IN ('pending','approved','denied','expired','used')),
+  session_id TEXT, batch_id TEXT,
+  created_at TEXT NOT NULL, expires_at TEXT NOT NULL, expires_ms INTEGER NOT NULL,
+  decided_at TEXT, decided_by TEXT, used_at TEXT
+);
+CREATE INDEX ix_approvals_lookup ON approvals(tool, input_hash, state);
+
+CREATE TABLE audit (                                    -- 只追加（I-8）
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL,
+  kind TEXT NOT NULL,                                   -- tool_call | tool_blocked | approval_requested | approval_decided | approval_expired
+  tool TEXT, owner TEXT, session_id TEXT, batch_id TEXT, call_id TEXT,
+  input_hash TEXT, summary TEXT, policy TEXT, outcome TEXT, approval_id TEXT, detail TEXT
+);
+```
+
+`input_hash` = sha256(工具名 + 换行 + 键排序后的 JSON 输入)。`summary` 与 `reason` 写入前经过秘密扫描。插件的 kv 状态（例如 Telegram 的偏移量、filewatch 的快照）在 `kv` 表的 `plugin:<id>` 命名空间。
+
+### 1.3 后续迁移（计划）
 
 | 表 | 用途 | 里程碑 |
 |---|---|---|
-| `approvals` | 审批请求与决定 | M2 |
-| `audit` | 副作用工具调用审计 | M2 |
-| `plugin_state` | 插件生命周期状态 | M2 |
-| `blobs` / `event_blobs` | 附件元数据与引用计数 | M2 |
+| `plugin_state` | 插件生命周期状态（M2 用内存状态 + `config.yaml` 的 enabled，未建表） | 按需 |
+| `blobs` / `event_blobs` | 附件元数据与引用计数 | 按需（随 `blob/*` 协议方法） |
 | `memory_fts`（FTS5 虚表） | 记忆全文检索 | M4 |
 
 ## 2. 文件
@@ -97,6 +119,9 @@ CREATE TABLE kv (ns TEXT NOT NULL, key TEXT NOT NULL, value TEXT, updated_at TEX
 | `sessions/main.<seq>.jsonl` | NDJSON | 主会话转录，只追加，每条记录写入后 `fdatasync` |
 | `sessions/forks/<id>.jsonl` | NDJSON | Fork 转录，记录格式同主转录；缺失回执的占位文本为 `[result missing (fork paused/restarted)]`；结束时追加 `fork_ended` 标记 |
 | `sessions/forks/<id>.checkpoint.json` | JSON | Fork 检查点，每回合与状态变化后以"临时文件 + rename"原子替换（字段见 [05-sessions-and-agent-loop.md](../10-architecture/05-sessions-and-agent-loop.md) §5.3） |
+| `plugins/<id>/` | 目录 | 安装到数据卷的插件（覆盖同名内置插件）；`.install-*` 是安装中的临时目录 |
+| `plugin-data/<id>/` | 目录 | 插件的可写数据目录（初始化参数 `dataDir`） |
+| `inbox/` | 目录 | `filewatch` 默认监视的目录 |
 | `runs/<runId>/log.jsonl` | NDJSON | 本次运行的结构化日志 |
 | `runs/<runId>/transcript.jsonl` | NDJSON | 启动修复时移出的内容（`truncated-tail`、`orphan-result-drop`） |
 | `secrets/<NAME>` | 文本，0600 | 秘密 |

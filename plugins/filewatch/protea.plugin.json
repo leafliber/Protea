@@ -1,0 +1,13 @@
+{
+  "id": "filewatch",
+  "kind": "source",
+  "api": 1,
+  "version": "0.1.0",
+  "displayName": "File watcher",
+  "description": "Reports files added, changed or removed in watched folders (default: <data>/inbox).",
+  "runtime": { "exec": "node", "args": ["dist/main.js"], "dev": { "args": ["src/main.ts"] } },
+  "level": 3,
+  "tools": ["fw_list", "fw_read"],
+  "configSchema": "./config.schema.json",
+  "envPrompt": "./ENV_PROMPT.md"
+}

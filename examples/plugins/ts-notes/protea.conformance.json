@@ -1,0 +1,8 @@
+{
+  "calls": [
+    { "tool": "tsn_add", "input": { "text": "buy milk" }, "expect": "added note 1" },
+    { "tool": "tsn_list", "input": {}, "expect": "1. buy milk" }
+  ],
+  "cancel": { "tool": "tsn_wait", "input": { "seconds": 20 } },
+  "events": 1
+}

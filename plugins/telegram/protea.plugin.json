@@ -1,0 +1,17 @@
+{
+  "id": "telegram",
+  "kind": "connector",
+  "api": 1,
+  "version": "0.1.0",
+  "displayName": "Telegram",
+  "description": "Talk to the owner through a Telegram bot (long polling; no inbound port needed).",
+  "runtime": { "exec": "node", "args": ["dist/main.js"], "dev": { "args": ["src/main.ts"] } },
+  "level": 1,
+  "triggers": ["debounce", "flush", "preempt", "interrupt", "piggyback", "store"],
+  "tools": ["tg_send", "tg_send_chat", "tg_react"],
+  "sideEffectTools": ["tg_send_chat"],
+  "secrets": ["TELEGRAM_BOT_TOKEN"],
+  "configSchema": "./config.schema.json",
+  "envPrompt": "./ENV_PROMPT.md",
+  "healthcheck": { "intervalMs": 30000, "timeoutMs": 5000 }
+}

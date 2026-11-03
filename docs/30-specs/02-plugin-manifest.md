@@ -1,6 +1,6 @@
 # 规范：插件清单（protea.plugin.json）
 
-> 状态：Draft · 更新：2026-11-03 · 设计：[../10-architecture/07-plugin-system.md](../10-architecture/07-plugin-system.md)
+> 状态：Accepted（M2）· 更新：2026-11-03 · 实现：`packages/core/src/plugins/manifest.ts` · 设计：[../10-architecture/07-plugin-system.md](../10-architecture/07-plugin-system.md)
 
 ## 1. 字段
 
@@ -15,7 +15,9 @@
 | `runtime.exec` | string | source/connector/tool 必需 | 可执行文件（`node`、`python3`、绝对路径） |
 | `runtime.args` | string[] | 否 | |
 | `runtime.cwd` | string | 否 | 相对插件目录 |
-| `runtime.inproc` | boolean | 否 | 仅内置插件允许 `true` |
+| `runtime.env` | object | 否 | 额外的环境变量；值中的 `${pluginDir}`、`${dataDir}` 被替换为插件目录与插件数据目录 |
+| `runtime.dev` | `{ exec?, args? }` | 否 | 开发模式下内置插件改用的命令（例如 `{"args": ["src/main.ts"]}`，直接跑源码） |
+| `runtime.inproc` | boolean | 否 | 保留给编译进守护进程的插件；在清单里写 `true` 会被判为 `invalid` |
 | `level` | 1–4 | source/connector 必需 | 可声明的最高等级 |
 | `triggers` | string[] | 否 | 允许申请的投递模式；默认按等级表 |
 | `tools` | string[] | 否 | 声明的工具名；运行时 `tools/list` 返回的名称若不在此列表 → 警告但生效 |
@@ -32,10 +34,11 @@
 
 ## 2. 校验规则
 
-- `kind=skill` 的清单可省略（目录含 `SKILL.md` 即可）；存在时只允许 `id/kind/api/version/displayName`。
+- `kind=skill` 的清单可省略（目录含 `SKILL.md` 即可）；存在时只允许 `id/kind/api/version/displayName`。M2 的插件宿主只运行 `source`、`connector`、`tool`；其他 kind 暂判为 `invalid`（附说明），MCP 与 Skills 在 M3。
 - `tools` 中每个名称必须匹配 `^[a-z0-9]{2,4}_[a-z0-9_]+$` 且前缀在插件内一致；与已加载插件、内核工具冲突 → `invalid` 并给出冲突方。
 - `level` 为 0 → `invalid`。
-- `runtime.inproc: true` 且插件不在 `/app/plugins` → `invalid`。
+- `runtime.inproc: true` → `invalid`（进程内插件由守护进程在代码中注册）。
+- `configSchema` 必须位于插件目录内且能编译；配置在启动前与每次变更时按它校验。
 - `api` 不等于当前或上一版本 → `invalid`（上一版本通过 shim 加载并警告）。
 - 未知字段 → 警告并忽略。
 
@@ -47,6 +50,21 @@
 | `x-secret: true` | 值来自秘密库（表单显示为"选择秘密"） |
 | `x-ui: { widget, group, order }` | 控制台表单提示 |
 
-## 4. 示例
+## 4. 一致性检查探针（可选）
+
+插件目录里的 `protea.conformance.json` 供 `protea dev-plugin <dir> --check` 使用：
+
+```json
+{
+  "config": {},
+  "calls": [{ "tool": "nts_add", "input": { "text": "buy milk" }, "expect": "added note 1" }],
+  "cancel": { "tool": "nts_wait", "input": { "seconds": 20 } },
+  "events": 1
+}
+```
+
+`calls` 依次调用并检查输出包含 `expect`；`cancel` 的调用在 200 ms 后被取消，应以部分结果返回；`events` 是这些调用至少应推送的事件数。
+
+## 5. 示例
 
 见 [../10-architecture/07-plugin-system.md](../10-architecture/07-plugin-system.md) §3。

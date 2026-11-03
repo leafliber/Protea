@@ -2,6 +2,7 @@ packages:
   - packages/*
   - plugins/*
   - apps/*
+  - examples/plugins/*
 
 allowBuilds:
   esbuild: true

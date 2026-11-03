@@ -1,5 +1,6 @@
 import type { ToolResultBlock, ToolUseBlock } from '@protea/protocol';
 import type { Logger } from '../observability/logger.js';
+import type { GuardDecision, ToolGuard } from '../permissions/guard.js';
 import { errorMessage } from '../util/errors.js';
 import type { ToolRegistry } from './registry.js';
 import type { ToolContext, ToolOutcome } from './types.js';
@@ -39,11 +40,18 @@ function truncate(text: string): string {
  * the order of the calls, so they can go back in a single user message.
  */
 export class ToolDispatcher {
+  private guard: ToolGuard | null = null;
+
   constructor(
     private readonly registry: ToolRegistry,
     private readonly log: Logger,
     private readonly defaultTimeoutMs = 60_000,
   ) {}
+
+  /** Permission policy, approvals and audit (docs/10-architecture/14-security-and-permissions.md). */
+  setGuard(guard: ToolGuard | null): void {
+    this.guard = guard;
+  }
 
   async runAll(uses: readonly ToolUseBlock[], ctx: DispatchContext): Promise<DispatchResult> {
     const results: OneResult[] = new Array(uses.length);
@@ -67,11 +75,50 @@ export class ToolDispatcher {
     });
     const { interrupt, allowed, ...ctx } = dctx;
     const def = this.registry.get(use.name);
-    if (!def || (allowed && !allowed.has(use.name))) return fail(`tool ${use.name} is not available`);
+    if (!def || (allowed && !allowed.has(use.name))) {
+      const why = !def ? this.registry.unavailableReason(use.name) : undefined;
+      return fail(`tool ${use.name} is not available${why ? ` (${why})` : ''}`);
+    }
     const valid = this.registry.validate(use.name, use.input);
     if (!valid.ok) return fail(`invalid input for ${use.name}: ${valid.errors.join('; ')}`);
     if (ctx.signal.aborted) return fail('not run: the turn was cancelled');
     if (interrupt?.aborted) return fail('not run: the turn was interrupted');
+
+    let decision: GuardDecision | null = null;
+    if (this.guard) {
+      const gctx = { sessionId: ctx.sessionId, batchId: ctx.batchId };
+      try {
+        decision = await this.guard.check(def, use, gctx);
+      } catch (err) {
+        this.log.error({ tool: use.name, err: errorMessage(err) }, 'permission check failed');
+        return fail(`not run: the permission check failed (${errorMessage(err)})`);
+      }
+      if (decision.action === 'block') {
+        const block: ToolResultBlock = { type: 'tool_result', tool_use_id: use.id, content: decision.text };
+        if (decision.isError) block.is_error = true;
+        return { block, endsTurn: false };
+      }
+      const r = await this.execute(def, use, ctx, interrupt);
+      try {
+        this.guard.after(def, use, gctx, decision, r.block);
+      } catch (err) {
+        this.log.error({ tool: use.name, err: errorMessage(err) }, 'audit record failed');
+      }
+      return r;
+    }
+    return this.execute(def, use, ctx, interrupt);
+  }
+
+  private async execute(
+    def: NonNullable<ReturnType<ToolRegistry['get']>>,
+    use: ToolUseBlock,
+    ctx: Omit<ToolContext, 'callId'>,
+    interrupt: AbortSignal | undefined,
+  ): Promise<OneResult> {
+    const fail = (text: string): OneResult => ({
+      block: { type: 'tool_result', tool_use_id: use.id, content: text, is_error: true },
+      endsTurn: false,
+    });
 
     const controller = new AbortController();
     const onParentAbort = (): void => controller.abort(ctx.signal.reason);

@@ -1,5 +1,5 @@
 import type { PersonaFiles } from '../persona/persona.js';
-import type { InprocPluginHost } from '../plugins/inproc.js';
+import type { EnvPromptSource } from '../plugins/host.js';
 import type { SystemSegment } from '../providers/types.js';
 import type { Logger } from '../observability/logger.js';
 import { errorMessage } from '../util/errors.js';
@@ -9,14 +9,16 @@ import { forkNotes, runtimeNotes } from './runtime-notes.js';
 
 export interface SegmentSourceOptions {
   persona: PersonaFiles;
-  plugins: InprocPluginHost;
+  plugins: { envSources(): EnvPromptSource[] };
+  /** The permission summary (P3: restrictions are stated in advance); null when nothing is restricted. */
+  permissions?: () => string | null;
   timezone: string;
   overridesDir: string;
   log: Logger;
 }
 
 /**
- * System prefix: identity → runtime → operating → owner → env:<plugin>…
+ * System prefix: identity → runtime → operating → permissions → owner → env:<plugin>…
  * Built once and rebuilt only on explicit refresh (at a turn boundary), so the
  * prefix stays byte-identical between requests.
  */
@@ -55,15 +57,16 @@ export class SystemSegments implements SegmentSource {
     if (persona.soul) segs.push({ id: 'identity', text: persona.soul });
     segs.push({ id: 'runtime', text: runtimeNotes({ timezone: this.o.timezone }) });
     if (persona.operating) segs.push({ id: 'operating', text: persona.operating });
+    const permissions = this.o.permissions?.();
+    if (permissions) segs.push({ id: 'permissions', text: permissions });
     if (persona.user) segs.push({ id: 'owner', text: persona.user });
-    const plugins = [...this.o.plugins.running()].sort((a, b) => a.id.localeCompare(b.id));
-    for (const p of plugins) {
+    for (const p of this.o.plugins.envSources()) {
       try {
         const tpl = loadEnvPromptTemplate(p.id, p.envPromptFile, {
           personaDir: persona.dir,
           overridesDir: this.o.overridesDir,
         });
-        const vars = p.envPromptVars ? p.envPromptVars() : {};
+        const vars = p.envPromptVars();
         const text = renderEnvPrompt(tpl, vars === null ? null : { timezone: this.o.timezone, ...vars });
         if (text) segs.push({ id: `env:${p.id}`, text });
       } catch (err) {

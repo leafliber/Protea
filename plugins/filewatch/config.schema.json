@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "paths": { "type": "array", "items": { "type": "string" }, "x-hot": false, "description": "Folders to watch; relative paths are inside the data directory. Default: [\"inbox\"]." },
+    "debounceMs": { "type": "integer", "minimum": 0, "default": 2000 },
+    "level": { "enum": [3, 4], "default": 3 },
+    "ignore": { "type": "array", "items": { "type": "string" }, "description": "Name patterns (* and ?) to skip. Default: dotfiles, *~, *.tmp, *.part." }
+  }
+}

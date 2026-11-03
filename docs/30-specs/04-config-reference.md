@@ -1,10 +1,10 @@
 # 规范：配置参考
 
-> 状态：Accepted（M0–M1 部分）· 更新：2026-11-03 · 设计：[../10-architecture/16-deployment.md](../10-architecture/16-deployment.md) §4
+> 状态：Accepted（M0–M2 部分）· 更新：2026-11-03 · 设计：[../10-architecture/16-deployment.md](../10-architecture/16-deployment.md) §4
 
 配置文件 `/data/config.yaml`，首次启动时写入一份带注释的模板。所有键都有默认值。层叠顺序（后者覆盖前者）：内置默认 → `config.yaml` → `PROTEA_*` 环境变量。对象逐层合并，数组与标量整体替换。
 
-## 1. 已生效的键（M0–M1）
+## 1. 已生效的键（M0–M2）
 
 ```yaml
 daemon:
@@ -67,13 +67,38 @@ providers:
   echo:
     delayMs: 0                         # 每次回复前的延迟（用于崩溃测试）
 
-plugins:
+plugins:                             # 每个插件一组：enabled（未列出的插件默认 false）+ config（按插件的 configSchema 校验）
   console: { enabled: true, config: {} }
   cron:
     enabled: true
     config:
       schedules:                       # 每项：name，cron 或 at 二选一，可选 note、level（3|4）
         - { name: morning-brief, cron: "0 7 * * *", note: "Prepare the morning brief" }
+  telegram:                            # 需要秘密 TELEGRAM_BOT_TOKEN，并在 owner.identities 加 telegram:<用户 id>
+    enabled: true
+    config: { pollTimeoutSec: 30 }     # 还有 apiBase、ownerChatId、stopWords、groupMentionsOnly
+  webhook:
+    enabled: true
+    config:
+      hooks:
+        - { name: github, verify: github, secret: "${secret:GITHUB_WEBHOOK_SECRET}" }
+  filewatch:
+    enabled: true
+    config: { paths: [inbox] }
+
+pluginHost:                            # 进程外插件的监督
+  restartBackoffMs: [1000, 2000, 4000, 8000, 16000, 32000, 60000]   # 第 n 次崩溃后的重启延迟，末项重复
+  maxCrashes: 5                        # 连续崩溃这么多次 → failed
+  stableAfterMs: 60000                 # 运行这么久后崩溃计数清零
+  drainTimeoutMs: 30000                # 停止前等待进行中的工具调用
+  initializeTimeoutMs: 20000
+  stopTimeoutMs: 5000                  # stop 之后多久发 SIGTERM（再 5 s 后 SIGKILL）
+
+permissions:
+  default: allow                       # 其他规则都不覆盖时的策略
+  tools:                               # 精确名或 glob → allow | ask | deny；优先于插件清单的 sideEffectTools
+    tg_send_chat: ask
+  approvalTtlMs: 86400000              # 审批请求与审批的有效期（24 h）
 
 observability:
   logLevel: info                       # trace | debug | info | warn | error | silent
@@ -87,7 +112,8 @@ observability:
 |---|---|
 | `scheduler.retention`（已结束 Fork 转录与事件的保留期） | M5 |
 | `budget.enforce`（耗尽时降级/存储） | M6 |
-| `permissions.*` | M2 |
+| `permissions.conditions`（按批等级/参数/时间窗）、`permissions.egress` | M6 |
+| `pluginHost.resources`（插件内存/CPU 上限） | M6 |
 | `mcp.servers.*` | M3 |
 | `skills.*` | M3 |
 | `context.*`（工具搜索阈值、交接比例）、`memory.*`、`persona.dir` | M4 |
@@ -99,6 +125,16 @@ observability:
 
 秘密的解析顺序：`PROTEA_SECRET_<NAME>` → `<NAME>` → `/data/secrets/<NAME>` 文件。
 
-## 4. 热更新
+## 4. 热更新（M2）
 
-M0 在启动时读取配置，变更需要重启。文件监视与热更新（热项立即生效、`x-hot: false` 项重建组件）在 M2 随插件热插拔一起实现。
+守护进程监视 `config.yaml`（300 ms 去抖）。文件改动后重新加载并校验整份配置；无效则记错误并保留运行中的配置。
+
+| 部分 | 生效方式 |
+|---|---|
+| `owner` | 立即（身份映射） |
+| `permissions` | 立即；系统前缀的权限摘要在下一个回合边界更新 |
+| `plugins.<id>.enabled` | 立即启用/禁用 |
+| `plugins.<id>.config` | 热键：`config/changed`；`x-hot: false` 的键：重载该插件；进程内插件：重载 |
+| 其他部分 | 需要重启，日志会列出改动了哪些部分 |
+
+通过 API 或 CLI 做的修改（启用、禁用、卸载、`PATCH /api/plugins/:id/config`）会写回 `config.yaml`。写入用 YAML 文档模型，保留注释与格式，并以"临时文件 + rename"原子替换。环境变量覆盖的值不会被文件改动覆盖。

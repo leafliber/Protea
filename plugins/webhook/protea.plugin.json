@@ -1,0 +1,12 @@
+{
+  "id": "webhook",
+  "kind": "source",
+  "api": 1,
+  "version": "0.1.0",
+  "displayName": "Webhooks",
+  "description": "Inbound HTTP webhooks under /hooks/<name>, verified by GitHub/HMAC signature or token.",
+  "runtime": { "exec": "node", "args": ["dist/main.js"], "dev": { "args": ["src/main.ts"] } },
+  "level": 2,
+  "configSchema": "./config.schema.json",
+  "envPrompt": "./ENV_PROMPT.md"
+}

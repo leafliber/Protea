@@ -13,8 +13,8 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "dev": "PROTEA_DATA_DIR=.dev-data tsx apps/cli/src/main.ts serve",
-    "protea": "tsx apps/cli/src/main.ts",
+    "dev": "PROTEA_DATA_DIR=.dev-data PROTEA_DEV=1 node --conditions=source --import tsx apps/cli/src/main.ts serve",
+    "protea": "node --conditions=source --import tsx apps/cli/src/main.ts",
     "clean": "rm -rf packages/*/dist plugins/*/dist apps/*/dist"
   },
   "devDependencies": {
@@ -22,6 +22,7 @@
     "fast-check": "^4.10.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.5"
+    "vitest": "^5.0.5",
+    "esbuild": "^0.28.2"
   }
 }

@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { isoInZone, type InprocPlugin, type PluginContext, type PushResult, type ToolSpec } from '@protea/core';
-import type { Level, Trigger } from '@protea/protocol';
+import type { ApprovalRequestParams, Level, Trigger } from '@protea/protocol';
 
 export interface ConsoleMessageOptions {
   senderKey: string;
@@ -65,5 +65,16 @@ export class ConsolePlugin implements InprocPlugin {
 
   envPromptVars(): Record<string, unknown> {
     return {};
+  }
+
+  /** Approval requests are shown to the operator; they decide with `protea approvals approve|deny <id>`. */
+  onApprovalRequest(req: ApprovalRequestParams): { delivered: boolean } {
+    const ctx = this.ctx;
+    if (!ctx) return { delivered: false };
+    ctx.emitOutput({
+      channel: 'approvals',
+      text: `Approval ${req.id} requested: ${req.summary}${req.reason ? ` (${req.reason})` : ''}. Decide with: protea approvals approve ${req.id} | protea approvals deny ${req.id} (expires ${req.expiresAt}).`,
+    });
+    return { delivered: true };
   }
 }

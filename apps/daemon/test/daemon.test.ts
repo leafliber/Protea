@@ -68,13 +68,20 @@ describe('daemon', () => {
 
     const status = (await (await fetch(`${d.url}/api/status`, { headers: auth(d) })).json()) as Record<string, unknown>;
     expect(status).toMatchObject({ phase: 'idle', provider: { id: 'scripted', ready: true } });
-    expect((status['plugins'] as Array<{ id: string }>).map((p) => p.id)).toEqual(['console', 'cron']);
+    // In-process console and cron run; the out-of-process built-ins are discovered but off by default.
+    expect((status['plugins'] as Array<{ id: string; state: string }>).map((p) => `${p.id}:${p.state}`)).toEqual([
+      'console:running',
+      'cron:running',
+      'filewatch:loaded',
+      'telegram:loaded',
+      'webhook:loaded',
+    ]);
 
     // The system prefix: persona, runtime notes, then plugin environment prompts; kernel and plugin tools.
     const req = provider.calls[0];
     expect(req?.system.map((s) => s.id)).toEqual(['identity', 'runtime', 'operating', 'owner', 'env:console', 'env:cron']);
     expect(req?.tools.map((t) => t.name)).toEqual([
-      'events_promote', 'events_query', 'fork_cancel', 'fork_spawn', 'fork_status', 'idle', 'self_status',
+      'approval_request', 'events_promote', 'events_query', 'fork_cancel', 'fork_spawn', 'fork_status', 'idle', 'self_status',
       'con_send', 'schedule_create', 'schedule_delete', 'schedule_list', 'sleep_until',
     ]);
     expect(status['forks']).toEqual([]);

@@ -1,5 +1,6 @@
 /** Control API request/response shapes (docs/30-specs/05-control-api.md). */
 import type { EventEnvelope, Level, TerminalOutcome, Trigger } from './events.js';
+import type { PluginState } from './plugin.js';
 import type { BatchEndReason, BatchReason, CancelKind, ForkState, ModelRole, RunPhase } from './session.js';
 
 export interface PushEventRequest {
@@ -31,8 +32,28 @@ export interface UsageTotals {
 export interface PluginStatus {
   id: string;
   kind: string;
-  state: 'running' | 'stopped' | 'failed';
+  state: PluginState;
+  /** Operator intent (`plugins.<id>.enabled`); a failed start does not change it. */
+  enabled: boolean;
+  /** `inproc` (built into the daemon), `builtin` (shipped out-of-process) or `data` (installed into the data volume). */
+  origin: 'inproc' | 'builtin' | 'data';
+  version?: string;
+  tools: string[];
+  pid?: number;
+  restarts?: number;
   error?: string;
+}
+
+export interface ApprovalInfo {
+  id: string;
+  tool: string;
+  state: 'pending' | 'approved' | 'denied' | 'expired' | 'used';
+  summary: string;
+  reason?: string;
+  createdAt: string;
+  expiresAt: string;
+  decidedAt?: string;
+  decidedBy?: string;
 }
 
 export interface StatusResponse {
@@ -105,6 +126,8 @@ export type StreamMessage =
   | { topic: 'batch.ended'; data: { batchId: string; endReason: BatchEndReason; rounds: number } }
   | { topic: 'output'; data: { plugin: string; channel?: string; text: string; at: string } }
   | { topic: 'scheduler'; data: SchedulerAction }
-  | { topic: 'fork'; data: ForkInfo };
+  | { topic: 'fork'; data: ForkInfo }
+  | { topic: 'plugin'; data: PluginStatus }
+  | { topic: 'approval'; data: ApprovalInfo };
 
 export type StreamTopic = StreamMessage['topic'];

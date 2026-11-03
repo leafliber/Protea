@@ -1,4 +1,4 @@
-import type { EventEnvelope, ForkInfo, StatusResponse } from '@protea/protocol';
+import type { ApprovalInfo, EventEnvelope, ForkInfo, PluginStatus, StatusResponse } from '@protea/protocol';
 
 const tty = process.stdout.isTTY;
 const paint = (code: string) => (s: string): string => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
@@ -27,6 +27,20 @@ export function formatFork(f: ForkInfo): string {
     f.state === 'completed' ? green(f.state) : f.state === 'failed' ? red(f.state) : f.state === 'running' ? cyan(f.state) : yellow(f.state);
   const why = f.pauseReason ? dim(` (${f.pauseReason})`) : f.error ? red(` ${oneLine(f.error, 80)}`) : '';
   return `${f.id} ${state}${why} L${f.level} ${f.model} ${dim(`${f.rounds} rounds`)}  ${oneLine(f.goal, 80)}`;
+}
+
+export function formatPlugin(p: PluginStatus): string {
+  const state =
+    p.state === 'running' ? green(p.state) : p.state === 'failed' || p.state === 'invalid' || p.state === 'crashed' ? red(p.state) : yellow(p.state);
+  const meta = [p.origin, p.version ? `v${p.version}` : '', p.enabled ? 'enabled' : 'disabled', p.tools.length ? `${p.tools.length} tools` : '', p.pid ? `pid ${p.pid}` : '', p.restarts ? `${p.restarts} restarts` : '']
+    .filter(Boolean)
+    .join(' · ');
+  return `${bold(p.id.padEnd(12))} ${state.padEnd(10)} ${dim(meta)}${p.error ? `\n${' '.repeat(13)}${red(oneLine(p.error, 160))}` : ''}`;
+}
+
+export function formatApproval(a: ApprovalInfo): string {
+  const state = a.state === 'pending' ? yellow(a.state) : a.state === 'approved' || a.state === 'used' ? green(a.state) : dim(a.state);
+  return `${bold(a.id.padEnd(5))} ${state.padEnd(9)} ${oneLine(a.summary, 100)}${a.reason ? dim(` — ${oneLine(a.reason, 60)}`) : ''}${dim(`  (expires ${a.expiresAt}${a.decidedBy ? `, by ${a.decidedBy}` : ''})`)}`;
 }
 
 export function formatStatus(s: StatusResponse): string {

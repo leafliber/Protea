@@ -5,13 +5,16 @@ import {
   TRIGGERS,
   isLevel,
   isTrigger,
+  type ApprovalInfo,
   type EventEnvelope,
   type ForkInfo,
+  type PluginStatus,
   type PushEventResponse,
   type StatusResponse,
 } from '@protea/protocol';
 import { api, defaultDataDir, resolveClient, stream, type ClientOptions } from './client.js';
-import { bold, dim, formatEvent, formatFork, formatStatus, green, red, yellow } from './format.js';
+import { devPlugin } from './dev-plugin.js';
+import { bold, dim, formatApproval, formatEvent, formatFork, formatPlugin, formatStatus, green, red, yellow } from './format.js';
 
 const HELP = `protea — Protea personal assistant runtime
 
@@ -26,6 +29,15 @@ Usage:
   protea forks [ls]                             list unfinished and recently ended forks
   protea forks show <id>                        show a fork and its transcript
   protea forks cancel <id>                      cancel a fork
+  protea plugins [ls]                           list plugins and their state
+  protea plugins install <dir> [--disabled]     install a plugin directory into the data volume
+  protea plugins enable|disable|reload|restart <id>
+  protea plugins config <id> <json>             replace a plugin's configuration (validated, saved)
+  protea plugins uninstall <id> [--keep-data]   remove a disabled data-volume plugin
+  protea approvals [ls] [--state S]             list approval requests
+  protea approvals approve|deny <id>            decide an approval request
+  protea dev-plugin <dir> [--check] [--config JSON] [--owner KEY]
+                                                run a plugin under a minimal host (or check its protocol conformance)
 
 Common options:
   --url URL        control API (default $PROTEA_URL or http://127.0.0.1:7788)
@@ -47,6 +59,11 @@ const { values, positionals } = parseArgs({
     limit: { type: 'string' },
     timeout: { type: 'string' },
     'no-wait': { type: 'boolean' },
+    disabled: { type: 'boolean' },
+    'keep-data': { type: 'boolean' },
+    check: { type: 'boolean' },
+    config: { type: 'string' },
+    owner: { type: 'string' },
     help: { type: 'boolean', short: 'h' },
     version: { type: 'boolean', short: 'v' },
   },
@@ -234,6 +251,56 @@ async function forks(sub: string | undefined, id: string | undefined): Promise<n
   throw new Error(`unknown forks command: ${sub}`);
 }
 
+async function plugins(sub: string | undefined, args: string[]): Promise<number> {
+  const o = client();
+  const id = args[0];
+  if (sub === undefined || sub === 'ls') {
+    const { plugins: all } = await api<{ plugins: PluginStatus[] }>(o, 'GET', '/api/plugins');
+    for (const p of all) console.log(formatPlugin(p));
+    return 0;
+  }
+  if (!id) throw new Error(`plugins ${sub} needs ${sub === 'install' ? 'a directory' : 'a plugin id'}`);
+  switch (sub) {
+    case 'install': {
+      const { resolve } = await import('node:path');
+      console.log(formatPlugin(await api<PluginStatus>(o, 'POST', '/api/plugins', { path: resolve(id), enable: !values.disabled })));
+      return 0;
+    }
+    case 'enable':
+    case 'disable':
+    case 'reload':
+    case 'restart':
+      console.log(formatPlugin(await api<PluginStatus>(o, 'POST', `/api/plugins/${encodeURIComponent(id)}/${sub}`)));
+      return 0;
+    case 'config': {
+      if (!args[1]) throw new Error('plugins config needs a JSON object');
+      console.log(formatPlugin(await api<PluginStatus>(o, 'PATCH', `/api/plugins/${encodeURIComponent(id)}/config`, { config: JSON.parse(args[1]) as unknown })));
+      return 0;
+    }
+    case 'uninstall': {
+      const r = await api<{ replacedBy: PluginStatus | null }>(o, 'DELETE', `/api/plugins/${encodeURIComponent(id)}${values['keep-data'] ? '?keepData=true' : ''}`);
+      console.log(`uninstalled ${id}${r.replacedBy ? ` (the built-in ${id} is back: ${r.replacedBy.state})` : ''}`);
+      return 0;
+    }
+  }
+  throw new Error(`unknown plugins command: ${sub}`);
+}
+
+async function approvals(sub: string | undefined, id: string | undefined): Promise<number> {
+  const o = client();
+  if (sub === undefined || sub === 'ls') {
+    const q = values.state ? `?state=${encodeURIComponent(values.state)}` : '';
+    const { approvals: all } = await api<{ approvals: ApprovalInfo[] }>(o, 'GET', `/api/approvals${q}`);
+    if (all.length === 0) console.log(dim('no approval requests'));
+    for (const a of all) console.log(formatApproval(a));
+    return 0;
+  }
+  if (sub !== 'approve' && sub !== 'deny') throw new Error(`unknown approvals command: ${sub}`);
+  if (!id) throw new Error(`approvals ${sub} needs an id`);
+  console.log(formatApproval(await api<ApprovalInfo>(o, 'POST', `/api/approvals/${encodeURIComponent(id)}/decide`, { decision: sub })));
+  return 0;
+}
+
 async function main(): Promise<number> {
   const [cmd, sub, ...rest] = positionals;
   if (values.version) {
@@ -259,6 +326,17 @@ async function main(): Promise<number> {
       break;
     case 'forks':
       return forks(sub, rest[0]);
+    case 'plugins':
+      return plugins(sub, rest);
+    case 'approvals':
+      return approvals(sub, rest[0]);
+    case 'dev-plugin':
+      if (!sub) break;
+      return devPlugin(sub, {
+        check: !!values.check,
+        ...(values.config !== undefined ? { config: JSON.parse(values.config) as Record<string, unknown> } : {}),
+        owners: values.owner ? values.owner.split(',') : [],
+      });
   }
   console.error(`unknown command: ${positionals.join(' ')}\n\n${HELP}`);
   return 1;

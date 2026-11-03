@@ -1,6 +1,8 @@
 # 插件系统
 
-> 状态：Draft · 更新：2026-11-03 · 决策：[ADR-0005](../20-decisions/ADR-0005-plugin-isolation-out-of-process.md) · 规范：[../30-specs/02-plugin-manifest.md](../30-specs/02-plugin-manifest.md) · [../30-specs/03-plugin-protocol.md](../30-specs/03-plugin-protocol.md)
+> 状态：Accepted（M2）· 更新：2026-11-03 · 决策：[ADR-0005](../20-decisions/ADR-0005-plugin-isolation-out-of-process.md) · 规范：[../30-specs/02-plugin-manifest.md](../30-specs/02-plugin-manifest.md) · [../30-specs/03-plugin-protocol.md](../30-specs/03-plugin-protocol.md)
+
+> **实现状态（M2）**：`source` / `connector` / `tool` 三类进程外插件已实现（`packages/core/src/plugins/`：`manifest.ts` 清单与发现，`process.ts` 子进程与协议，`host.ts` 生命周期、监督与事件网关，`conformance.ts` 一致性检查）；`mcp`、`skill` 在 M3，`provider` 插件在 M7。进程内插件只有 `console` 与 `cron`，由守护进程在代码里注册。
 
 ## 1. 插件种类
 
@@ -32,11 +34,13 @@
 
 发现方式：
 
-1. **内置**：镜像内 `/app/plugins/*`（随版本发布）。
-2. **数据卷**：`/data/plugins/*`，文件监视（chokidar）检测新增/删除/清单变化。
-3. **控制台安装**：`POST /api/plugins` 传 Git URL / tarball / 本地路径，Core 下载到 `/data/plugins/<id>` 后走 2。
+1. **内置**：镜像内 `/app/plugins/*`（随版本发布；开发时是仓库的 `plugins/`，可用 `PROTEA_ASSETS_DIR` 指定）。只扫描含 `protea.plugin.json` 的目录，因此进程内的 `console`、`cron` 目录不在其中。
+2. **数据卷**：`/data/plugins/*`，用 `fs.watch`（递归）监视，500 ms 去抖后重新扫描：新增目录 → `loaded`（配置里启用了就启动）；清单内容变化 → 重载；目录删除 → 停止并移除。以 `.` 开头的目录被跳过。
+3. **安装**：`POST /api/plugins {path}` / `protea plugins install <dir>`（M2 只支持本地目录；Git URL 与 tarball 在 M5）。先复制到 `/data/plugins/.install-…` 再原子改名，监视器不会看到半个插件。默认安装后即启用。
 
-同 ID 冲突：数据卷优先于内置（允许覆盖内置实现）。
+同 ID 冲突：数据卷优先于内置（允许覆盖内置实现）；卸载数据卷版本后内置版本重新出现。数据卷插件必须**自包含**：打包成单文件，或自带 `node_modules`。内置插件用 `scripts/bundle-plugin.mjs`（esbuild）打包为 `dist/main.js`。
+
+**开发模式**（`PROTEA_DEV=1`，或守护进程本身从 TypeScript 源码运行）：内置插件改用清单的 `runtime.dev`（如 `src/main.ts`），`node` 插件经 tsx 加载器并以 `--conditions=source` 解析工作区包的源码，无需先构建。数据卷插件始终按原样运行。
 
 ## 3. 清单（protea.plugin.json）
 
@@ -82,9 +86,12 @@ stateDiagram-v2
   failed --> starting: 操作员手动重启
 ```
 
-- **enabled 语义**：`plugins.<id>.enabled` 是操作员意图；启动失败不改它（Cortico 规则），控制台显示原因。
-- **draining**：不再接受新工具调用；已在执行的工具最多等 `drainTimeoutMs`（默认 30 s）；事件源应停止拉取；Core 保留其未投递事件。
-- **crashed 时的事件**：已持久化的事件不受影响；插件重启后收到 `onEventsSettled` 的补发。
+- **enabled 语义**：`plugins.<id>.enabled` 是操作员意图；启动失败不改它（Cortico 规则），控制台显示原因。没有出现在配置里的插件（内置的 `telegram`、`webhook`、`filewatch` 也一样）默认关闭。通过 API/CLI 启用、禁用、卸载时，宿主同时更新内存中的配置并写回 `config.yaml`。
+- **启动失败**：清单无效 → `invalid`；配置不符合 `configSchema`、声明的秘密不存在、`initialize` 超时（20 s）、工具名冲突 → `failed`（附原因）。
+- **崩溃**：进程意外退出，或连续 3 次心跳超时（宿主随即 SIGKILL）→ `crashed`，工具立即下线，按 `pluginHost.restartBackoffMs` 退避重启；监督中的重启再次启动失败也算一次崩溃。运行满 `stableAfterMs`（默认 60 s）后崩溃计数清零；连续 `maxCrashes`（默认 5）次 → `failed`。崩溃记 L4 store 的 `plugin.crashed`，进入 `failed` 记 L2 flush 的 `plugin.failed`（主会话会知道）。操作员 `restart` 清零计数后重新启动。
+- **draining**：工具立即从工具表移除（之后的调用回执 `tool <name> is not available (plugin <id> is disabled)`）；已在执行的工具最多等 `drainTimeoutMs`（默认 30 s）；然后发 `stop`，`stopTimeoutMs`（默认 5 s）内不退出则 SIGTERM，再 5 s 后 SIGKILL。事件源应停止拉取；Core 保留其未投递事件。
+- **crashed 时的事件**：已持久化的事件不受影响；插件不在运行期间结算的事件，重启后通过 `events/settled` 补发（内存队列，最多 1000 条）。
+- 同一插件的生命周期操作串行执行（启用、重载、配置变更、崩溃处理不会交错）。
 - 生命周期变化广播 `plugin.*` 事件；人格可订阅（例如在主会话注入"Telegram 已离线"的 `internal` 事件——由 Core 发出，内容只陈述状态）。
 
 ## 5. 隔离
@@ -131,19 +138,31 @@ stateDiagram-v2
 
 | 操作 | 语义 | 需要重启进程？ |
 |---|---|---|
-| 安装 | 下载到 `/data/plugins/<id>`，校验清单，`loaded` | 否 |
+| 安装 | 复制到 `/data/plugins/<id>`，校验清单，`loaded`；默认随即启用 | 否 |
 | 启用 | `enabled=true` → `starting` | 否 |
 | 禁用 | `draining → stopped`；未投递事件保留 | 否 |
 | 重载 | `draining → stopped → starting`（重新读取代码与清单） | 否 |
-| 配置变更 | 热项：`config/changed`；非热项（`x-hot:false`）：自动重载该插件 | 否 |
-| 卸载 | 必须先禁用；删除目录、配置组、`plugin-data`（可选保留） | 否 |
+| 重启 | 从 `failed` / `crashed` 清零崩溃计数后启动 | 否 |
+| 配置变更 | 先按 `configSchema` 校验（失败则拒绝、保持原配置）；热项：`config/changed {patch, full}` 并刷新环境提示变量；非热项（`x-hot:false`）：自动重载该插件；进程内插件一律重载 | 否 |
+| 卸载 | 必须先禁用；删除目录、配置组、`plugin-data`（`keepData` 可保留） | 否 |
 | 升级内核 | 换镜像 | 是（整个容器） |
+
+对应接口：`POST /api/plugins`、`POST /api/plugins/:id/enable|disable|reload|restart`、`PATCH /api/plugins/:id/config`、`DELETE /api/plugins/:id`；CLI `protea plugins install|enable|disable|reload|restart|config|uninstall`。
+
+**秘密与环境**：子进程只拿到最小环境（`PATH`、`HOME`、`LANG`、`TZ`、`PROTEA_PLUGIN_ID`、`PROTEA_PLUGIN_DATA_DIR`、清单 `runtime.env`）加上清单声明的秘密；守护进程自己的环境（例如 `ANTHROPIC_API_KEY`）不会传给插件。插件配置里的 `${secret:NAME}` 只在发给插件的那一刻解析。
 
 **工具表与环境提示的变化**在下一个回合边界生效（[06-context-assembly.md](06-context-assembly.md) §4）。禁用一个插件时，它的工具从表中移除；若模型随后仍调用了旧工具名，回执为 `failed: tool not available (plugin disabled)`。
 
 ## 8. 插件 SDK
 
-`@protea/plugin-sdk`（TypeScript）提供：类型定义、JSON-RPC stdio 传输、`definePlugin()` 辅助、本地开发的 `protea dev-plugin ./my-plugin`（起一个最小宿主，把事件打印到终端并提供桩工具）。Python 版 `protea-plugin` 提供同样的协议实现（薄）。任何语言只要实现协议即可（[../30-specs/03-plugin-protocol.md](../30-specs/03-plugin-protocol.md)）。
+`@protea/plugin-sdk`（TypeScript，`packages/plugin-sdk`）提供：类型定义、JSON-RPC stdio 传输（与 Core 共用 `@protea/protocol` 的 `RpcPeer`）、`definePlugin()` / `runPlugin()`，以及测试用的 `@protea/plugin-sdk/testing` 中的 `FakeHost`（内存中的宿主，记录事件并像门禁一样标出越权）。Python 版 `protea_plugin`（`sdks/python`，Python 3.9+，无第三方依赖）提供同样的协议实现：`Plugin` 基类、`Tool`、`run()`；处理器在线程池里运行，可以同步调用宿主。宿主把这个 SDK 放进 Python 插件的 `PYTHONPATH`。
+
+开发工具：
+- `protea dev-plugin <dir>`：起一个最小宿主，打印插件推送的事件与日志，交互式执行 `tools`、`call <tool> <json>`、`config <json>`、`settle`、`env`、`health`。
+- `protea dev-plugin <dir> --check`：运行 14 项协议一致性检查（握手、工具声明、健康检查、错误码、事件合法性、取消、stdout 只含协议、自行退出等）；插件目录里可选的 `protea.conformance.json` 提供要试调的工具与期望输出。
+- 示例：`examples/plugins/py-notes`（Python）与 `examples/plugins/ts-notes`（TypeScript），行为相同。
+
+任何语言只要实现协议即可（[../30-specs/03-plugin-protocol.md](../30-specs/03-plugin-protocol.md)）。
 
 ## 9. 与 Cortico World 的兼容
 

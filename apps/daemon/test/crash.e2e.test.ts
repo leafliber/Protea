@@ -23,7 +23,7 @@ function freePort(): Promise<number> {
 }
 
 function serve(dataDir: string, port: number, echoDelayMs: number): ChildProcess {
-  const child = spawn(process.execPath, ['--import', 'tsx', 'apps/cli/src/main.ts', 'serve'], {
+  const child = spawn(process.execPath, ['--conditions=source', '--import', 'tsx', 'apps/cli/src/main.ts', 'serve'], {
     cwd: ROOT,
     env: {
       ...process.env,

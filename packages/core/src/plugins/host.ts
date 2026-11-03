@@ -1,0 +1,991 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import {
+  PLUGIN_TO_HOST,
+  RPC_ERRORS,
+  RpcError,
+  type ApprovalDecideParams,
+  type ApprovalInfo,
+  type EventInput,
+  type EventState,
+  type HttpRequestParams,
+  type HttpResponse,
+  type Level,
+  type LogParams,
+  type PluginCapabilities,
+  type PluginState,
+  type PluginStatus,
+  type RpcHandler,
+  type SettledParams,
+  type TerminalOutcome,
+  type ToolDecl,
+} from '@protea/protocol';
+import type { Bus } from '../bus.js';
+import type { PluginSettings } from '../config/types.js';
+import type { SecretStore } from '../config/secrets.js';
+import { kvNamespace, type KvRepo } from '../db/repos.js';
+import { gateEvent, type SourceCaps } from '../events/gate.js';
+import type { OwnerRegistry } from '../events/owner.js';
+import type { EventStore } from '../events/store.js';
+import type { Logger } from '../observability/logger.js';
+import type { ApprovalService } from '../permissions/approvals.js';
+import type { ToolRegistry } from '../tools/registry.js';
+import type { ToolDef, ToolSpec } from '../tools/types.js';
+import { sleep } from '../util/abort.js';
+import { errorMessage } from '../util/errors.js';
+import type { Clock } from '../util/time.js';
+import type { InprocPlugin, PluginContext, PushResult } from './inproc.js';
+import { allowedTriggers, discoverPlugins, loadManifest, type LoadedManifest, type PluginOrigin } from './manifest.js';
+import { ProcessPlugin } from './process.js';
+
+export const CORE_SOURCE = 'core';
+
+export interface PluginHostSettings {
+  /** Delay before restart number n after a crash (the last value repeats). */
+  restartBackoffMs: number[];
+  /** Consecutive crashes before a plugin is marked failed. */
+  maxCrashes: number;
+  /** A run at least this long resets the consecutive-crash count. */
+  stableAfterMs: number;
+  /** How long a stopping plugin may finish running tool calls. */
+  drainTimeoutMs: number;
+  initializeTimeoutMs: number;
+  /** After `stop`, how long before SIGTERM. */
+  stopTimeoutMs: number;
+}
+
+export const DEFAULT_PLUGIN_HOST_SETTINGS: PluginHostSettings = {
+  restartBackoffMs: [1000, 2000, 4000, 8000, 16000, 32000, 60000],
+  maxCrashes: 5,
+  stableAfterMs: 60_000,
+  drainTimeoutMs: 30_000,
+  initializeTimeoutMs: 20_000,
+  stopTimeoutMs: 5_000,
+};
+
+export interface PluginHostOptions {
+  store: EventStore;
+  bus: Bus;
+  owner: OwnerRegistry;
+  kv: KvRepo;
+  tools: ToolRegistry;
+  log: Logger;
+  clock: Clock;
+  dataDir: string;
+  timezone: string;
+  language?: string;
+  settings?: Partial<PluginHostSettings>;
+  secrets?: SecretStore;
+  mainModel?: () => string;
+  /** Directories scanned for out-of-process plugins; later roots override earlier ones. */
+  roots?: Array<{ dir: string; origin: LoadedManifest['origin'] }>;
+  /** Development mode: run sources (`runtime.dev`) and load TypeScript through this Node loader. */
+  dev?: { loader: string };
+  /** Prepended to PYTHONPATH of Python plugins (the bundled `protea_plugin` SDK). */
+  pythonPath?: string;
+  /** Operator intent changed through the host (enable/disable/install): persist it. */
+  onEnabledChanged?: (id: string, enabled: boolean) => void;
+  /** A data-volume plugin was uninstalled: drop its configuration group. */
+  onUninstalled?: (id: string) => void;
+}
+
+interface Entry {
+  id: string;
+  kind: string;
+  origin: PluginOrigin;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  state: PluginState;
+  error?: string;
+  inproc?: InprocPlugin;
+  loaded?: LoadedManifest;
+  proc: ProcessPlugin | null;
+  capabilities: PluginCapabilities;
+  envVars: Record<string, unknown> | null;
+  crashes: number;
+  restarts: number;
+  startedAt: number;
+  restartTimer: ReturnType<typeof setTimeout> | null;
+  pendingSettled: SettledParams['events'];
+  /** Lifecycle operations on one plugin run one at a time. */
+  op: Promise<void>;
+}
+
+/** Where a plugin's environment prompt comes from (consumed by SystemSegments). */
+export interface EnvPromptSource {
+  id: string;
+  envPromptFile?: string;
+  envPromptVars(): Record<string, unknown> | null;
+}
+
+const SECRET_REF = /^\$\{secret:([A-Z][A-Z0-9_]{0,63})\}$/;
+const MAX_PENDING_SETTLED = 1000;
+
+function shallowPatch(prev: Record<string, unknown>, next: Record<string, unknown>): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+  for (const k of new Set([...Object.keys(prev), ...Object.keys(next)])) {
+    if (JSON.stringify(prev[k]) !== JSON.stringify(next[k])) patch[k] = next[k] ?? null;
+  }
+  return patch;
+}
+
+/**
+ * Runs every plugin — built-in in-process ones and out-of-process ones speaking the
+ * stdio protocol — and is the single entry point for events into the store
+ * (docs/10-architecture/07-plugin-system.md). Handles discovery, the lifecycle state
+ * machine, supervision with backoff restarts, draining, and hot operations.
+ */
+export class PluginHost {
+  private readonly entries = new Map<string, Entry>();
+  private readonly settings: PluginHostSettings;
+  private approvals: ApprovalService | null = null;
+  private started = false;
+  private stopping = false;
+
+  constructor(private readonly o: PluginHostOptions) {
+    this.settings = { ...DEFAULT_PLUGIN_HOST_SETTINGS, ...o.settings };
+    o.bus.on('event.settled', (s) => {
+      const bySource = new Map<string, Array<{ cursor: number }>>();
+      for (const e of s.events) bySource.set(e.source, [...(bySource.get(e.source) ?? []), { cursor: e.cursor }]);
+      for (const [source, events] of bySource) this.deliverSettled(source, events, s.outcome);
+    });
+    o.bus.on('session.phase', (p) => {
+      if (p.sessionId !== 'main') return;
+      for (const e of this.entries.values()) {
+        if (e.state === 'running' && e.capabilities.runPhase) e.proc?.runPhase({ phase: p.phase, ...(p.batchId !== undefined ? { batchId: p.batchId } : {}) });
+      }
+    });
+  }
+
+  attachApprovals(approvals: ApprovalService): void {
+    this.approvals = approvals;
+  }
+
+  // —— Registration and discovery ——
+
+  /** A plugin compiled into the daemon (console, cron). */
+  register(plugin: InprocPlugin, config: Record<string, unknown> = {}, enabled = true): void {
+    if (this.entries.has(plugin.id) || plugin.id === CORE_SOURCE) throw new Error(`plugin id "${plugin.id}" is taken`);
+    this.entries.set(plugin.id, this.newEntry(plugin.id, plugin.kind, 'inproc', { enabled, config }, { inproc: plugin }));
+  }
+
+  private newEntry(id: string, kind: string, origin: PluginOrigin, s: PluginSettings, extra: Partial<Entry>): Entry {
+    return {
+      id,
+      kind,
+      origin,
+      enabled: s.enabled,
+      config: s.config ?? {},
+      state: 'loaded',
+      proc: null,
+      capabilities: {},
+      envVars: null,
+      crashes: 0,
+      restarts: 0,
+      startedAt: 0,
+      restartTimer: null,
+      pendingSettled: [],
+      op: Promise.resolve(),
+      ...extra,
+    };
+  }
+
+  /**
+   * Bring the out-of-process entries in line with what is on disk: add new plugins,
+   * reload changed ones, remove deleted ones. `settingsOf` gives the configured
+   * enabled/config for an id. Safe to call repeatedly (the file watcher does).
+   */
+  async rescan(settingsOf: (id: string) => PluginSettings | undefined): Promise<void> {
+    const found = discoverPlugins(this.o.roots ?? []);
+    const ops: Promise<void>[] = [];
+    for (const [id, loaded] of found) {
+      const e = this.entries.get(id);
+      if (e?.inproc) {
+        this.o.log.warn({ plugin: id, dir: loaded.dir }, 'a plugin directory uses the id of a built-in in-process plugin; ignored');
+        continue;
+      }
+      for (const w of loaded.warnings) this.o.log.warn({ plugin: id }, `manifest: ${w}`);
+      if (!e) {
+        const s = settingsOf(id) ?? { enabled: false, config: {} };
+        const entry = this.newEntry(id, loaded.manifest?.kind ?? 'unknown', loaded.origin, s, { loaded });
+        this.setInvalid(entry);
+        this.entries.set(id, entry);
+        this.emit(entry);
+        this.o.log.info({ plugin: id, origin: loaded.origin, state: entry.state }, 'plugin discovered');
+        if (this.started && entry.enabled && entry.state === 'loaded') ops.push(this.start(id));
+        continue;
+      }
+      if (e.loaded?.hash === loaded.hash && e.loaded.dir === loaded.dir) continue;
+      ops.push(
+        this.serialize(e, async () => {
+          const wasRunning = e.state === 'running' || e.state === 'starting';
+          if (wasRunning) await this.stopEntry(e, 'reloading');
+          e.loaded = loaded;
+          e.origin = loaded.origin;
+          e.kind = loaded.manifest?.kind ?? e.kind;
+          e.state = 'loaded';
+          delete e.error;
+          this.setInvalid(e);
+          this.o.log.info({ plugin: id }, 'plugin manifest changed');
+          if ((wasRunning || this.started) && e.enabled && e.state === 'loaded') await this.startEntry(e, false);
+          else this.emit(e);
+        }),
+      );
+    }
+    for (const e of [...this.entries.values()]) {
+      if (e.inproc || found.has(e.id)) continue;
+      ops.push(
+        this.serialize(e, async () => {
+          await this.stopEntry(e, 'removed');
+          this.entries.delete(e.id);
+          this.o.log.info({ plugin: e.id }, 'plugin directory removed');
+          this.o.bus.emit('plugin.changed', { ...this.statusOf(e), state: 'stopped' });
+        }),
+      );
+    }
+    await Promise.all(ops);
+  }
+
+  private setInvalid(e: Entry): void {
+    if (e.loaded && e.loaded.errors.length > 0) {
+      e.state = 'invalid';
+      e.error = e.loaded.errors.join('; ');
+    }
+  }
+
+  get(id: string): PluginStatus | undefined {
+    const e = this.entries.get(id);
+    return e ? this.statusOf(e) : undefined;
+  }
+
+  status(): PluginStatus[] {
+    return [...this.entries.values()].sort((a, b) => a.id.localeCompare(b.id)).map((e) => this.statusOf(e));
+  }
+
+  private statusOf(e: Entry): PluginStatus {
+    const version = e.loaded?.manifest?.version;
+    const pid = e.proc?.pid;
+    return {
+      id: e.id,
+      kind: e.kind,
+      state: e.state,
+      enabled: e.enabled,
+      origin: e.origin,
+      tools: this.o.tools.namesOf(e.id),
+      ...(version !== undefined ? { version } : {}),
+      ...(pid !== undefined ? { pid } : {}),
+      ...(e.restarts > 0 ? { restarts: e.restarts } : {}),
+      ...(e.error !== undefined ? { error: e.error } : {}),
+    };
+  }
+
+  /** Running plugins' environment prompt sources, sorted by id. */
+  envSources(): EnvPromptSource[] {
+    const out: EnvPromptSource[] = [];
+    for (const e of [...this.entries.values()].sort((a, b) => a.id.localeCompare(b.id))) {
+      if (e.state !== 'running') continue;
+      if (e.inproc) {
+        const p = e.inproc;
+        out.push({ id: p.id, ...(p.envPromptFile ? { envPromptFile: p.envPromptFile } : {}), envPromptVars: () => (p.envPromptVars ? p.envPromptVars() : {}) });
+      } else if (e.loaded?.envPromptFile) {
+        const vars = e.envVars;
+        out.push({ id: e.id, envPromptFile: e.loaded.envPromptFile, envPromptVars: () => vars });
+      }
+    }
+    return out;
+  }
+
+  /** Tools whose default policy is `ask` (manifest `sideEffectTools`). */
+  isAskByDefault(def: ToolDef): boolean {
+    const e = this.entries.get(def.owner);
+    const list = e?.loaded?.manifest?.sideEffectTools ?? e?.inproc?.sideEffectTools ?? [];
+    return list.includes(def.name);
+  }
+
+  // —— Lifecycle ——
+
+  private serialize(e: Entry, fn: () => Promise<void>): Promise<void> {
+    const run = e.op.then(fn, fn);
+    e.op = run.catch((err: unknown) => {
+      this.o.log.error({ plugin: e.id, err: errorMessage(err) }, 'plugin operation failed');
+    });
+    return run;
+  }
+
+  private entry(id: string): Entry {
+    const e = this.entries.get(id);
+    if (!e) throw new Error(`no plugin ${id}`);
+    return e;
+  }
+
+  private emit(e: Entry): void {
+    this.o.bus.emit('plugin.changed', this.statusOf(e));
+  }
+
+  /** Start every enabled plugin. A failing plugin is marked failed; the others still start. */
+  async startAll(): Promise<void> {
+    this.started = true;
+    const ids = [...this.entries.values()]
+      .filter((e) => e.enabled && (e.state === 'loaded' || e.state === 'stopped'))
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map((e) => e.id);
+    await Promise.all(ids.map((id) => this.start(id)));
+  }
+
+  start(id: string): Promise<void> {
+    const e = this.entry(id);
+    return this.serialize(e, () => this.startEntry(e, false));
+  }
+
+  stop(id: string, reason = 'stopped'): Promise<void> {
+    const e = this.entry(id);
+    return this.serialize(e, () => this.stopEntry(e, reason));
+  }
+
+  async enable(id: string, persist = true): Promise<PluginStatus> {
+    const e = this.entry(id);
+    if (!e.enabled) {
+      e.enabled = true;
+      if (persist) this.o.onEnabledChanged?.(id, true);
+    }
+    if (e.state !== 'running' && e.state !== 'starting') await this.start(id);
+    return this.statusOf(e);
+  }
+
+  async disable(id: string, persist = true): Promise<PluginStatus> {
+    const e = this.entry(id);
+    if (e.enabled) {
+      e.enabled = false;
+      if (persist) this.o.onEnabledChanged?.(id, false);
+    }
+    await this.stop(id, 'disabled');
+    return this.statusOf(e);
+  }
+
+  /** Stop, re-read the manifest and code, and start again (if enabled). */
+  async reload(id: string): Promise<PluginStatus> {
+    const e = this.entry(id);
+    await this.serialize(e, async () => {
+      await this.stopEntry(e, 'reloading');
+      if (e.loaded) {
+        e.loaded = loadManifest(e.loaded.dir, e.loaded.origin);
+        e.kind = e.loaded.manifest?.kind ?? e.kind;
+        e.state = 'loaded';
+        delete e.error;
+        this.setInvalid(e);
+      }
+      e.crashes = 0;
+      if (e.enabled && e.state !== 'invalid') await this.startEntry(e, false);
+      else this.emit(e);
+    });
+    return this.statusOf(e);
+  }
+
+  /** Start a failed (or stopped) plugin again, clearing its crash count. */
+  async restart(id: string): Promise<PluginStatus> {
+    const e = this.entry(id);
+    e.crashes = 0;
+    await this.serialize(e, async () => {
+      await this.stopEntry(e, 'restarting');
+      await this.startEntry(e, false);
+    });
+    return this.statusOf(e);
+  }
+
+  /** Copy a plugin directory into the data volume and load it (enable it unless told not to). */
+  async install(srcDir: string, opts: { enable?: boolean } = {}): Promise<PluginStatus> {
+    const src = path.resolve(srcDir);
+    const probe = loadManifest(src, 'data');
+    if (probe.errors.length > 0 || !probe.manifest) throw new Error(`invalid plugin: ${probe.errors.join('; ')}`);
+    const id = probe.manifest.id;
+    const existing = this.entries.get(id);
+    if (existing?.inproc) throw new Error(`plugin id "${id}" belongs to a built-in plugin`);
+    if (existing?.origin === 'data') throw new Error(`plugin ${id} is already installed; uninstall it first or reload it`);
+    const dest = path.join(this.o.dataDir, 'plugins', id);
+    if (fs.existsSync(dest)) throw new Error(`${dest} already exists`);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    // Copy next to the target and rename, so the directory watcher never sees half a plugin.
+    const staging = path.join(path.dirname(dest), `.install-${id}-${process.pid}-${Date.now()}`);
+    try {
+      fs.cpSync(src, staging, { recursive: true });
+      fs.renameSync(staging, dest);
+    } catch (err) {
+      fs.rmSync(staging, { recursive: true, force: true });
+      throw err;
+    }
+    const loaded = loadManifest(dest, 'data');
+    const enable = opts.enable ?? true;
+    if (existing) {
+      // A data-volume install overrides the built-in with the same id.
+      await this.serialize(existing, async () => {
+        await this.stopEntry(existing, 'replaced');
+        existing.loaded = loaded;
+        existing.origin = 'data';
+        existing.kind = loaded.manifest?.kind ?? existing.kind;
+        existing.state = 'loaded';
+        delete existing.error;
+        this.setInvalid(existing);
+      });
+    } else {
+      const e = this.newEntry(id, loaded.manifest?.kind ?? 'unknown', 'data', { enabled: false, config: {} }, { loaded });
+      this.setInvalid(e);
+      this.entries.set(id, e);
+    }
+    this.o.log.info({ plugin: id, dir: dest }, 'plugin installed');
+    if (enable) return this.enable(id);
+    this.emit(this.entry(id));
+    return this.statusOf(this.entry(id));
+  }
+
+  /** Remove a disabled data-volume plugin: its directory, configuration group and (optionally) data. */
+  async uninstall(id: string, opts: { keepData?: boolean } = {}): Promise<void> {
+    const e = this.entry(id);
+    if (e.origin !== 'data' || !e.loaded) throw new Error(`plugin ${id} is not installed in the data volume`);
+    if (e.enabled || e.state === 'running' || e.state === 'starting' || e.state === 'draining') {
+      throw new Error(`plugin ${id} must be disabled before it is uninstalled`);
+    }
+    await this.serialize(e, async () => {
+      await this.stopEntry(e, 'uninstalled');
+      fs.rmSync(e.loaded?.dir as string, { recursive: true, force: true });
+      if (!opts.keepData) fs.rmSync(path.join(this.o.dataDir, 'plugin-data', id), { recursive: true, force: true });
+      this.entries.delete(id);
+    });
+    this.o.onUninstalled?.(id);
+    this.o.log.info({ plugin: id, keepData: !!opts.keepData }, 'plugin uninstalled');
+    this.o.bus.emit('plugin.changed', { ...this.statusOf(e), state: 'stopped' });
+  }
+
+  /** Apply configuration from the config file (hot reload): enabled flag and plugin config. */
+  async applySettings(id: string, s: PluginSettings | undefined): Promise<void> {
+    const e = this.entries.get(id);
+    if (!e) return;
+    const next = s ?? { enabled: e.origin === 'inproc', config: {} };
+    if (JSON.stringify(next.config ?? {}) !== JSON.stringify(e.config)) await this.updateConfig(id, next.config ?? {});
+    if (next.enabled && !e.enabled) await this.enable(id, false);
+    if (!next.enabled && e.enabled) await this.disable(id, false);
+  }
+
+  /**
+   * New plugin configuration. Hot keys go to the plugin as `config/changed`; a change of
+   * a key marked `x-hot: false` (or any change for an in-process plugin) reloads it.
+   */
+  async updateConfig(id: string, config: Record<string, unknown>): Promise<PluginStatus> {
+    const e = this.entry(id);
+    const validate = e.loaded?.validateConfig;
+    if (validate && !validate(config)) {
+      throw new Error(`invalid config for ${id}: ${(validate.errors ?? []).map((x) => `${x.instancePath || '/'} ${x.message ?? ''}`).join('; ')}`);
+    }
+    const patch = shallowPatch(e.config, config);
+    if (Object.keys(patch).length === 0) return this.statusOf(e);
+    e.config = config;
+    if (e.state !== 'running') return this.statusOf(e);
+    const cold = e.inproc ? Object.keys(patch) : Object.keys(patch).filter((k) => e.loaded?.coldKeys.includes(k));
+    if (cold.length > 0) {
+      this.o.log.info({ plugin: id, keys: cold }, 'configuration change needs a reload');
+      return this.reload(id);
+    }
+    await this.serialize(e, async () => {
+      if (!e.proc) return;
+      await e.proc.configChanged(this.resolveSecrets(patch), this.resolveSecrets(config));
+      await this.refreshEnvVars(e);
+    });
+    this.o.log.info({ plugin: id, keys: Object.keys(patch) }, 'configuration updated');
+    return this.statusOf(e);
+  }
+
+  async stopAll(): Promise<void> {
+    this.stopping = true;
+    await Promise.all([...this.entries.values()].map((e) => this.serialize(e, () => this.stopEntry(e, 'shutdown'))));
+  }
+
+  private async startEntry(e: Entry, supervised: boolean): Promise<void> {
+    if (e.state === 'running' || e.state === 'invalid' || this.stopping) return;
+    if (e.restartTimer) clearTimeout(e.restartTimer);
+    e.restartTimer = null;
+    e.startedAt = this.o.clock.now();
+    e.state = 'starting';
+    delete e.error;
+    this.emit(e);
+    try {
+      if (e.inproc) await this.startInproc(e);
+      else await this.startProcess(e);
+    } catch (err) {
+      const reason = errorMessage(err);
+      this.o.tools.unregisterOwner(e.id, `plugin ${e.id} failed to start`);
+      if (supervised) {
+        this.onCrash(e, `restart failed: ${reason}`);
+        return;
+      }
+      e.state = 'failed';
+      e.error = reason;
+      this.o.log.error({ plugin: e.id, err: reason }, 'plugin failed to start');
+      this.emit(e);
+      return;
+    }
+    e.state = 'running';
+    this.o.log.info({ plugin: e.id, pid: e.proc?.pid, tools: this.o.tools.namesOf(e.id).length }, 'plugin started');
+    this.emit(e);
+    if (e.pendingSettled.length > 0) {
+      const pending = e.pendingSettled.splice(0);
+      e.proc?.settled(pending);
+    }
+  }
+
+  private async startInproc(e: Entry): Promise<void> {
+    const p = e.inproc as InprocPlugin;
+    await p.start(this.contextFor(e));
+    try {
+      this.o.tools.registerAll(p.id, p.tools?.() ?? []);
+    } catch (err) {
+      await p.stop();
+      throw err;
+    }
+  }
+
+  private async startProcess(e: Entry): Promise<void> {
+    const loaded = e.loaded as LoadedManifest;
+    const m = loaded.manifest;
+    if (!m || loaded.errors.length > 0) throw new Error(loaded.errors.join('; ') || 'invalid manifest');
+    if (loaded.validateConfig && !loaded.validateConfig(e.config)) {
+      throw new Error(`invalid config: ${(loaded.validateConfig.errors ?? []).map((x) => `${x.instancePath || '/'} ${x.message ?? ''}`).join('; ')}`);
+    }
+    const secrets: Record<string, string> = {};
+    for (const name of m.secrets ?? []) {
+      const v = this.o.secrets?.get(name);
+      if (v === undefined) throw new Error(`secret ${name} is not set`);
+      secrets[name] = v;
+    }
+    const config = this.resolveSecrets(e.config);
+    const runtime = m.runtime as NonNullable<typeof m.runtime>;
+    const dataDir = path.join(this.o.dataDir, 'plugin-data', e.id);
+    fs.mkdirSync(dataDir, { recursive: true });
+    const subst = (v: string): string => v.replaceAll('${pluginDir}', loaded.dir).replaceAll('${dataDir}', dataDir);
+    let exec = runtime.exec;
+    let args = runtime.args ?? [];
+    // Built-ins run from source in development; installed plugins always run as shipped.
+    if (this.o.dev && runtime.dev && e.origin === 'builtin') {
+      exec = runtime.dev.exec ?? exec;
+      args = runtime.dev.args ?? args;
+    }
+    if (exec === 'node') {
+      exec = process.execPath;
+      if (this.o.dev) args = ['--conditions=source', '--import', this.o.dev.loader, ...args];
+    }
+    const env: Record<string, string> = {};
+    for (const k of ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'SYSTEMROOT']) {
+      const v = process.env[k];
+      if (v !== undefined) env[k] = v;
+    }
+    Object.assign(env, {
+      TZ: this.o.timezone,
+      PROTEA_PLUGIN_ID: e.id,
+      PROTEA_PLUGIN_DATA_DIR: dataDir,
+      PYTHONUNBUFFERED: '1',
+      PYTHONDONTWRITEBYTECODE: '1',
+    });
+    for (const [k, v] of Object.entries(runtime.env ?? {})) env[k] = subst(v);
+    if (this.o.pythonPath) env['PYTHONPATH'] = [this.o.pythonPath, env['PYTHONPATH']].filter(Boolean).join(path.delimiter);
+    Object.assign(env, secrets);
+
+    const log = this.o.log.child({ plugin: e.id });
+    const proc = new ProcessPlugin({
+      id: e.id,
+      exec,
+      args: args.map(subst),
+      cwd: runtime.cwd ? path.resolve(loaded.dir, runtime.cwd) : loaded.dir,
+      env,
+      log,
+      handlers: this.handlersFor(e, log),
+      initializeTimeoutMs: this.settings.initializeTimeoutMs,
+      health: { intervalMs: m.healthcheck?.intervalMs ?? 30_000, timeoutMs: m.healthcheck?.timeoutMs ?? 5_000 },
+      onUnexpectedExit: (reason) => {
+        if (e.proc !== proc) return;
+        void this.serialize(e, async () => {
+          if (e.proc === proc && (e.state === 'running' || e.state === 'starting')) this.onCrash(e, reason);
+        });
+      },
+    });
+    e.proc = proc;
+    const caps = this.capsFor(e);
+    let started;
+    try {
+      started = await proc.start({
+        pluginId: e.id,
+        config,
+        dataDir,
+        hostDataDir: this.o.dataDir,
+        timezone: this.o.timezone,
+        language: this.o.language ?? 'en',
+        hostCapabilities: ['events', 'kv', 'owner', 'approvals', 'hooks'],
+        modelFacts: { mainModel: this.o.mainModel?.() ?? '' },
+        levelCap: caps.maxLevel,
+        allowedTriggers: allowedTriggers(m),
+      });
+    } catch (err) {
+      e.proc = null;
+      throw err;
+    }
+    e.capabilities = started.init.capabilities ?? {};
+    const declared = new Set(m.tools ?? []);
+    const specs: ToolSpec<never>[] = [];
+    for (const d of started.tools) {
+      if (!d || typeof d.name !== 'string' || typeof d.description !== 'string' || typeof d.inputSchema !== 'object') {
+        log.warn({ tool: (d as { name?: unknown })?.name }, 'ignoring a malformed tool declaration');
+        continue;
+      }
+      if (!declared.has(d.name)) log.warn({ tool: d.name }, 'tool is not declared in the manifest');
+      specs.push(this.toolSpec(e, d));
+    }
+    try {
+      this.o.tools.registerAll(e.id, specs);
+    } catch (err) {
+      await proc.kill();
+      e.proc = null;
+      throw err;
+    }
+    await this.refreshEnvVars(e);
+  }
+
+  private async refreshEnvVars(e: Entry): Promise<void> {
+    if (!e.proc) return;
+    if (!e.capabilities.envPrompt) {
+      e.envVars = {};
+      return;
+    }
+    try {
+      e.envVars = await e.proc.envPrompt(this.o.language ?? 'en');
+    } catch (err) {
+      this.o.log.warn({ plugin: e.id, err: errorMessage(err) }, 'env/prompt failed; using no variables');
+      e.envVars = {};
+    }
+    this.emit(e);
+  }
+
+  private onCrash(e: Entry, reason: string): void {
+    const ranMs = this.o.clock.now() - e.startedAt;
+    this.o.tools.unregisterOwner(e.id, `plugin ${e.id} crashed`);
+    e.proc = null;
+    if (ranMs >= this.settings.stableAfterMs) e.crashes = 0;
+    e.crashes++;
+    e.error = reason;
+    if (e.crashes >= this.settings.maxCrashes) {
+      e.state = 'failed';
+      e.error = `crashed ${e.crashes} times in a row; last: ${reason}`;
+      this.o.log.error({ plugin: e.id, crashes: e.crashes, reason }, 'plugin failed: too many crashes');
+      this.emit(e);
+      this.pushInternal({
+        type: 'plugin.failed',
+        level: 2,
+        trigger: 'flush',
+        text: `Plugin ${e.id} crashed ${e.crashes} times in a row and was stopped (${reason}). Its tools are unavailable until an operator restarts it.`,
+        correlation: e.id,
+      });
+      return;
+    }
+    const delays = this.settings.restartBackoffMs;
+    const delay = delays[Math.min(e.crashes - 1, delays.length - 1)] ?? 1000;
+    e.state = 'crashed';
+    this.o.log.warn({ plugin: e.id, reason, crashes: e.crashes, restartInMs: delay }, 'plugin crashed; restarting');
+    this.emit(e);
+    this.pushInternal({
+      type: 'plugin.crashed',
+      level: 4,
+      trigger: 'store',
+      text: `Plugin ${e.id} crashed (${reason}); restarting in ${Math.round(delay / 1000)}s (crash ${e.crashes} of ${this.settings.maxCrashes}).`,
+      correlation: e.id,
+    });
+    e.restartTimer = setTimeout(() => {
+      e.restartTimer = null;
+      e.restarts++;
+      void this.serialize(e, () => (e.state === 'crashed' ? this.startEntry(e, true) : Promise.resolve()));
+    }, delay);
+  }
+
+  private async stopEntry(e: Entry, reason: string): Promise<void> {
+    if (e.restartTimer) clearTimeout(e.restartTimer);
+    e.restartTimer = null;
+    if (e.state === 'crashed' || e.state === 'failed') {
+      if (reason !== 'shutdown') e.state = 'stopped';
+      this.emit(e);
+      return;
+    }
+    if (e.state !== 'running' && e.state !== 'starting') return;
+    e.state = 'draining';
+    this.emit(e);
+    this.o.tools.unregisterOwner(e.id, `plugin ${e.id} is ${reason === 'disabled' ? 'disabled' : `stopped (${reason})`}`);
+    if (e.inproc) {
+      try {
+        await e.inproc.stop();
+      } catch (err) {
+        this.o.log.warn({ plugin: e.id, err: errorMessage(err) }, 'plugin stop failed');
+      }
+    } else if (e.proc) {
+      const proc = e.proc;
+      const deadline = this.o.clock.now() + this.settings.drainTimeoutMs;
+      while (proc.busyCalls > 0 && this.o.clock.now() < deadline) await sleep(25);
+      if (proc.busyCalls > 0) this.o.log.warn({ plugin: e.id, calls: proc.busyCalls }, 'tool calls still running at the drain deadline');
+      await proc.stop(reason, this.settings.stopTimeoutMs);
+      e.proc = null;
+    }
+    e.state = 'stopped';
+    this.o.log.info({ plugin: e.id, reason }, 'plugin stopped');
+    this.emit(e);
+  }
+
+  // —— Plugin ↔ Core ——
+
+  private capsFor(e: Entry): SourceCaps {
+    if (e.inproc) {
+      const p = e.inproc;
+      return {
+        source: p.id,
+        maxLevel: p.levelCap,
+        ...(p.triggers ? { triggers: p.triggers } : {}),
+        ...(p.mayEmitInternal ? { mayEmitInternal: true } : {}),
+      };
+    }
+    const m = e.loaded?.manifest;
+    return {
+      source: e.id,
+      maxLevel: (m?.level ?? 4) as Level,
+      ...(m?.triggers ? { triggers: m.triggers } : {}),
+    };
+  }
+
+  private resolveSecrets<T>(value: T): T {
+    if (typeof value === 'string') {
+      const m = SECRET_REF.exec(value);
+      if (!m) return value;
+      const v = this.o.secrets?.get(m[1] as string);
+      if (v === undefined) throw new Error(`secret ${m[1]} referenced in the plugin config is not set`);
+      return v as T;
+    }
+    if (Array.isArray(value)) return value.map((v) => this.resolveSecrets(v)) as T;
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, this.resolveSecrets(v)])) as T;
+    }
+    return value;
+  }
+
+  private toolSpec(e: Entry, d: ToolDecl): ToolSpec<never> {
+    const spec: ToolSpec<unknown> = {
+      name: d.name,
+      description: d.description,
+      inputSchema: d.inputSchema,
+      ...(d.flags ? { flags: d.flags } : {}),
+      ...(d.timeoutMs !== undefined ? { timeoutMs: d.timeoutMs } : {}),
+      handler: async (input, ctx) => {
+        const proc = e.proc;
+        if (!proc || e.state !== 'running') return { text: `plugin ${e.id} is not running`, failed: true };
+        try {
+          const r = await proc.callTool(d.name, input, { sessionId: ctx.sessionId, batchId: ctx.batchId, batchLevel: ctx.batchLevel }, ctx.signal);
+          return {
+            text: typeof r?.text === 'string' ? r.text : JSON.stringify(r ?? null),
+            ...(r?.failed ? { failed: true } : {}),
+            ...(r?.partial ? { partial: true } : {}),
+            ...(r?.endsTurn ? { endsTurn: true } : {}),
+          };
+        } catch (err) {
+          return { text: `plugin ${e.id}: ${errorMessage(err)}`, failed: true };
+        }
+      },
+    };
+    return spec as unknown as ToolSpec<never>;
+  }
+
+  private handlersFor(e: Entry, log: Logger): Record<string, RpcHandler> {
+    const kv = kvNamespace(this.o.kv, `plugin:${e.id}`);
+    const caps = (): SourceCaps => this.capsFor(e);
+    const own = (cursor: unknown): number => {
+      const c = Number(cursor);
+      const ev = Number.isInteger(c) ? this.o.store.get(c) : undefined;
+      if (!ev || ev.source !== e.id) throw new RpcError(RPC_ERRORS.InvalidParams, `event #${String(cursor)} is not from ${e.id}`);
+      return c;
+    };
+    const str = (v: unknown, what: string): string => {
+      if (typeof v !== 'string' || v === '') throw new RpcError(RPC_ERRORS.InvalidParams, `${what} must be a non-empty string`);
+      return v;
+    };
+    return {
+      [PLUGIN_TO_HOST.eventsPush]: (params) => {
+        const r = this.push(caps(), params as EventInput);
+        if (!r.ok) throw new RpcError(RPC_ERRORS.InvalidParams, (r.errors ?? []).join('; '));
+        return { cursor: r.cursor, effectiveLevel: r.effectiveLevel, effectiveTrigger: r.effectiveTrigger, deduped: r.deduped, warnings: r.warnings };
+      },
+      [PLUGIN_TO_HOST.eventsPromote]: (params) => {
+        const p = params as { cursor: unknown; trigger: unknown };
+        const cursor = own(p.cursor);
+        if (p.trigger !== 'flush' && p.trigger !== 'piggyback') throw new RpcError(RPC_ERRORS.TriggerNotAllowed, 'trigger must be flush or piggyback');
+        const ev = this.o.store.promote(cursor, p.trigger);
+        return { ok: !!ev, ...(ev ? { effectiveTrigger: ev.effTrigger } : {}) };
+      },
+      [PLUGIN_TO_HOST.eventsWithdraw]: (params) => {
+        const cursor = own((params as { cursor: unknown }).cursor);
+        const ev = this.o.store.get(cursor);
+        if (ev?.state !== 'pending' && ev?.state !== 'archived') return { ok: false };
+        return { ok: this.o.store.settle([cursor], 'withdrawn').length === 1 };
+      },
+      [PLUGIN_TO_HOST.eventsQuery]: (params) => {
+        const p = (params ?? {}) as { filter?: { type?: string; states?: EventState[]; sinceCursor?: number }; limit?: number };
+        return {
+          events: this.o.store.query({
+            source: e.id,
+            limit: Math.min(p.limit ?? 50, 200),
+            order: 'desc',
+            ...(p.filter?.type !== undefined ? { type: p.filter.type } : {}),
+            ...(p.filter?.states !== undefined ? { states: p.filter.states } : {}),
+            ...(p.filter?.sinceCursor !== undefined ? { sinceCursor: p.filter.sinceCursor } : {}),
+          }),
+        };
+      },
+      [PLUGIN_TO_HOST.log]: (params) => {
+        const p = params as LogParams;
+        const level = (['trace', 'debug', 'info', 'warn', 'error'] as const).includes(p?.level) ? p.level : 'info';
+        log[level](p?.fields ?? {}, String(p?.msg ?? ''));
+      },
+      [PLUGIN_TO_HOST.kvGet]: (params) => ({ value: kv.get(str((params as { key: unknown }).key, 'key')) ?? null }),
+      [PLUGIN_TO_HOST.kvSet]: (params) => {
+        const p = params as { key: unknown; value: unknown };
+        kv.set(str(p.key, 'key'), p.value ?? null);
+        return {};
+      },
+      [PLUGIN_TO_HOST.kvDelete]: (params) => {
+        kv.delete(str((params as { key: unknown }).key, 'key'));
+        return {};
+      },
+      [PLUGIN_TO_HOST.ownerResolve]: (params) => ({
+        role: this.o.owner.resolve(e.id, str((params as { senderKey: unknown }).senderKey, 'senderKey')) ?? 'unknown',
+      }),
+      [PLUGIN_TO_HOST.secretsExists]: (params) => {
+        const name = str((params as { name: unknown }).name, 'name');
+        const declared = e.loaded?.manifest?.secrets ?? [];
+        return { exists: declared.includes(name) && this.o.secrets?.get(name) !== undefined };
+      },
+      [PLUGIN_TO_HOST.approvalsDecide]: (params) => {
+        const p = params as ApprovalDecideParams;
+        const senderKey = str(p.senderKey, 'senderKey');
+        if (this.o.owner.resolve(e.id, senderKey) !== 'owner') {
+          throw new RpcError(RPC_ERRORS.Unauthorized, 'only the owner can decide approvals');
+        }
+        if (!this.approvals) throw new RpcError(RPC_ERRORS.Internal, 'approvals are not available');
+        if (p.decision !== 'approve' && p.decision !== 'deny') throw new RpcError(RPC_ERRORS.InvalidParams, 'decision must be approve or deny');
+        return this.approvals.decide(str(p.id, 'id'), p.decision, `${e.id}:${senderKey}`);
+      },
+    };
+  }
+
+  private deliverSettled(source: string, events: Array<{ cursor: number }>, outcome: TerminalOutcome): void {
+    const e = this.entries.get(source);
+    if (!e) return;
+    if (e.inproc) {
+      if (e.state !== 'running' || !e.inproc.onEventsSettled) return;
+      try {
+        e.inproc.onEventsSettled(events, outcome);
+      } catch (err) {
+        this.o.log.warn({ plugin: source, err: errorMessage(err) }, 'onEventsSettled threw');
+      }
+      return;
+    }
+    const items = events.map((x) => ({ cursor: x.cursor, outcome }));
+    if (e.state === 'running' && e.proc) {
+      if (e.capabilities.settled) e.proc.settled(items);
+      return;
+    }
+    // Not running (crashed, restarting): replay once it is back.
+    e.pendingSettled.push(...items);
+    if (e.pendingSettled.length > MAX_PENDING_SETTLED) e.pendingSettled.splice(0, e.pendingSettled.length - MAX_PENDING_SETTLED);
+  }
+
+  /** Send an approval request to every running channel that can deliver it. Returns those that did. */
+  async requestApproval(a: ApprovalInfo): Promise<string[]> {
+    const params = { id: a.id, tool: a.tool, summary: a.summary, expiresAt: a.expiresAt, ...(a.reason !== undefined ? { reason: a.reason } : {}) };
+    const delivered: string[] = [];
+    await Promise.all(
+      [...this.entries.values()].map(async (e) => {
+        if (e.state !== 'running') return;
+        try {
+          if (e.inproc?.onApprovalRequest) {
+            if ((await e.inproc.onApprovalRequest(params)).delivered) delivered.push(e.id);
+          } else if (e.proc && e.capabilities.approvals) {
+            if ((await e.proc.approvalRequest(params)).delivered) delivered.push(e.id);
+          }
+        } catch (err) {
+          this.o.log.warn({ plugin: e.id, approval: a.id, err: errorMessage(err) }, 'approval request delivery failed');
+        }
+      }),
+    );
+    return delivered;
+  }
+
+  /** Forward `/hooks/<name>` to the running plugin that serves it; undefined if none does. */
+  async hook(name: string, req: Omit<HttpRequestParams, 'hook'>): Promise<HttpResponse | undefined> {
+    for (const e of this.entries.values()) {
+      if (e.state === 'running' && e.proc && e.capabilities.hooks?.includes(name)) return e.proc.http({ hook: name, ...req });
+    }
+    return undefined;
+  }
+
+  // —— The event gateway ——
+
+  /** Gate and store an event on behalf of a source. */
+  push(caps: SourceCaps, input: EventInput): PushResult {
+    const gated = gateEvent(input, caps, this.o.owner);
+    if (!gated.ok) {
+      this.o.log.warn({ source: caps.source, errors: gated.errors }, 'event rejected');
+      return { ok: false, warnings: [], errors: gated.errors };
+    }
+    const { envelope, deduped } = this.o.store.append(gated.event);
+    if (gated.warnings.length > 0 && !deduped) {
+      this.o.log.warn({ source: caps.source, cursor: envelope.cursor, warnings: gated.warnings }, 'event downgraded');
+      if (caps.source !== CORE_SOURCE) {
+        this.pushInternal({
+          type: 'core.event_downgraded',
+          level: 4,
+          trigger: 'piggyback',
+          text: `Event #${envelope.cursor} from ${caps.source} was adjusted: ${gated.warnings.join('; ')}.`,
+          correlation: String(envelope.cursor),
+        });
+      }
+    }
+    return {
+      ok: true,
+      cursor: envelope.cursor,
+      effectiveLevel: envelope.effLevel,
+      effectiveTrigger: envelope.effTrigger,
+      deduped,
+      warnings: gated.warnings,
+    };
+  }
+
+  /** Core's own events: origin internal, may use level 0. */
+  pushInternal(input: Omit<EventInput, 'ts' | 'origin'> & { ts?: string }): PushResult {
+    return this.push(
+      { source: CORE_SOURCE, maxLevel: 0, mayEmitInternal: true },
+      { ...input, ts: input.ts ?? new Date(this.o.clock.now()).toISOString(), origin: 'internal' },
+    );
+  }
+
+  private contextFor(e: Entry): PluginContext {
+    const p = e.inproc as InprocPlugin;
+    const caps = this.capsFor(e);
+    const log = this.o.log.child({ plugin: p.id });
+    return {
+      id: p.id,
+      config: e.config,
+      dataDir: path.join(this.o.dataDir, 'plugin-data', p.id),
+      timezone: this.o.timezone,
+      log,
+      kv: kvNamespace(this.o.kv, `plugin:${p.id}`),
+      clock: this.o.clock,
+      pushEvent: (input) => this.push(caps, input),
+      emitOutput: (out) =>
+        this.o.bus.emit('plugin.output', {
+          plugin: p.id,
+          text: out.text,
+          at: new Date(this.o.clock.now()).toISOString(),
+          ...(out.channel !== undefined ? { channel: out.channel } : {}),
+        }),
+      resolveSender: (senderKey) => this.o.owner.resolve(p.id, senderKey) ?? 'unknown',
+    };
+  }
+}

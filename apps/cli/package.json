@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@protea/protocol": "workspace:*",
-    "@protea/daemon": "workspace:*"
+    "@protea/daemon": "workspace:*",
+    "@protea/core": "workspace:*"
   },
   "bin": {
     "protea": "./dist/main.js"

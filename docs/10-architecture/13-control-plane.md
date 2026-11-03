@@ -69,16 +69,16 @@ protea serve                    # 守护进程（容器入口）
 protea status
 protea events tail [--level 1] [--source telegram]
 protea events push "text" [--level 1 --trigger flush]
-protea plugins ls|install|enable|disable|reload|rm <id>
+protea plugins ls|install <dir>|enable|disable|reload|restart|config|uninstall <id>   # M2 ✓
 protea mcp ls|add|rm|tools <id>
 protea skills ls|install <git-url>
 protea config get|set <path> [value]
 protea secrets set <NAME>       # 从 stdin 读值
-protea approvals ls|approve|deny <id>
+protea approvals ls|approve|deny <id>                  # M2 ✓
 protea sessions handoff|forks
 protea replay --from <c> --to <c>
 protea backup [--to <git-url>]
-protea dev-plugin <dir>         # 本地插件开发宿主
+protea dev-plugin <dir> [--check]                      # M2 ✓ 本地插件开发宿主 / 协议一致性检查
 ```
 
 CLI 通过 `PROTEA_URL` 与 `PROTEA_ADMIN_TOKEN` 访问 API；在容器内默认指向本机。

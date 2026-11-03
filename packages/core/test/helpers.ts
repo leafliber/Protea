@@ -9,7 +9,7 @@ import {
   ContextAssembler,
   EventStore,
   ForkManager,
-  InprocPluginHost,
+  PluginHost,
   KvRepo,
   MainSession,
   OwnerRegistry,
@@ -91,9 +91,9 @@ export function makeHarness(opts: HarnessOptions = {}) {
     { plugin: 'test', senderKey: 'test:owner' },
   ]);
   const tools = new ToolRegistry();
-  const plugins = new InprocPluginHost({ store, bus, owner, kv, tools, log, clock: systemClock, dataDir: dir, timezone: 'UTC' });
+  const plugins = new PluginHost({ store, bus, owner, kv, tools, log, clock: systemClock, dataDir: dir, timezone: 'UTC' });
   const provider = opts.provider ?? new ScriptedProvider(opts.steps ?? [() => textReply('ok')]);
-  const pushInternal = (input: Parameters<InprocPluginHost['pushInternal']>[0]): void => {
+  const pushInternal = (input: Parameters<PluginHost['pushInternal']>[0]): void => {
     plugins.pushInternal(input);
   };
   const defaults = defaultConfig();

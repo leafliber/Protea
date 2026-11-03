@@ -26,3 +26,9 @@
 - 每个插件一个进程，内存开销约 30–60 MB（Node）；资源受限机器上限制插件数量或使用 Python/Go 插件。
 - 协议需要版本化（清单 `api`）与兼容 shim。
 - 插件本地开发需要宿主模拟器（`protea dev-plugin`）。
+
+## 实施记录（M2）
+
+- 协议按此决定实现：NDJSON 上的 JSON-RPC 2.0，Core 与 TypeScript SDK 共用 `@protea/protocol` 的 `RpcPeer`；Python SDK 是同一协议的独立实现。两者都通过 `protea dev-plugin --check` 的一致性检查。
+- 为了让插件目录能整体复制（安装进数据卷），进程外插件打包成单文件（`scripts/bundle-plugin.mjs`，esbuild）；开发时内置插件用清单的 `runtime.dev` 直接跑源码。
+- 子进程只继承最小环境与清单声明的秘密；资源上限（`ulimit` / cgroup）留到 M6。

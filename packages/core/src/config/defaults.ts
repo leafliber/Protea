@@ -1,3 +1,4 @@
+import { DEFAULT_PLUGIN_HOST_SETTINGS } from '../plugins/host.js';
 import { defaultTimeZone } from '../util/time.js';
 import type { ProteaConfig } from './types.js';
 
@@ -40,6 +41,8 @@ export function defaultConfig(): ProteaConfig {
       console: { enabled: true, config: {} },
       cron: { enabled: true, config: {} },
     },
+    pluginHost: { ...DEFAULT_PLUGIN_HOST_SETTINGS, restartBackoffMs: [...DEFAULT_PLUGIN_HOST_SETTINGS.restartBackoffMs] },
+    permissions: { default: 'allow', tools: {}, approvalTtlMs: 86_400_000 },
     observability: { logLevel: 'info', logFormat: 'auto', logEventText: false },
   };
 }
@@ -68,4 +71,10 @@ export const STARTER_CONFIG_YAML = `# Protea configuration. Every key is optiona
 #     config:
 #       schedules:
 #         - { name: morning-brief, cron: "0 7 * * *", note: "Prepare the morning brief" }
+#   telegram:                 # needs the secret TELEGRAM_BOT_TOKEN; add the owner to owner.identities
+#     enabled: true
+#     config: {}
+
+# permissions:
+#   tools: { tg_send_chat: ask }    # allow | ask | deny; globs like "mcp__*" work too
 `;

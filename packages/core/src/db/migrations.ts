@@ -105,4 +105,47 @@ CREATE TABLE kv (
 );
 `,
   },
+  {
+    version: 2,
+    name: 'approvals-and-audit',
+    sql: `
+CREATE TABLE approvals (
+  seq          INTEGER PRIMARY KEY AUTOINCREMENT,
+  id           TEXT NOT NULL UNIQUE,
+  tool         TEXT NOT NULL,
+  owner        TEXT NOT NULL,
+  input_hash   TEXT NOT NULL,
+  summary      TEXT NOT NULL,
+  reason       TEXT,
+  state        TEXT NOT NULL CHECK (state IN ('pending','approved','denied','expired','used')),
+  session_id   TEXT,
+  batch_id     TEXT,
+  created_at   TEXT NOT NULL,
+  expires_at   TEXT NOT NULL,
+  expires_ms   INTEGER NOT NULL,
+  decided_at   TEXT,
+  decided_by   TEXT,
+  used_at      TEXT
+);
+CREATE INDEX ix_approvals_lookup ON approvals(tool, input_hash, state);
+
+CREATE TABLE audit (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  at           TEXT NOT NULL,
+  kind         TEXT NOT NULL,
+  tool         TEXT,
+  owner        TEXT,
+  session_id   TEXT,
+  batch_id     TEXT,
+  call_id      TEXT,
+  input_hash   TEXT,
+  summary      TEXT,
+  policy       TEXT,
+  outcome      TEXT,
+  approval_id  TEXT,
+  detail       TEXT
+);
+CREATE INDEX ix_audit_at ON audit(at);
+`,
+  },
 ];

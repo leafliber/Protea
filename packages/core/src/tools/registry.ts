@@ -17,6 +17,8 @@ export interface ProviderToolDef {
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolDef>();
   private readonly validators = new Map<string, ValidateFunction>();
+  /** Why a tool that used to exist is gone, for the receipt of a late call. */
+  private readonly tombstones = new Map<string, string>();
   private readonly ajv = createAjv();
   private version = 0;
 
@@ -26,20 +28,50 @@ export class ToolRegistry {
     if (existing) throw new Error(`tool name "${spec.name}" is already declared by ${existing.owner}`);
     this.validators.set(spec.name, this.ajv.compile(spec.inputSchema));
     this.tools.set(spec.name, { ...(spec as ToolSpec), owner });
+    this.tombstones.delete(spec.name);
     this.version++;
   }
 
-  unregisterOwner(owner: string): string[] {
+  /** Register several tools of one owner, all or none. */
+  registerAll(owner: string, specs: readonly ToolSpec<never>[]): void {
+    const done: string[] = [];
+    try {
+      for (const s of specs) {
+        this.register(owner, s);
+        done.push(s.name);
+      }
+    } catch (err) {
+      for (const name of done) {
+        this.tools.delete(name);
+        this.validators.delete(name);
+      }
+      throw err;
+    }
+  }
+
+  unregisterOwner(owner: string, reason?: string): string[] {
     const removed: string[] = [];
     for (const [name, def] of this.tools) {
       if (def.owner === owner) {
         this.tools.delete(name);
         this.validators.delete(name);
+        if (reason) this.tombstones.set(name, reason);
         removed.push(name);
       }
     }
     if (removed.length) this.version++;
     return removed;
+  }
+
+  /** Why `name` is not available, if it once was. */
+  unavailableReason(name: string): string | undefined {
+    return this.tombstones.get(name);
+  }
+
+  namesOf(owner: string): string[] {
+    return this.list()
+      .filter((d) => d.owner === owner)
+      .map((d) => d.name);
   }
 
   get(name: string): ToolDef | undefined {

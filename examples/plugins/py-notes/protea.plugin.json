@@ -1,0 +1,12 @@
+{
+  "id": "py-notes",
+  "kind": "tool",
+  "api": 1,
+  "version": "0.1.0",
+  "displayName": "Notes (Python example)",
+  "description": "Example plugin written with the Python SDK: keeps notes and reports each addition as an event.",
+  "runtime": { "exec": "python3", "args": ["main.py"] },
+  "level": 4,
+  "tools": ["nts_add", "nts_list", "nts_wait"],
+  "envPrompt": "./ENV_PROMPT.md"
+}

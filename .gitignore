@@ -7,3 +7,5 @@ coverage/
 .DS_Store
 .dev-data.log
 .dev-pid
+__pycache__/
+*.pyc

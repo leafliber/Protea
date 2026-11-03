@@ -1,6 +1,6 @@
 # 安全与权限
 
-> 状态：Draft · 更新：2026-11-03
+> 状态：Draft（§1–§4 的工具权限、审批、审计与秘密注入已在 M2 实现）· 更新：2026-11-03 · 实现：`packages/core/src/permissions/`
 
 威胁模型：一个常驻在公网 VPS 上、持有主人多种凭据、能执行命令并对外发消息的代理。主要风险：（1）陌生人冒充主人指挥助理；（2）外部内容（网页、邮件、群消息）里的提示注入；（3）助理自身误操作造成不可逆副作用；（4）凭据泄露进模型上下文或日志；（5）失控插件耗尽资源或费用。
 
@@ -15,15 +15,20 @@
 
 三值策略：`allow` / `ask` / `deny`。决策顺序：
 
+0. 未配置任何 owner 身份 → 有副作用（`sideEffect` 标志）的工具一律 `deny`（只读模式，优先于下面所有规则）
 1. `permissions.tools.<exactName>`（精确）
-2. `permissions.tools.<glob>`（如 `mcp__github__*`）
+2. `permissions.tools.<glob>`（如 `mcp__github__*`；更长的模式优先）
 3. 插件清单 `sideEffectTools` 的默认：`ask`
-4. MCP 注解：`readOnlyHint` → `allow`；`destructiveHint` → `ask`
-5. 全局默认 `permissions.default`（出厂 `allow`，仅对无副作用工具）
+4. MCP 注解：`readOnlyHint` → `allow`；`destructiveHint` → `ask`（M3）
+5. 全局默认 `permissions.default`（出厂 `allow`）
 
-附加条件（可选）：按批等级（L3 的批里 `tg_send` 给第三方需要 `ask`）、按参数匹配（`shell` 命令匹配 `rm -rf|mkfs|dd ` → `deny`）、按时间窗（夜间所有外发 `ask`）。
+约定：给主人发消息的出口工具（`con_send`、`tg_send`）不在 `sideEffectTools` 里，默认 `allow`；给第三方发的（`tg_send_chat`）在里面，默认 `ask`。内置插件的清单都按此审查过。
 
-策略摘要会写进系统前缀 `operating` 段（P3：事先声明），模型因此知道哪些操作会触发审批，可以提前用 `approval_request` 询问。
+附加条件（可选，尚未实现）：按批等级（L3 的批里 `tg_send` 给第三方需要 `ask`）、按参数匹配（`shell` 命令匹配 `rm -rf|mkfs|dd ` → `deny`）、按时间窗（夜间所有外发 `ask`）。
+
+策略摘要写进系统前缀，作为 `operating` 之后的 `permissions` 段（P3：事先声明；没有受限工具时省略），模型因此知道哪些操作会触发审批，可以提前用 `approval_request` 询问。`permissions` 可热更新，新摘要在下一个回合边界生效。
+
+实现：`ToolDispatcher` 在执行每个调用前询问 `PermissionGuard`；`deny` → 失败回执 `not run: … denied by policy (<规则>)`；`ask` → 见 §3。Fork 的调用走同一个检查。
 
 ## 3. 审批流
 
@@ -35,10 +40,18 @@
 - 过期：默认 24 h。
 - 所有审批与决定进入 `audit` 表。
 
+M2 实现细节：
+- 审批编号为 `a<n>`（如 `a12`），主人在 Telegram 回复 `/approve a12` 或 `/deny a12`，或在终端 `protea approvals approve a12`；连接器把决定连同发送者交给宿主，宿主核实其为本插件映射的主人（`approvals/decide`），非主人的回复只是一条普通消息。
+- 输入哈希：工具名 + 规范化 JSON（键排序）的 sha256，所以键顺序不同的同一输入匹配同一审批。相同调用再次触发时复用尚未决定的请求，不会重复打扰主人。
+- 请求同时发给所有声明了 `approvals` 能力的运行中渠道（控制台输出 + Telegram）。
+- 决定产生 L1 flush 的 `approval.decided` 内部事件；获批的调用在过期前只能执行一次，执行后审批变为 `used`。待决与已批未用的审批到期变为 `expired`（每分钟检查一次，查询时也会检查）。
+- 摘要与理由经过秘密扫描：已知秘密值替换为 `[REDACTED:<NAME>]`。
+- `audit` 记录：`tool_call`（有副作用或受限的调用及其结果）、`tool_blocked`（被拒绝或等待审批）、`approval_requested`、`approval_decided`、`approval_expired`（I-8）。
+
 ## 4. 秘密
 
 - 存储：`/data/secrets/` 下每个秘密一个文件（0600），或环境变量 `PROTEA_SECRET_<NAME>`。控制台/CLI 只能写与列名，不能读值。
-- 使用：插件清单声明 `secrets`，启动时注入其环境变量；配置文件中以 `${secret:NAME}` 引用，解析只发生在传给插件/MCP 的那一刻。
+- 使用：插件清单声明 `secrets`，启动时注入其环境变量（缺失则插件启动失败）；配置文件中以 `${secret:NAME}` 引用，解析只发生在传给插件/MCP 的那一刻。插件子进程只继承最小环境，不会拿到守护进程的其他秘密（M2 已实现）。
 - **不入上下文**：Core 在构造 Provider 请求前对所有文本做一次秘密值扫描（精确匹配所有已知秘密值），命中即替换为 `[REDACTED:<NAME>]` 并记 `internal` 警告事件（I-7）。日志同样过滤。
 - 工具回执里出现秘密（例如 `env` 命令输出）同样被过滤。
 
@@ -70,7 +83,7 @@
 
 - 管理员令牌；可选 IP 白名单；登录失败退避。
 - 控制台只在 TLS 或回环下显示秘密管理页。
-- Webhook 必须签名或带独立 token；无签名的 `/hooks/<name>` 默认禁用。
+- Webhook 必须签名或带独立 token；无签名的 `/hooks/<name>` 默认禁用（`webhook` 插件只有在 `verify: none` 且显式 `allowUnsigned: true` 时才服务该路径）。`/hooks/*` 不需要管理员令牌，校验由插件完成；请求体上限 1 MB。
 
 ## 9. 安全检查清单（发布前）
 
