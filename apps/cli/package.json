@@ -1,0 +1,20 @@
+{
+  "name": "@protea/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist",
+    "ENV_PROMPT.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@protea/protocol": "workspace:*",
+    "@protea/daemon": "workspace:*"
+  },
+  "bin": {
+    "protea": "./dist/main.js"
+  }
+}

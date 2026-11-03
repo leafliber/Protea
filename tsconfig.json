@@ -1,0 +1,37 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "paths": {
+      "@protea/protocol": [
+        "./packages/protocol/src/index.ts"
+      ],
+      "@protea/core": [
+        "./packages/core/src/index.ts"
+      ],
+      "@protea/control": [
+        "./packages/control/src/index.ts"
+      ],
+      "@protea/plugin-console": [
+        "./plugins/console/src/index.ts"
+      ],
+      "@protea/plugin-cron": [
+        "./plugins/cron/src/index.ts"
+      ],
+      "@protea/daemon": [
+        "./apps/daemon/src/index.ts"
+      ]
+    },
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": [
+    "packages/*/src",
+    "packages/*/test",
+    "plugins/*/src",
+    "plugins/*/test",
+    "apps/*/src",
+    "apps/*/test",
+    "vitest.config.ts"
+  ]
+}

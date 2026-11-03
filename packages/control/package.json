@@ -1,0 +1,25 @@
+{
+  "name": "@protea/control",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "ENV_PROMPT.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "@protea/core": "workspace:*",
+    "@protea/protocol": "workspace:*",
+    "hono": "^4.13.16"
+  }
+}

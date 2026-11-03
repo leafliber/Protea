@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.dev-data/
+protea-data/
+coverage/
+.DS_Store
+.dev-data.log
+.dev-pid
