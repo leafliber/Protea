@@ -11,7 +11,7 @@ import {
   type StatusResponse,
   type StreamMessage,
 } from '@protea/protocol';
-import type { Bus, EventStore, Logger, PushResult, Transcript } from '@protea/core';
+import type { Bus, EventStore, ForkManager, Logger, PushResult, Transcript } from '@protea/core';
 
 export interface ControlDeps {
   adminToken: string;
@@ -19,6 +19,7 @@ export interface ControlDeps {
   store: EventStore;
   log: Logger;
   transcript: () => Transcript;
+  forks?: ForkManager;
   status: () => StatusResponse;
   ready: () => { ready: boolean; reasons: string[] };
   /** Deliver an operator message through the console plugin. */
@@ -41,8 +42,8 @@ function intParam(c: Context, name: string): number | undefined {
 }
 
 /**
- * HTTP control plane (M0 subset of docs/30-specs/05-control-api.md): health,
- * status, events, the main transcript and a Server-Sent Events stream.
+ * HTTP control plane (M0/M1 subset of docs/30-specs/05-control-api.md): health,
+ * status, events, session transcripts, forks and a Server-Sent Events stream.
  */
 export function createControlApp(d: ControlDeps): Hono {
   const app = new Hono();
@@ -122,11 +123,36 @@ export function createControlApp(d: ControlDeps): Hono {
     return c.json({ event, delivery: d.store.deliveryOf(cursor) ?? null });
   });
 
-  app.get('/api/sessions/main/transcript', (c) => {
-    const all = d.transcript().messages;
+  app.get('/api/sessions/:id/transcript', (c) => {
+    const id = c.req.param('id');
+    const all = id === 'main' ? d.transcript().messages : d.forks?.transcript(id);
+    if (!all) return c.json({ error: { code: 'not_found', message: 'no such session' } }, 404);
     const limit = Math.min(Math.max(intParam(c, 'limit') ?? 50, 1), 500);
     const from = intParam(c, 'from') ?? Math.max(0, all.length - limit);
     return c.json({ total: all.length, from, messages: all.slice(from, from + limit) });
+  });
+
+  app.get('/api/sessions', (c) => {
+    const s = d.status();
+    return c.json({
+      sessions: [
+        { id: 'main', kind: 'main', phase: s.phase, batchId: s.batchId },
+        ...(d.forks?.list() ?? []).map((f) => ({ kind: 'fork', ...f })),
+      ],
+    });
+  });
+
+  app.get('/api/sessions/forks', (c) => c.json({ forks: d.forks?.list() ?? [] }));
+
+  app.get('/api/sessions/forks/:id', (c) => {
+    const f = d.forks?.get(c.req.param('id'));
+    if (!f) return c.json({ error: { code: 'not_found', message: 'no such fork' } }, 404);
+    return c.json(f);
+  });
+
+  app.post('/api/sessions/forks/:id/cancel', (c) => {
+    if (!d.forks?.get(c.req.param('id'))) return c.json({ error: { code: 'not_found', message: 'no such fork' } }, 404);
+    return c.json(d.forks.cancel(c.req.param('id')));
   });
 
   app.get('/api/stream', (c) => {
@@ -160,6 +186,8 @@ export function createControlApp(d: ControlDeps): Hono {
         d.bus.on('batch.extended', (b) => push({ topic: 'batch.extended', data: b })),
         d.bus.on('batch.ended', (b) => push({ topic: 'batch.ended', data: b })),
         d.bus.on('plugin.output', (o) => push({ topic: 'output', data: o })),
+        d.bus.on('scheduler.action', (a) => push({ topic: 'scheduler', data: a })),
+        d.bus.on('fork.changed', (f) => push({ topic: 'fork', data: f })),
       ];
       stream.onAbort(() => {
         for (const u of unsubs) u();

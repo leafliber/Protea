@@ -73,6 +73,12 @@ CREATE TABLE kv (ns TEXT NOT NULL, key TEXT NOT NULL, value TEXT, updated_at TEX
 
 `kv` 的命名空间：插件为 `plugin:<id>`（例如 cron 的动态日程存在 `plugin:cron` / `schedule:<id>`）。
 
+`sessions` 的用法：主会话一行（`id='main'`、`kind='main'`）；每个 Fork 一行（M1）：`kind='fork'`，`state` ∈ `queued|running|paused|completed|cancelled|failed`，`level` 为 Fork 等级，`parent_id` 为派生它的批，`model` 为模型角色（`fork|cheap|main`），路径相对数据目录，结束时写 `ended_at` 与 `summary`（结果前 2000 字符或错误）。
+
+`usage.level` 是用量归属的等级（主会话为批等级，Fork 为 Fork 等级），预算统计按它分组；`usage.session_id` 是 `main` 或 Fork id。
+
+`events.eff_trigger` 在老化与 `events_promote` 时会被改写（等级 `eff_level` 不变），`state` 可能从 `archived` 回到 `pending`。
+
 ### 1.2 后续迁移（计划）
 
 | 表 | 用途 | 里程碑 |
@@ -89,7 +95,8 @@ CREATE TABLE kv (ns TEXT NOT NULL, key TEXT NOT NULL, value TEXT, updated_at TEX
 |---|---|---|
 | `sessions/main.current` | 文本 | 当前主转录的文件名（交接时轮换，M4） |
 | `sessions/main.<seq>.jsonl` | NDJSON | 主会话转录，只追加，每条记录写入后 `fdatasync` |
-| `sessions/forks/<id>.jsonl` / `.checkpoint.json` | NDJSON / JSON | Fork 转录与检查点（M1） |
+| `sessions/forks/<id>.jsonl` | NDJSON | Fork 转录，记录格式同主转录；缺失回执的占位文本为 `[result missing (fork paused/restarted)]`；结束时追加 `fork_ended` 标记 |
+| `sessions/forks/<id>.checkpoint.json` | JSON | Fork 检查点，每回合与状态变化后以"临时文件 + rename"原子替换（字段见 [05-sessions-and-agent-loop.md](../10-architecture/05-sessions-and-agent-loop.md) §5.3） |
 | `runs/<runId>/log.jsonl` | NDJSON | 本次运行的结构化日志 |
 | `runs/<runId>/transcript.jsonl` | NDJSON | 启动修复时移出的内容（`truncated-tail`、`orphan-result-drop`） |
 | `secrets/<NAME>` | 文本，0600 | 秘密 |
@@ -103,8 +110,12 @@ CREATE TABLE kv (ns TEXT NOT NULL, key TEXT NOT NULL, value TEXT, updated_at TEX
 {"t":"msg","role":"user","content":[{"type":"text","text":"<events …>…</events>"},{"type":"text","text":"<status …/>"}],"batch":"b_…","cursors":[18233,18234],"at":"…"}
 {"t":"msg","role":"assistant","content":[{"type":"thinking","thinking":"","signature":"…"},{"type":"tool_use",…}],"batch":"b_…","usage":{…},"stop":"tool_use","model":"claude-opus-5-5","at":"…"}
 {"t":"msg","role":"user","content":[{"type":"tool_result",…}],"batch":"b_…","at":"…"}
+{"t":"mark","kind":"model_call_cancelled","batch":"b_…","reason":"preempt","by":18251,"at":"…"}
+{"t":"mark","kind":"turn_cancelled","batch":"b_…","reason":"interrupt","by":18240,"during":"tools","at":"…"}
 {"t":"mark","kind":"batch_ended","batch":"b_…","reason":"end_turn","rounds":2,"resumable":false,"at":"…"}
 {"t":"mark","kind":"repair","actions":[{"action":"drop-result","msgIndex":7,"toolUseId":"toolu_…"}],"at":"…"}
 ```
+
+`batch_ended.reason` 取值：`end_turn`、`ends_turn`、`max_tokens`、`refusal`、`round_limit`、`model_error`、`interrupted`（M1）、`aborted`；只有 `aborted` 是 `resumable: true`。
 
 `msgIndex` 指已提交的 `msg` 记录序号（从 0 开始），因此修复动作在任何一次加载中都指向同一条消息。修复规则见 [../10-architecture/05-sessions-and-agent-loop.md](../10-architecture/05-sessions-and-agent-loop.md) §6.2。

@@ -1,6 +1,6 @@
 # 规范：控制 API
 
-> 状态：Draft · 更新：2026-11-03 · 设计：[../10-architecture/13-control-plane.md](../10-architecture/13-control-plane.md)
+> 状态：Draft（M0–M1 部分已实现，见文末）· 更新：2026-11-03 · 设计：[../10-architecture/13-control-plane.md](../10-architecture/13-control-plane.md)
 
 基址 `http://host:7788`。JSON；错误形态 `{ error: { code, message, details? } }`。鉴权 `Authorization: Bearer <token>`。分页用 `?cursor=&limit=`（事件按游标）或 `?page=&size=`。
 
@@ -11,7 +11,7 @@
 | GET | `/healthz` | 存活 |
 | GET | `/readyz` | 就绪（含原因列表） |
 | GET | `/metrics` | Prometheus |
-| GET | `/api/status` | `{ runId, version, phase, uptime, pending: {0..4}, budget: {...}, plugins: summary, forks: n }` |
+| GET | `/api/status` | `StatusResponse`：`{ runId, version, startedAt, uptimeSec, phase, batchId, pending: {0..4}, provider, plugins, usage24h, forks: ForkInfo[], budget: { enforced, dailyUsd, levels: {0..4: { spentUsd, tokens, limitUsd, usedRatio }} } }` |
 
 ## 事件
 
@@ -28,11 +28,12 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/sessions` | 主会话 + Fork 列表 |
-| GET | `/api/sessions/:id/transcript?from=&limit=&thinking=summary\|none` | 转录 |
+| GET | `/api/sessions` | 主会话 + Fork 列表（`{ sessions: [{ id: 'main', kind, phase, batchId }, { kind: 'fork', ...ForkInfo }] }`） |
+| GET | `/api/sessions/:id/transcript?from=&limit=&thinking=summary\|none` | 转录；`:id` 为 `main` 或 Fork id（M1 未实现 `thinking` 参数） |
+| GET | `/api/sessions/forks` · `/api/sessions/forks/:id` | Fork 列表（未结束的 + 最近 10 个已结束的）、详情（`ForkInfo`） |
 | POST | `/api/sessions/main/handoff` | 手动交接 |
 | POST | `/api/sessions/forks` | 派生 Fork（ForkOptions） |
-| POST | `/api/sessions/forks/:id/cancel` · `/pause` · `/resume` | |
+| POST | `/api/sessions/forks/:id/cancel` · `/pause` · `/resume` | 返回 `ForkInfo`；对已结束的 Fork 无副作用 |
 
 ## 插件 / MCP / Skills
 
@@ -82,9 +83,13 @@
 
 ## 实时流
 
-**M0：SSE** `GET /api/stream?since=<cursor>`。连接后先发 `hello {runId}`；带 `since` 时先按游标补发之后的事件，再转为实时。事件名：`event`（id 为游标）、`settled`、`phase`、`batch.started`、`batch.extended`、`batch.ended`、`output`（插件输出，如 `con_send`）、`ping`（15 s 保活）。载荷形态见 `@protea/protocol` 的 `StreamMessage`。
+**SSE（M0 起）** `GET /api/stream?since=<cursor>`。连接后先发 `hello {runId}`；带 `since` 时先按游标补发之后的事件，再转为实时。事件名：`event`（id 为游标）、`settled`、`phase`、`batch.started`、`batch.extended`（M1 起带 `level`）、`batch.ended`、`output`（插件输出，如 `con_send`）、`scheduler`（M1：`preempt` / `interrupt` / `aged` / `storm_cooldown` / `fork_yield` / `fork_resume`）、`fork`（M1：`ForkInfo` 变化）、`ping`（15 s 保活）。载荷形态见 `@protea/protocol` 的 `StreamMessage` 与 `SchedulerAction`。
 
-M0 已实现的 HTTP 端点：`/healthz`、`/readyz`、`GET /api/status`、`POST|GET /api/events`、`GET /api/events/:cursor`、`GET /api/sessions/main/transcript?from=&limit=`、`GET /api/stream`。其余端点在 M2–M5 实现。
+已实现的 HTTP 端点：
+- M0：`/healthz`、`/readyz`、`GET /api/status`、`POST|GET /api/events`、`GET /api/events/:cursor`、`GET /api/stream`。
+- M1：`GET /api/sessions`、`GET /api/sessions/:id/transcript?from=&limit=`、`GET /api/sessions/forks`、`GET /api/sessions/forks/:id`、`POST /api/sessions/forks/:id/cancel`。
+
+其余端点在 M2–M5 实现。
 
 ### WebSocket `/ws`（M5）
 

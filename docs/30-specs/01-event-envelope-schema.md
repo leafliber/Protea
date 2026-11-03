@@ -75,7 +75,7 @@ Core 分配的字段（`cursor`、`run`、`receivedAt`）不在输入中。
 
 插件事件：`<source>.<noun>[.<verb>]`，如 `telegram.message`、`telegram.message.edited`、`cron.tick`、`webhook.github.push`、`imap.mail.received`。
 
-Core 事件：`source` 固定为 `core`，`type` 以子系统为前缀，如 `daemon.started`、`session.round_limit`、`model.error`、`fork.completed`、`approval.decided`、`budget.exhausted`。
+Core 事件：`source` 固定为 `core`，`type` 以子系统为前缀，如 `daemon.started`、`session.round_limit`、`session.turn_cancelled`、`model.error`、`scheduler.aged`、`fork.completed`、`budget.threshold`、`approval.decided`。完整列表见 [../10-architecture/02-event-model.md](../10-architecture/02-event-model.md) §3。
 
 ## 5. 示例
 

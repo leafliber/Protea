@@ -70,6 +70,18 @@ export interface UsageRecord {
 export class UsageRepo {
   constructor(private readonly db: Db) {}
 
+  /** Usage grouped by the level it is attributed to (the batch level, or a fork's level). */
+  byLevelSince(sinceMs: number): Map<Level, LevelUsage> {
+    const rows = this.db
+      .prepare(
+        `SELECT level AS l, COALESCE(SUM(cost_usd),0) AS cost,
+                COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens),0) AS tokens
+         FROM usage WHERE at_ms >= ? AND level IS NOT NULL GROUP BY level`,
+      )
+      .all(sinceMs) as Array<{ l: Level; cost: number; tokens: number }>;
+    return new Map(rows.map((r) => [r.l, { costUsd: r.cost, tokens: r.tokens }]));
+  }
+
   record(u: UsageRecord): void {
     this.db
       .prepare(
@@ -116,6 +128,11 @@ export class UsageRepo {
       cacheHitRatio: r.calls === 0 || denom === 0 ? null : r.cr / denom,
     };
   }
+}
+
+export interface LevelUsage {
+  costUsd: number;
+  tokens: number;
 }
 
 /** Small namespaced key-value store for component state (JSON values). */
@@ -167,15 +184,91 @@ export function kvNamespace(repo: KvRepo, ns: string): KvNamespace {
   };
 }
 
+export interface SessionRow {
+  id: string;
+  kind: string;
+  state: string;
+  level: Level | null;
+  parentId: string | null;
+  transcriptPath: string;
+  checkpointPath: string | null;
+  model: string | null;
+  createdAt: string;
+  endedAt: string | null;
+  summary: string | null;
+}
+
+function toSessionRow(r: Record<string, unknown>): SessionRow {
+  return {
+    id: String(r['id']),
+    kind: String(r['kind']),
+    state: String(r['state']),
+    level: r['level'] == null ? null : (Number(r['level']) as Level),
+    parentId: (r['parent_id'] as string | null) ?? null,
+    transcriptPath: String(r['transcript_path']),
+    checkpointPath: (r['checkpoint_path'] as string | null) ?? null,
+    model: (r['model'] as string | null) ?? null,
+    createdAt: String(r['created_at']),
+    endedAt: (r['ended_at'] as string | null) ?? null,
+    summary: (r['summary'] as string | null) ?? null,
+  };
+}
+
 export class SessionRepo {
   constructor(private readonly db: Db) {}
 
-  upsert(s: { id: string; kind: string; state: string; transcriptPath: string; model?: string; createdAt: string }): void {
+  upsert(s: {
+    id: string;
+    kind: string;
+    state: string;
+    transcriptPath: string;
+    model?: string;
+    createdAt: string;
+    level?: Level;
+    parentId?: string;
+    checkpointPath?: string;
+  }): void {
     this.db
       .prepare(
-        `INSERT INTO sessions (id, kind, state, transcript_path, model, created_at) VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO sessions (id, kind, state, level, parent_id, transcript_path, checkpoint_path, model, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET state = excluded.state, transcript_path = excluded.transcript_path, model = excluded.model`,
       )
-      .run(s.id, s.kind, s.state, s.transcriptPath, s.model ?? null, s.createdAt);
+      .run(
+        s.id,
+        s.kind,
+        s.state,
+        s.level ?? null,
+        s.parentId ?? null,
+        s.transcriptPath,
+        s.checkpointPath ?? null,
+        s.model ?? null,
+        s.createdAt,
+      );
+  }
+
+  setState(id: string, state: string, end?: { endedAt: string; summary?: string }): void {
+    if (end) {
+      this.db
+        .prepare('UPDATE sessions SET state = ?, ended_at = ?, summary = ? WHERE id = ?')
+        .run(state, end.endedAt, end.summary ?? null, id);
+    } else {
+      this.db.prepare('UPDATE sessions SET state = ? WHERE id = ?').run(state, id);
+    }
+  }
+
+  get(id: string): SessionRow | undefined {
+    const r = this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    return r ? toSessionRow(r) : undefined;
+  }
+
+  /** Sessions of one kind, oldest first, optionally limited to some states. */
+  list(kind: string, states?: readonly string[]): SessionRow[] {
+    const where = states && states.length > 0 ? ` AND state IN (${states.map(() => '?').join(',')})` : '';
+    return (
+      this.db
+        .prepare(`SELECT * FROM sessions WHERE kind = ?${where} ORDER BY created_at, id`)
+        .all(kind, ...(states ?? [])) as Array<Record<string, unknown>>
+    ).map(toSessionRow);
   }
 }

@@ -9,9 +9,13 @@ Protea 是一个 **24/7 常驻、事件流驱动、可热插拔** 的云端个�
 
 设计参考了 [Cortico](https://github.com/Pal-AI-Lab/Cortico) 的事件流 harness 思想，完整设计见 [docs/README.md](docs/README.md)，进度见 [路线图](docs/40-plan/01-roadmap.md)。
 
-## 当前状态：M0 内核骨架
+## 当前状态：M1 等级与抢占
 
-已可运行：事件库与门禁、批窗口调度、主会话代理循环（Claude，流式 + 自适应思考 + 提示缓存）、append-only 转录与崩溃恢复、console 与 cron 两个内置插件、HTTP 控制 API（含 SSE 实时流）与 CLI。抢占、插件热插拔、MCP、Skills、记忆、控制台与 Docker 镜像按路线图在 M1–M6 实现。
+已可运行：
+- **M0**：事件库与门禁、批窗口调度、主会话代理循环（Claude，流式 + 自适应思考 + 提示缓存）、append-only 转录与崩溃恢复、console 与 cron 两个内置插件、HTTP 控制 API（含 SSE 实时流）与 CLI。
+- **M1**：抢占矩阵（`preempt` 取消模型调用并合并重发，`interrupt` 停止回合并保留部分回执）、抢占风暴冷却、老化、按等级的预算统计、后台 Fork（主人对话时自动让路，可在重启后续跑）。
+
+插件热插拔、MCP、Skills、记忆、控制台与 Docker 镜像按路线图在 M2–M6 实现。
 
 ## 快速开始
 
@@ -39,6 +43,16 @@ PROTEA_DATA_DIR=.dev-data pnpm protea events push "明天早上 8 点提醒我�
 
 ```bash
 PROTEA_DATA_DIR=.dev-data pnpm protea events tail
+```
+
+让主人的消息打断正在进行的回合（`interrupt`），或查看后台 Fork：
+
+```bash
+PROTEA_DATA_DIR=.dev-data pnpm protea events push "停下，先回答我" --trigger interrupt
+```
+
+```bash
+PROTEA_DATA_DIR=.dev-data pnpm protea forks
 ```
 
 ## 开发

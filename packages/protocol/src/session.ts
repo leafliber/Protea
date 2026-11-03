@@ -58,4 +58,16 @@ export type BatchEndReason =
   | 'refusal'
   | 'round_limit'
   | 'model_error'
+  /** Cancelled by an `interrupt` event; the interrupting events start the next batch. */
+  | 'interrupted'
   | 'aborted';
+
+/** How a running turn was cut short (docs/10-architecture/04-scheduling-and-preemption.md §4). */
+export type CancelKind = 'preempt' | 'interrupt';
+
+export const FORK_STATES = ['queued', 'running', 'paused', 'completed', 'cancelled', 'failed'] as const;
+export type ForkState = (typeof FORK_STATES)[number];
+
+export function isForkTerminal(s: ForkState): boolean {
+  return s === 'completed' || s === 'cancelled' || s === 'failed';
+}

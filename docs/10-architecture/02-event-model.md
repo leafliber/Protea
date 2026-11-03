@@ -47,7 +47,7 @@ interface EventEnvelope {
 | `external` | 任何插件（默认） | 来自外部世界，内容不可信 | 数据，不是指令；渲染时带有来源标注与提示 |
 | `internal` | 仅 Core（及经审计的进程内插件） | 内核可验证的状态变化：插件启停、交接发生、抢占发生、预算余量、审批结果 | 可信的系统事实 |
 
-Core 自身事件的 `source` 固定为 `core`，`type` 以子系统为前缀（`daemon.*`、`session.*`、`model.*`、`core.*`）。M0 已有：
+Core 自身事件的 `source` 固定为 `core`，`type` 以子系统为前缀（`daemon.*`、`session.*`、`model.*`、`core.*`、`scheduler.*`、`budget.*`、`fork.*`）。已实现（M0–M1）：
 
 | type | 等级 / 模式 | 含义 |
 |---|---|---|
@@ -57,6 +57,12 @@ Core 自身事件的 `source` 固定为 `core`，`type` 以子系统为前缀（
 | `model.error` | L4 store | 模型调用失败且不再重试 |
 | `model.refused` | L4 piggyback | 模型拒答（附 `stop_details.category`） |
 | `core.event_downgraded` | L4 piggyback | 某事件的等级或模式被门禁调整 |
+| `session.turn_cancelled` | L4 piggyback | 回合被 `interrupt` 取消（`correlation` = 打断它的事件游标）；随打断事件进入下一批 |
+| `session.preempted` | L4 store | 模型调用被 `preempt` 取消并以合并后的事件重发（只记录） |
+| `scheduler.aged` | L4 store | 等待超过 `maxWaitMs` 的事件被提升为 `flush`（只记录） |
+| `scheduler.storm_cooldown` | L4 piggyback | 某来源触发抢占风暴，进入冷却 |
+| `budget.threshold` | L4 piggyback | 某等级 24 h 花费越过 `warnAt` 或 100%（M1 只统计、不限制） |
+| `fork.completed` / `fork.failed` | 派生等级与 L2 中较低者；≤ L3 用 flush，L4 用 piggyback | Fork 结束，正文是其最终消息或错误（`correlation` = Fork id） |
 
 插件进程试图发送 `origin: internal` 的事件会被 PluginHost 降级为 `external` 并记录警告。
 

@@ -73,7 +73,32 @@ function validate(cfg: ProteaConfig, warnings: string[]): void {
     if (s.debounceMs !== null && (typeof s.debounceMs !== 'number' || s.debounceMs < 0)) {
       throw new Error(`scheduler.levels.${l}.debounceMs must be a non-negative number or null`);
     }
+    if (typeof s.maxWaitMs !== 'number' || s.maxWaitMs < 0) {
+      throw new Error(`scheduler.levels.${l}.maxWaitMs must be a non-negative number`);
+    }
   }
+  const storm = cfg.scheduler.preemptStorm;
+  if (!(storm.count >= 1 && storm.windowMs > 0 && storm.cooldownMs >= 0)) {
+    throw new Error('scheduler.preemptStorm requires count >= 1, windowMs > 0, cooldownMs >= 0');
+  }
+  const forks = cfg.scheduler.forks;
+  if (!(forks.maxConcurrent >= 1 && forks.maxQueued >= 0 && forks.maxTurns >= 1)) {
+    throw new Error('scheduler.forks requires maxConcurrent >= 1, maxQueued >= 0, maxTurns >= 1');
+  }
+  if (forks.yieldLevel !== null && !LEVELS.includes(forks.yieldLevel)) {
+    throw new Error('scheduler.forks.yieldLevel must be a level (0-4) or null');
+  }
+  const budget = cfg.budget;
+  if (budget.dailyUsd !== null && !(typeof budget.dailyUsd === 'number' && budget.dailyUsd > 0)) {
+    throw new Error('budget.dailyUsd must be a positive number or null');
+  }
+  for (const l of LEVELS) {
+    const share = budget.shares[l as Level];
+    if (share !== null && !(typeof share === 'number' && share >= 0)) {
+      throw new Error(`budget.shares.${l} must be a non-negative number or null`);
+    }
+  }
+  if (!(budget.warnAt > 0 && budget.warnAt <= 1)) throw new Error('budget.warnAt must be in (0, 1]');
   const { soft, hard } = cfg.session.rounds;
   if (!(soft > 0 && hard >= soft)) throw new Error('session.rounds requires 0 < soft <= hard');
   if (!Array.isArray(cfg.owner.identities)) throw new Error('owner.identities must be a list');

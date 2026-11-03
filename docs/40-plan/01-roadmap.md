@@ -66,20 +66,29 @@ for i in $(seq 1 100); do PROTEA_DATA_DIR=.dev-data pnpm -s protea events push "
 PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 ```
 
-## M1 · 等级与抢占（2 周）
+## M1 · 等级与抢占（2 周）· 状态：已实现（2026-11-03）
 
 **目标**：主人的声音永远优先。
 
-- 调度器：批窗口、抢占矩阵、老化、抢占风暴防护、预算池（先只统计不限制）。
-- `preempt` / `interrupt` 实现：取消流式请求、`interruptible` 工具信号、部分回执、`turn_cancelled` 标记与 `internal` 事件。
-- Fork：派生、独立循环、暂停/恢复/检查点、容量让渡。
-- 身份映射与 L1 门禁。
+- [x] 调度器：抢占矩阵（纯函数 `decidePreemption`）、老化（提升为 flush，等级不变，重启后按 `receivedAt` 续算）、抢占风暴防护（按来源冷却）、预算池（只统计不限制，越过阈值记 `budget.threshold`）。
+- [x] `preempt` / `interrupt`：取消流式请求；`interruptible` 工具收到信号并返回部分回执，其余工具跑完，未开始的跳过；`model_call_cancelled` / `turn_cancelled` 标记；`session.preempted`、`session.turn_cancelled` 内部事件。
+- [x] Fork：`fork_spawn` / `fork_status` / `fork_cancel`，独立循环（`fork` 模型角色、受限工具表、独立转录），排队与并发上限，主会话处理 ≤ L1 批时合作式暂停、超时取消 L3/L4 Fork 的模型调用，之后恢复；检查点；停机暂停、重启后续跑；结果以 `fork.completed` 事件回到主会话。
+- [x] 内核工具 `events_promote`；控制 API `GET /api/sessions`、`/api/sessions/forks[/:id]`、`POST /api/sessions/forks/:id/cancel`、Fork 转录；SSE 增加 `scheduler`、`fork` 主题；CLI `protea forks [ls|show|cancel]`，`status` 显示预算与 Fork。
+- [x] 身份映射与 L1 门禁（M0 已实现；M1 补充"冒用 owner senderKey"的用例：身份绑定到插件，其他来源无法冒用）。
 
 **验收**：
-- [ ] 场景"晨报被主人打断"（[04-scheduling-and-preemption.md](../10-architecture/04-scheduling-and-preemption.md) §10）端到端测试：L1 事件在 ≤ 1 s 内（不含模型延迟）进入上下文。
-- [ ] L4 来源申请 `interrupt` 被降级并记录；L3 事件等待超过 maxWait 后被提升。
-- [ ] Fork 在主会话 L1 回合期间被暂停、之后恢复并完成，转录可读。
-- [ ] 不变量 I-3、I-5 测试通过。
+- [x] 场景"晨报被主人打断"（[04-scheduling-and-preemption.md](../10-architecture/04-scheduling-and-preemption.md) §10）端到端测试：L1 事件在 ≤ 1 s 内（不含模型延迟）进入上下文——`preempt` 在工具阶段等回合边界、与工具回执同一条消息；`interrupt` 取消可中断工具并开下一批；模型调用阶段的 `preempt` 取消调用后合并重发（`packages/core/test/preemption.test.ts`）。
+- [x] L4 来源申请 `interrupt` 被降级为 piggyback 并记录 `core.event_downgraded`，不取消任何回合；L3 事件等待超过 maxWait 后被提升为 flush，且不抢占正在运行的更高等级批（`preemption.test.ts`、`aging.test.ts`）。
+- [x] Fork 在主会话 L1 回合期间被暂停、之后恢复并完成，转录可经 API 读取（`forks.test.ts`、`apps/daemon/test/daemon.test.ts`）。
+- [x] 不变量 I-3、I-5 的属性测试通过（`invariants.test.ts`：随机事件序列 + 随机等级/模式/来源；I-3 检查任何转录写入都不发生在模型调用或工具运行期间、且每个请求都是上一个请求的追加扩展；I-5 检查每次取消都满足"新事件更紧急，或同级 interrupt"）。两项测试都做过变异检验：注入违规代码后测试失败。
+
+**M1 与原设计的差异**（已同步进各文档）：
+- Fork 让渡条件简化为"主会话正在运行等级 ≤ `scheduler.forks.yieldLevel`（默认 L1）的批"，不依赖 Provider 并发/速率池（尚不存在）；按池满让渡留待并发池实现。
+- 抢占风暴只计**实际执行**的取消；冷却同时作用于 `preempt` 与 `interrupt`；Core 自身事件不受限制。
+- `phase=backoff` 视同"模型调用、无外部输出"，可被 `preempt`。
+- 预算只统计：不改变调度，`budget.enforce` 留到 M6。
+- Fork 的 `seed`、`stopWhen.maxTokens|deadline`、`wrapUpHint`、经 API 派生与暂停/恢复尚未实现；已结束 Fork 的转录暂不清理（`scheduler.retention` 留到 M5）。
+- Fork 端点放在 `/api/sessions/forks` 下（与控制 API 规范一致）。
 
 ## M2 · 插件系统与热插拔（3 周）
 

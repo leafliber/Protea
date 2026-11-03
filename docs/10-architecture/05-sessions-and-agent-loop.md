@@ -24,8 +24,9 @@ stateDiagram-v2
   model --> idle: end_turn 且无工具
   tools --> model: 工具全部返回（回合边界）
   tools --> idle: endsTurn 工具返回
-  model --> delivering: preempt / interrupt（回合边界）
-  tools --> delivering: interrupt
+  model --> model: preempt（取消本次调用，追加新事件后重发）
+  model --> idle: interrupt（批以 interrupted 结束，打断事件开下一批）
+  tools --> idle: interrupt（等工具回执齐全后结束）
   model --> backoff: Provider 错误（429/5xx/网络）
   backoff --> model: 退避结束重试
   backoff --> idle: 超过重试上限（事件保留在上下文，等下一批）
@@ -43,7 +44,7 @@ stateDiagram-v2
 - **结束回合的方式**：
   1. 模型返回 `end_turn` 且无 `tool_use`；
   2. 调用了标记 `endsTurn` 的工具（如 `idle`、`sleep_until`）；
-  3. 被 `interrupt`；
+  3. 被 `interrupt`（批以 `interrupted` 结束；打断事件和 `session.turn_cancelled` 通知组成下一批，见 [04-scheduling-and-preemption.md](04-scheduling-and-preemption.md) §4）；
   4. hard 回合上限。
 
 "默认不作为"（P5）在这里体现为：模型可以在看到事件后直接 `end_turn` 而不调用任何出口工具。
@@ -71,7 +72,7 @@ runTurn(session):
 
 - **并行工具**：同一条 assistant 消息中的多个 `tool_use` 并行执行，所有 `tool_result` 回到**一条** user 消息（否则模型会学会不再并行）。
 - **`barrierAfter`**：声明了该标志的工具返回前，不开始后续工具（用于有顺序依赖的出口，如先 `tg_send` 再 `tg_pin`）。
-- **`interruptible`**：工具处理器收到 `AbortSignal`；取消后必须返回部分回执 `{ text, partial: true }`。未声明的工具运行到完成（interrupt 会等待它们）。
+- **`interruptible`**：工具处理器收到 `AbortSignal`；取消后必须返回部分回执 `{ text, partial: true }`（宽限 5 s，超时记为失败回执）。未声明的工具运行到完成（interrupt 会等待它们）；interrupt 之后尚未开始的调用（例如在 `barrierAfter` 之后）回执 `not run: the turn was interrupted`。实现上 `ToolDispatcher.runAll` 区分硬取消 `signal`（停机，全部立即取消）与软取消 `interrupt`。
 - **状态检查**：只执行 `status: completed` 的工具调用；流式中途被取消的 `tool_use` 不执行。
 - **失败回执**：处理器抛错或返回非法形状 → `{ failed: true, text: <错误摘要> }`，`is_error: true` 回传模型；绝不丢弃。
 - **副作用门禁**：`ToolDispatcher` 在执行前查询权限策略；`ask` 则创建审批并把该工具调用挂起（见 §7）。
@@ -82,8 +83,8 @@ runTurn(session):
 
 两种来源：
 
-1. 模型在主会话调用内核工具 `fork_spawn({ goal, context?, tools?, model?, level?, stopWhen? })`；
-2. 例程事件源按计划派生（`routine.*`）。
+1. 模型在主会话调用内核工具 `fork_spawn({ goal, context?, tools?, model?, level?, max_turns? })`（M1 已实现）；
+2. 例程事件源按计划派生（`routine.*`，未实现）。
 
 Fork 选项：
 
@@ -101,17 +102,26 @@ interface ForkOptions {
 }
 ```
 
+M1 实现的子集：`goal`、`context`、`tools`、`model`、`level`、`maxTurns`（工具参数 `max_turns`，上限 `scheduler.forks.maxTurns`，默认 20）、`reportTo`（默认 `main`）。`seed`、`stopWhen.maxTokens|deadline`、`wrapUpHint` 尚未实现；收尾提示是固定文本，在倒数第二回合的工具回执后追加。
+
+- **工具**：默认是工具表中没有 `sideEffect`、没有 `endsTurn`、不是 `fork_*` 的全部工具；显式列出时可以包含有副作用的工具，但 `endsTurn` 工具（`idle`、`sleep_until`）和 `fork_*` 永远不给 Fork。
+- **等级**：默认取派生批的等级；只能更低（数值更大），且至少为 L1。
+- **上下文**：Fork 的系统前缀是 identity → Fork 运行时说明 → owner（所有 Fork 共用，可缓存）；首条 user 消息是 `<fork id level max_rounds>` 包裹的目标与上下文。Fork 看不到主会话的对话，也不接收事件（I-1）。
+- **结果**：最后一条不含工具调用的 assistant 消息是结果，作为 `fork.completed` 事件回到主会话；失败为 `fork.failed`；取消不报告。
+
 ### 5.2 生命周期
 
 `queued → running → paused → running → completed | cancelled | failed`
 
 - Fork 固定其派生时的 Provider 端点与模型（主会话每次请求都读当前配置）。
 - 完成/失败时向主会话推送 `internal` 事件 `fork.completed {id, summary}`，summary 由 Fork 自己在最后一回合写出（人格的收尾提示要求它这样做）。
-- 保留最近 20 个已结束 Fork 的转录供控制台查看。
+- 保留最近 20 个已结束 Fork 的转录供控制台查看（M1：转录文件全部保留，`/api/forks` 与 `fork_status` 列出最近 10 个已结束的；清理策略随 `scheduler.retention` 实现）。
 
 ### 5.3 检查点与恢复
 
 暂停或取消时写入 `/data/sessions/forks/<id>.checkpoint.json`：`{ messages 游标, 已完成工具集合, 剩余预算, 下一步提示 }`。恢复时从转录文件重建上下文并继续；若转录中有未完成的 `tool_use`，补占位回执 `[result missing (fork paused/restarted)]`。
+
+M1 实现：检查点在每回合和每次状态变化后原子写入（临时文件 + rename），内容是派生参数与进度——`{ id, goal, context?, tools, model, level, maxTurns, parentBatch?, reportTo, state, rounds, createdAt, updatedAt, endedAt?, pauseReason?, summary?, error? }`；消息本身只在转录里（转录即游标）。`sessions` 表登记每个 Fork（`kind='fork'`、状态、等级、父批、文件路径、结束摘要）。启动时所有 `queued` / `running` / `paused` 的 Fork 重新排队；转录若以最终 assistant 消息结尾，直接记为完成。
 
 ### 5.4 可选：Claude Agent SDK 作为 Fork 执行器
 
@@ -127,7 +137,8 @@ interface ForkOptions {
 {"t":"msg","role":"user","content":[...],"batch":"b_0192","cursors":[18233,18234],"at":"..."}
 {"t":"msg","role":"assistant","content":[{"type":"thinking",...},{"type":"text",...},{"type":"tool_use",...}],"usage":{...},"at":"..."}
 {"t":"msg","role":"user","content":[{"type":"tool_result",...}],"at":"..."}
-{"t":"mark","kind":"turn_cancelled","reason":"interrupt","by":18240,"at":"..."}
+{"t":"mark","kind":"turn_cancelled","batch":"b_0192","reason":"interrupt","by":18240,"during":"tools","at":"..."}
+{"t":"mark","kind":"model_call_cancelled","batch":"b_0193","reason":"preempt","by":18251,"at":"..."}
 {"t":"mark","kind":"handoff","to":"main.0007.jsonl","at":"..."}
 ```
 
@@ -173,15 +184,15 @@ interface ForkOptions {
 
 ## 9. 内核工具（所有会话可用）
 
-M0 已实现的工具标注"✓"；`sleep_until` 与 `schedule_*` 由内置 `cron` 插件提供（它们需要日程后端），其余在 Core 中。
+已实现的工具标注"✓"（M0–M1）；`sleep_until` 与 `schedule_*` 由内置 `cron` 插件提供（它们需要日程后端），其余在 Core 中。
 
 | 工具 | 作用 | 标志 |
 |---|---|---|
 | ✓ `idle` | 明确结束回合，不做任何事 | endsTurn |
 | ✓ `sleep_until {until, note?}` | 结束回合并创建一次性 L3 唤醒事件 | endsTurn |
 | ✓ `events_query {source?, type?, states?, since_cursor?, limit?}` | 查询事件存储（含 `store` 模式归档的事件） | 只读、可并行 |
-| `events_promote {cursor, trigger}` | 把一个未投递事件升级 | |
-| `fork_spawn / fork_status / fork_cancel` | Fork 管理 | |
+| ✓ `events_promote {cursor, trigger}` | 把未投递事件（pending 或 `store` 归档的）改为 `flush` 或 `piggyback`；等级不变 | |
+| ✓ `fork_spawn / fork_status / fork_cancel` | Fork 管理（§5） | `fork_status` 只读 |
 | `memory_*` | 记忆读写（[11](11-memory-and-persona.md)） | |
 | `skill_load {name}` | 加载 Skill 正文与文件清单（[10](10-skills.md)） | 只读、可并行 |
 | ✓ `schedule_create / schedule_list / schedule_delete` | 操作 `cron` 事件源 | |

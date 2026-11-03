@@ -43,10 +43,19 @@ export interface StatusSnapshot {
   now: string;
   phase: RunPhase;
   pending: Record<Level, number>;
+  /** Remaining budget per limited level, in percent. */
+  budget?: Partial<Record<Level, number>>;
+  /** Forks that are queued, running or paused. */
+  forks?: number;
 }
 
 /** The dynamic status block. It always goes last in the message so the history before it stays cacheable. */
 export function renderStatusBlock(s: StatusSnapshot): TextBlock {
-  const pending = LEVELS.map((l) => `pending_l${l}="${s.pending[l] ?? 0}"`).join(' ');
-  return { type: 'text', text: `<status now="${attr(s.now)}" phase="${s.phase}" ${pending}/>` };
+  const parts = [`now="${attr(s.now)}"`, `phase="${s.phase}"`, ...LEVELS.map((l) => `pending_l${l}="${s.pending[l] ?? 0}"`)];
+  for (const l of LEVELS) {
+    const left = s.budget?.[l];
+    if (left !== undefined) parts.push(`budget_l${l}="${left}%"`);
+  }
+  if (s.forks) parts.push(`forks="${s.forks}"`);
+  return { type: 'text', text: `<status ${parts.join(' ')}/>` };
 }

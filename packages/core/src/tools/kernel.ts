@@ -60,6 +60,29 @@ export function kernelTools(deps: KernelToolDeps): ToolSpec<never>[] {
     },
   };
 
+  const eventsPromote: ToolSpec<{ cursor: number; trigger: 'flush' | 'piggyback' }> = {
+    name: 'events_promote',
+    description:
+      'Bring an event that has not been delivered (pending, or archived by a "store" source) into the conversation: ' +
+      '"flush" delivers it at the next turn boundary, "piggyback" with the next batch. The level never changes.',
+    inputSchema: {
+      type: 'object',
+      required: ['cursor', 'trigger'],
+      additionalProperties: false,
+      properties: {
+        cursor: { type: 'integer', minimum: 1 },
+        trigger: { type: 'string', enum: ['flush', 'piggyback'] },
+      },
+    },
+    handler: (input) => {
+      const before = deps.store.get(input.cursor);
+      if (!before) return { text: `no event #${input.cursor}`, failed: true };
+      const after = deps.store.promote(input.cursor, input.trigger);
+      if (!after) return { text: `event #${input.cursor} is already ${before.state}`, failed: true };
+      return `event #${input.cursor} (${before.type}) is pending with trigger ${input.trigger}`;
+    },
+  };
+
   const selfStatus: ToolSpec<Record<string, never>> = {
     name: 'self_status',
     description: 'Report the runtime state: phase, pending events per level, plugins, model and the last 24h of model usage.',
@@ -74,9 +97,13 @@ export function kernelTools(deps: KernelToolDeps): ToolSpec<never>[] {
         `model: ${s.provider.id}/${s.provider.mainModel}${s.provider.ready ? '' : ` (not ready: ${s.provider.problem ?? 'unknown'})`}`,
         `plugins: ${s.plugins.map((p) => `${p.id}(${p.state})`).join(', ') || 'none'}`,
         `usage 24h: ${u.calls} calls, ${u.inputTokens} in / ${u.outputTokens} out tokens, cache read ${u.cacheReadTokens}, ~$${u.costUsd.toFixed(4)}`,
+        `budget 24h${s.budget.enforced ? '' : ' (tracked, not enforced)'}: ${Object.entries(s.budget.levels)
+          .map(([l, b]) => `L${l} $${b.spentUsd.toFixed(4)}${b.limitUsd === null ? '' : ` of $${b.limitUsd.toFixed(2)}`}`)
+          .join(', ')}`,
+        `forks: ${s.forks.filter((f) => !['completed', 'cancelled', 'failed'].includes(f.state)).map((f) => `${f.id}(${f.state}, L${f.level})`).join(', ') || 'none active'}`,
       ].join('\n');
     },
   };
 
-  return [idle, eventsQuery, selfStatus] as unknown as ToolSpec<never>[];
+  return [idle, eventsQuery, eventsPromote, selfStatus] as unknown as ToolSpec<never>[];
 }

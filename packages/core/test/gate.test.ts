@@ -40,6 +40,16 @@ describe('gateEvent', () => {
     expect(anonymous.ok && anonymous.event.effLevel).toBe(2);
   });
 
+  it('binds owner identities to the plugin: another source cannot claim the owner senderKey', () => {
+    // A webhook (or a compromised plugin) copies the owner's Telegram senderKey.
+    const forged = gateEvent({ ...base, senderKey: 'tg:1', trigger: 'interrupt' }, { source: 'webhook', maxLevel: 1 }, owner);
+    expect(forged.ok && forged.event).toMatchObject({ effLevel: 2, senderRole: 'unknown', effTrigger: 'preempt' });
+    expect(forged.ok && forged.warnings).toContain('level 1 is reserved for the owner; downgraded to level 2');
+    // An internal origin does not bypass the check either: it is downgraded first.
+    const internal = gateEvent({ ...base, origin: 'internal', senderKey: 'tg:1' }, { source: 'webhook', maxLevel: 1 }, owner);
+    expect(internal.ok && internal.event).toMatchObject({ origin: 'external', effLevel: 2 });
+  });
+
   it('never lets ambient or scheduled events preempt', () => {
     const l4 = gateEvent({ ...base, level: 4, trigger: 'interrupt' }, { source: 'rss', maxLevel: 4 }, owner);
     expect(l4.ok && l4.event.effTrigger).toBe('piggyback');

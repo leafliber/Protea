@@ -195,6 +195,21 @@ export class EventStore {
     })();
   }
 
+  /**
+   * Change how a not-yet-delivered event is scheduled (aging, `events_promote`). An archived
+   * event becomes pending. The level never changes. Returns the updated envelope, or
+   * undefined if the event is gone or already in flight/terminal.
+   */
+  promote(cursor: number, trigger: Trigger): EventEnvelope | undefined {
+    const info = this.db
+      .prepare("UPDATE events SET eff_trigger = ?, state = 'pending' WHERE cursor = ? AND state IN ('pending','archived')")
+      .run(trigger, cursor);
+    if (info.changes === 0) return undefined;
+    const e = this.get(cursor);
+    if (e) this.bus.emit('event.promoted', e);
+    return e;
+  }
+
   revertToPending(cursors: readonly number[]): void {
     const stmt = this.db.prepare("UPDATE events SET state = 'pending', batch_id = NULL WHERE cursor = ? AND state = 'delivering'");
     this.db.transaction(() => {

@@ -18,7 +18,8 @@ Protea/
 │   ├── core/                    @protea/core：内核
 │   │   ├── src/
 │   │   │   ├── events/          校验（ajv）、门禁、主人映射、事件库、渲染
-│   │   │   ├── scheduler/       批窗口与投递（M1 增加抢占、老化、预算、Fork 调度）
+│   │   │   ├── scheduler/       批窗口与投递、抢占矩阵（preemption.ts）、风暴防护、老化、预算统计（budget.ts）
+│   │   │   ├── forks/           Fork 管理器（排队、让渡/恢复、检查点、重启恢复）与 fork_* 工具
 │   │   │   ├── session/         主会话循环、转录与修复、启动对账
 │   │   │   ├── context/         系统分段、运行时说明、环境提示模板、请求装配
 │   │   │   ├── tools/           工具注册表、分发器、内核工具

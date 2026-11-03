@@ -63,7 +63,9 @@ export class ToolRegistry {
     return [...this.tools.values()].sort((a, b) => (rank(a) < rank(b) ? -1 : rank(a) > rank(b) ? 1 : 0));
   }
 
-  forProvider(): ProviderToolDef[] {
-    return this.list().map((d) => ({ name: d.name, description: d.description, inputSchema: d.inputSchema }));
+  forProvider(filter?: (d: ToolDef) => boolean): ProviderToolDef[] {
+    return this.list()
+      .filter((d) => !filter || filter(d))
+      .map((d) => ({ name: d.name, description: d.description, inputSchema: d.inputSchema }));
   }
 }

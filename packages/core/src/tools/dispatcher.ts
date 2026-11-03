@@ -12,6 +12,17 @@ export interface DispatchResult {
   endsTurn: boolean;
 }
 
+export interface DispatchContext extends Omit<ToolContext, 'callId'> {
+  /**
+   * Soft cancel (an `interrupt` event). Calls that have not started are skipped,
+   * interruptible tools are signalled and return a partial receipt, and the others
+   * run to completion. `signal` stays the hard cancel (shutdown).
+   */
+  interrupt?: AbortSignal;
+  /** Restrict the callable tools (forks); others answer "not available". */
+  allowed?: ReadonlySet<string>;
+}
+
 interface OneResult {
   block: ToolResultBlock;
   endsTurn: boolean;
@@ -34,7 +45,7 @@ export class ToolDispatcher {
     private readonly defaultTimeoutMs = 60_000,
   ) {}
 
-  async runAll(uses: readonly ToolUseBlock[], ctx: Omit<ToolContext, 'callId'>): Promise<DispatchResult> {
+  async runAll(uses: readonly ToolUseBlock[], ctx: DispatchContext): Promise<DispatchResult> {
     const results: OneResult[] = new Array(uses.length);
     const inflight: Promise<void>[] = [];
     for (const [i, use] of uses.entries()) {
@@ -49,20 +60,26 @@ export class ToolDispatcher {
     return { results: results.map((r) => r.block), endsTurn: results.some((r) => r.endsTurn) };
   }
 
-  private async runOne(use: ToolUseBlock, ctx: Omit<ToolContext, 'callId'>): Promise<OneResult> {
+  private async runOne(use: ToolUseBlock, dctx: DispatchContext): Promise<OneResult> {
     const fail = (text: string): OneResult => ({
       block: { type: 'tool_result', tool_use_id: use.id, content: text, is_error: true },
       endsTurn: false,
     });
+    const { interrupt, allowed, ...ctx } = dctx;
     const def = this.registry.get(use.name);
-    if (!def) return fail(`tool ${use.name} is not available`);
+    if (!def || (allowed && !allowed.has(use.name))) return fail(`tool ${use.name} is not available`);
     const valid = this.registry.validate(use.name, use.input);
     if (!valid.ok) return fail(`invalid input for ${use.name}: ${valid.errors.join('; ')}`);
     if (ctx.signal.aborted) return fail('not run: the turn was cancelled');
+    if (interrupt?.aborted) return fail('not run: the turn was interrupted');
 
     const controller = new AbortController();
     const onParentAbort = (): void => controller.abort(ctx.signal.reason);
     ctx.signal.addEventListener('abort', onParentAbort, { once: true });
+    // Only tools that declare `interruptible` see an interrupt; the rest finish their work.
+    const softAbort = def.flags?.interruptible ? interrupt : undefined;
+    const onInterrupt = (): void => controller.abort(softAbort?.reason);
+    softAbort?.addEventListener('abort', onInterrupt, { once: true });
     const timeoutMs = def.timeoutMs ?? this.defaultTimeoutMs;
     let timedOut = false;
     const timer = setTimeout(() => {
@@ -89,11 +106,13 @@ export class ToolDispatcher {
     } catch (err) {
       if (timedOut) return fail(`${use.name} timed out after ${Math.round(timeoutMs / 1000)}s`);
       if (ctx.signal.aborted) return fail(`${use.name} was cancelled`);
+      if (softAbort?.aborted) return fail(`${use.name} was interrupted before it returned a partial result`);
       this.log.warn({ tool: use.name, callId: use.id, err: errorMessage(err) }, 'tool failed');
       return fail(`${use.name} failed: ${errorMessage(err)}`);
     } finally {
       clearTimeout(timer);
       ctx.signal.removeEventListener('abort', onParentAbort);
+      softAbort?.removeEventListener('abort', onInterrupt);
     }
   }
 }

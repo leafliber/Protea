@@ -74,8 +74,47 @@ describe('daemon', () => {
     const req = provider.calls[0];
     expect(req?.system.map((s) => s.id)).toEqual(['identity', 'runtime', 'operating', 'owner', 'env:console', 'env:cron']);
     expect(req?.tools.map((t) => t.name)).toEqual([
-      'events_query', 'idle', 'self_status', 'con_send', 'schedule_create', 'schedule_delete', 'schedule_list', 'sleep_until',
+      'events_promote', 'events_query', 'fork_cancel', 'fork_spawn', 'fork_status', 'idle', 'self_status',
+      'con_send', 'schedule_create', 'schedule_delete', 'schedule_list', 'sleep_until',
     ]);
+    expect(status['forks']).toEqual([]);
+    expect((status['budget'] as { enforced: boolean }).enforced).toBe(false);
+  });
+
+  it('runs a fork and serves it over the control API', async () => {
+    const provider = new ScriptedProvider([
+      (req) => {
+        if (req.role === 'fork') return textReply('Found 2 open invoices.');
+        const report = req.messages.some((m) => m.content.some((b) => b.type === 'text' && String(b['text']).includes('type="fork.completed"')));
+        if (report) return reply([toolCall('con_send', { text: '2 open invoices' }), toolCall('idle', {})]);
+        if (req.messages.length === 1) return reply([toolCall('fork_spawn', { goal: 'Count open invoices.' })]);
+        return reply([toolCall('idle', {})]);
+      },
+    ]);
+    const d = await start(tmp(), provider);
+    const outputs: string[] = [];
+    d.bus.on('plugin.output', (o) => outputs.push(o.text));
+    await fetch(`${d.url}/api/events`, { method: 'POST', headers: auth(d), body: JSON.stringify({ text: 'how many invoices are open?' }) });
+    await waitUntil(() => outputs.length > 0 && d.forks.list()[0]?.state === 'completed' && d.main.phase === 'idle');
+    expect(outputs).toEqual(['2 open invoices']);
+
+    const { forks } = (await (await fetch(`${d.url}/api/sessions/forks`, { headers: auth(d) })).json()) as { forks: Array<{ id: string; state: string; level: number }> };
+    expect(forks).toHaveLength(1);
+    const f = forks[0] as { id: string; state: string; level: number };
+    expect(f).toMatchObject({ state: 'completed', level: 1 });
+    const t = (await (await fetch(`${d.url}/api/sessions/${f.id}/transcript`, { headers: auth(d) })).json()) as {
+      total: number;
+      messages: Array<{ role: string }>;
+    };
+    expect(t.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+    expect((await fetch(`${d.url}/api/sessions/nope/transcript`, { headers: auth(d) })).status).toBe(404);
+    expect(fs.existsSync(path.join(d.dataDir, 'sessions', 'forks', `${f.id}.checkpoint.json`))).toBe(true);
+    const status = (await (await fetch(`${d.url}/api/status`, { headers: auth(d) })).json()) as { forks: unknown[] };
+    expect(status.forks).toHaveLength(1);
+    const { sessions } = (await (await fetch(`${d.url}/api/sessions`, { headers: auth(d) })).json()) as { sessions: Array<{ id: string; kind: string }> };
+    expect(sessions.map((x) => x.kind)).toEqual(['main', 'fork']);
+    const cancel = await fetch(`${d.url}/api/sessions/forks/${f.id}/cancel`, { method: 'POST', headers: auth(d) });
+    expect(((await cancel.json()) as { state: string }).state).toBe('completed'); // already ended: unchanged
   });
 
   it('rejects bad requests', async () => {

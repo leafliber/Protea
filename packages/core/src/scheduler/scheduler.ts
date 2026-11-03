@@ -1,11 +1,12 @@
-import type { EventEnvelope, Level } from '@protea/protocol';
+import type { EventEnvelope, EventInput, Level } from '@protea/protocol';
 import type { Bus } from '../bus.js';
-import type { LevelSettings } from '../config/types.js';
+import type { LevelSettings, PreemptStormSettings } from '../config/types.js';
 import type { BatchRepo } from '../db/repos.js';
 import type { EventStore } from '../events/store.js';
 import type { Logger } from '../observability/logger.js';
-import { newBatchId, type Batch, type BatchFeed, type MainSession } from '../session/main-session.js';
+import { newBatchId, type BatchFeed, type MainSession } from '../session/main-session.js';
 import type { Clock } from '../util/time.js';
+import { decidePreemption } from './preemption.js';
 
 export interface SchedulerOptions {
   store: EventStore;
@@ -13,23 +14,37 @@ export interface SchedulerOptions {
   main: MainSession;
   batches: BatchRepo;
   levels: Record<Level, LevelSettings>;
+  preemptStorm: PreemptStormSettings;
   log: Logger;
   clock: Clock;
+  /** Push an internal (Core) event; every scheduling intervention is recorded as one. */
+  pushInternal: (input: Omit<EventInput, 'ts' | 'origin'> & { ts?: string }) => void;
+}
+
+/** Core's own events are never throttled. */
+const CORE_SOURCE = 'core';
+
+function fmtWait(ms: number): string {
+  const s = Math.round(ms / 1000);
+  return s < 120 ? `${s}s` : `${Math.round(s / 60)}m`;
 }
 
 /**
- * Decides when pending events become a batch (docs/10-architecture/04-scheduling-and-preemption.md).
- * M0 scope: per-level debounce windows, flush, piggyback, store, and delivery at idle
- * and at turn boundaries. Preempt/interrupt currently behave like flush; aging,
- * budgets and fork scheduling arrive in M1.
+ * Decides when pending events become a batch and whether a running turn is cut short
+ * (docs/10-architecture/04-scheduling-and-preemption.md): per-level debounce windows,
+ * flush/piggyback/store, delivery at idle and at turn boundaries, the preemption
+ * matrix with storm protection, and aging. Fork scheduling lives in ForkManager.
  */
 export class Scheduler implements BatchFeed {
   private readonly windows = new Map<Level, ReturnType<typeof setTimeout>>();
   private due = false;
   private draining = false;
   private started = false;
-  private warnedPreempt = false;
-  private unsubscribe: (() => void) | null = null;
+  private unsubscribe: Array<() => void> = [];
+  private agingTimer: ReturnType<typeof setTimeout> | null = null;
+  private agingAt = Number.POSITIVE_INFINITY;
+  private readonly stormHits = new Map<string, number[]>();
+  private readonly cooldownUntil = new Map<string, number>();
 
   constructor(private readonly o: SchedulerOptions) {
     o.main.attachFeed(this);
@@ -39,7 +54,14 @@ export class Scheduler implements BatchFeed {
   start(): void {
     if (this.started) return;
     this.started = true;
-    this.unsubscribe = this.o.bus.on('event.stored', (e) => this.onStored(e));
+    this.unsubscribe.push(
+      this.o.bus.on('event.stored', (e) => this.onStored(e)),
+      this.o.bus.on('event.promoted', (e) => {
+        // The envelope is a snapshot; skip events a batch took in the meantime.
+        if (this.o.store.get(e.cursor)?.state === 'pending') this.onStored(e);
+      }),
+    );
+    this.armAging();
     if (this.o.main.needsResume()) {
       this.deliverResume();
       return;
@@ -63,15 +85,25 @@ export class Scheduler implements BatchFeed {
   drain(): void {
     this.draining = true;
     this.clearWindows();
-    this.unsubscribe?.();
+    if (this.agingTimer) clearTimeout(this.agingTimer);
+    this.agingTimer = null;
+    for (const off of this.unsubscribe) off();
+    this.unsubscribe = [];
   }
 
   get isDue(): boolean {
     return this.due;
   }
 
+  /** Sources whose preempt/interrupt requests are currently scheduled as flush. */
+  cooldowns(): Array<{ source: string; untilMs: number }> {
+    const now = this.o.clock.now();
+    return [...this.cooldownUntil].filter(([, until]) => until > now).map(([source, untilMs]) => ({ source, untilMs }));
+  }
+
   private onStored(e: EventEnvelope): void {
     if (e.state !== 'pending' || this.draining) return;
+    this.scheduleAging(e);
     switch (e.effTrigger) {
       case 'piggyback':
       case 'store':
@@ -81,19 +113,140 @@ export class Scheduler implements BatchFeed {
         if (ms !== null) this.openWindow(e.effLevel, ms);
         return;
       }
-      case 'preempt':
-      case 'interrupt':
-        if (!this.warnedPreempt) {
-          this.warnedPreempt = true;
-          this.o.log.info({ trigger: e.effTrigger }, 'preemption is not implemented yet (M1); treating as flush');
-        }
-        this.requestDelivery();
-        return;
       case 'flush':
         this.requestDelivery();
         return;
+      case 'preempt':
+      case 'interrupt': {
+        // When idle the event simply starts a batch; only a running batch can be cut short.
+        const wasBusy = this.o.main.busy;
+        this.requestDelivery();
+        if (wasBusy) this.considerCancel(e);
+        return;
+      }
     }
   }
+
+  /** Apply the preemption matrix to a preempt/interrupt event that arrived during a batch. */
+  private considerCancel(e: EventEnvelope): void {
+    const turn = this.o.main.runningTurn();
+    if (!turn) return;
+    if (e.source !== CORE_SOURCE && this.inCooldown(e.source)) {
+      this.o.log.debug({ cursor: e.cursor, source: e.source }, 'source in preemption cooldown; scheduling as flush');
+      return;
+    }
+    const decision = decidePreemption(e.effLevel, e.effTrigger, turn);
+    if (decision === 'wait') return;
+    if (!this.o.main.cancel({ kind: decision, cursor: e.cursor, source: e.source, level: e.effLevel })) return;
+    this.o.bus.emit('scheduler.action', {
+      kind: decision,
+      cursor: e.cursor,
+      source: e.source,
+      level: e.effLevel,
+      batchId: turn.batchId,
+      batchLevel: turn.batchLevel,
+      phase: turn.phase,
+    });
+    this.o.log.info({ decision, cursor: e.cursor, source: e.source, batch: turn.batchId, phase: turn.phase }, 'preemption');
+    if (e.source !== CORE_SOURCE) this.countStorm(e.source);
+  }
+
+  private inCooldown(source: string): boolean {
+    const until = this.cooldownUntil.get(source);
+    if (until === undefined) return false;
+    if (this.o.clock.now() < until) return true;
+    this.cooldownUntil.delete(source);
+    return false;
+  }
+
+  private countStorm(source: string): void {
+    const { count, windowMs, cooldownMs } = this.o.preemptStorm;
+    const now = this.o.clock.now();
+    const hits = (this.stormHits.get(source) ?? []).filter((t) => now - t < windowMs);
+    hits.push(now);
+    if (hits.length < count) {
+      this.stormHits.set(source, hits);
+      return;
+    }
+    this.stormHits.delete(source);
+    if (cooldownMs === 0) return;
+    const untilMs = now + cooldownMs;
+    this.cooldownUntil.set(source, untilMs);
+    this.o.bus.emit('scheduler.action', { kind: 'storm_cooldown', source, untilMs });
+    this.o.log.warn({ source, hits: hits.length, cooldownMs }, 'preemption storm; cooling down the source');
+    this.o.pushInternal({
+      type: 'scheduler.storm_cooldown',
+      level: 4,
+      trigger: 'piggyback',
+      text: `Source ${source} cut turns short ${hits.length} times within ${fmtWait(windowMs)}; for the next ${fmtWait(cooldownMs)} its urgent events wait for the next turn boundary instead.`,
+    });
+  }
+
+  // —— Aging ——
+
+  /** When a pending event should be promoted to flush, or null if it never ages. */
+  private agingDeadline(e: EventEnvelope): number | null {
+    if (e.effTrigger !== 'debounce' && e.effTrigger !== 'piggyback') return null;
+    const wait = this.o.levels[e.effLevel].maxWaitMs;
+    if (!wait) return null;
+    return Date.parse(e.receivedAt) + wait;
+  }
+
+  private scheduleAging(e: EventEnvelope): void {
+    const at = this.agingDeadline(e);
+    if (at !== null && at < this.agingAt) this.armAgingAt(at);
+  }
+
+  /** Re-arm the aging timer for the earliest deadline among pending events. */
+  private armAging(): void {
+    let min = Number.POSITIVE_INFINITY;
+    for (const e of this.o.store.pending()) {
+      const at = this.agingDeadline(e);
+      if (at !== null && at < min) min = at;
+    }
+    if (this.agingTimer) clearTimeout(this.agingTimer);
+    this.agingTimer = null;
+    this.agingAt = Number.POSITIVE_INFINITY;
+    if (min < Number.POSITIVE_INFINITY) this.armAgingAt(min);
+  }
+
+  private armAgingAt(at: number): void {
+    if (this.draining) return;
+    if (this.agingTimer) clearTimeout(this.agingTimer);
+    this.agingAt = at;
+    // setTimeout caps at 2^31-1 ms; a later deadline simply re-arms when this fires.
+    const delay = Math.min(Math.max(0, at - this.o.clock.now()), 2 ** 31 - 1);
+    this.agingTimer = setTimeout(() => this.runAging(), delay);
+  }
+
+  /** Promote every event that waited longer than its level's maxWaitMs to flush (level unchanged). */
+  private runAging(): void {
+    this.agingTimer = null;
+    this.agingAt = Number.POSITIVE_INFINITY;
+    if (this.draining) return;
+    const now = this.o.clock.now();
+    const aged = this.o.store.pending().filter((e) => {
+      const at = this.agingDeadline(e);
+      return at !== null && at <= now;
+    });
+    if (aged.length > 0) {
+      this.o.bus.emit('scheduler.action', { kind: 'aged', cursors: aged.map((e) => e.cursor) });
+      this.o.log.info({ cursors: aged.map((e) => e.cursor) }, 'aged events promoted to flush');
+      this.o.pushInternal({
+        type: 'scheduler.aged',
+        level: 4,
+        trigger: 'store',
+        text: `Promoted to flush after waiting too long: ${aged
+          .map((e) => `#${e.cursor} (L${e.effLevel} ${e.type}, waited ${fmtWait(now - Date.parse(e.receivedAt))})`)
+          .join(', ')}.`,
+      });
+      // Promotion re-announces each event; the first one triggers delivery of all of them.
+      for (const e of aged) this.o.store.promote(e.cursor, 'flush');
+    }
+    this.armAging();
+  }
+
+  // —— Batching ——
 
   private openWindow(level: Level, ms: number): void {
     if (this.windows.has(level)) return;

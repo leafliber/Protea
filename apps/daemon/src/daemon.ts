@@ -4,7 +4,9 @@ import { fileURLToPath } from 'node:url';
 import {
   Bus,
   BatchRepo,
+  BudgetTracker,
   ContextAssembler,
+  ForkManager,
   EventStore,
   InprocPluginHost,
   KvRepo,
@@ -22,6 +24,7 @@ import {
   createProvider,
   ensurePersona,
   errorMessage,
+  forkTools,
   isoInZone,
   kernelTools,
   loadConfig,
@@ -69,6 +72,8 @@ export interface Daemon {
   main: MainSession;
   scheduler: Scheduler;
   plugins: InprocPluginHost;
+  forks: ForkManager;
+  budget: BudgetTracker;
   console: ConsolePlugin;
   tools: ToolRegistry;
   status(): StatusResponse;
@@ -88,7 +93,7 @@ function defaultPersonaDir(env: NodeJS.ProcessEnv): string {
 export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const env = opts.env ?? process.env;
   const dataDir = path.resolve(opts.dataDir);
-  for (const d of ['sessions', 'runs', 'plugin-data', 'overrides']) fs.mkdirSync(path.join(dataDir, d), { recursive: true });
+  for (const d of ['sessions/forks', 'runs', 'plugin-data', 'overrides']) fs.mkdirSync(path.join(dataDir, d), { recursive: true });
   const lock = acquireLock(dataDir);
 
   const runId = newId();
@@ -125,7 +130,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   }
   const reconciled = reconcileDeliveries(store, transcript);
   if (reconciled.delivered + reconciled.reverted > 0) log.info(reconciled, 'reconciled deliveries with the transcript');
-  new SessionRepo(db).upsert({
+  const sessions = new SessionRepo(db);
+  sessions.upsert({
     id: 'main',
     kind: 'main',
     state: 'active',
@@ -147,6 +153,37 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const personaDir = path.join(dataDir, 'persona');
   if (ensurePersona(personaDir, defaultPersonaDir(env)).created) log.info({ dir: personaDir }, 'installed the default persona');
   const persona = loadPersona(personaDir);
+  const pushInternal = (input: Parameters<InprocPluginHost['pushInternal']>[0]): void => {
+    plugins.pushInternal(input);
+  };
+
+  const budget = new BudgetTracker({ usage, settings: config.budget, bus, log: log.child({ component: 'budget' }), clock, pushInternal });
+  const segments = new SystemSegments({
+    persona,
+    plugins,
+    timezone: tz,
+    overridesDir: path.join(dataDir, 'overrides'),
+    log: log.child({ component: 'context' }),
+  });
+  const dispatcher = new ToolDispatcher(tools, log.child({ component: 'tools' }));
+  const effort = config.providers.anthropic.effort;
+  const forks = new ForkManager({
+    dir: path.join(dataDir, 'sessions', 'forks'),
+    dataDir,
+    sessions,
+    usage,
+    bus,
+    provider,
+    tools,
+    dispatcher,
+    log: log.child({ component: 'forks' }),
+    clock,
+    settings: config.scheduler.forks,
+    backoffMs: config.session.backoffMs,
+    effortFor: (role) => (role === 'main' ? effort.main[2] : effort[role]),
+    system: () => segments.forkSegments(),
+    pushInternal,
+  });
 
   const startedAt = clock.now();
   let main: MainSession;
@@ -168,19 +205,14 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       },
       plugins: plugins.status(),
       usage24h: usage.totalsSince(clock.now() - 86_400_000),
+      forks: forks.list(),
+      budget: budget.status(),
     };
   };
   for (const spec of kernelTools({ store, status })) tools.register('core', spec);
+  for (const spec of forkTools(forks, { maxTurns: config.scheduler.forks.maxTurns })) tools.register('core', spec);
   await plugins.startAll();
 
-  const segments = new SystemSegments({
-    persona,
-    plugins,
-    timezone: tz,
-    overridesDir: path.join(dataDir, 'overrides'),
-    log: log.child({ component: 'context' }),
-  });
-  const effort = config.providers.anthropic.effort.main;
   main = new MainSession({
     transcript,
     store,
@@ -189,16 +221,20 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     bus,
     provider,
     assembler: new ContextAssembler(segments, tools),
-    dispatcher: new ToolDispatcher(tools, log.child({ component: 'tools' })),
+    dispatcher,
     log: log.child({ component: 'session' }),
     clock,
     rounds: config.session.rounds,
     backoffMs: config.session.backoffMs,
-    effortFor: (level: Level) => effort[level],
-    status: () => ({ now: isoInZone(clock.now(), tz), phase: main.phase, pending: store.pendingCounts() }),
-    pushInternal: (input) => {
-      plugins.pushInternal(input);
-    },
+    effortFor: (level: Level) => effort.main[level],
+    status: () => ({
+      now: isoInZone(clock.now(), tz),
+      phase: main.phase,
+      pending: store.pendingCounts(),
+      budget: budget.remainingPercent(),
+      forks: forks.activeCount(),
+    }),
+    pushInternal,
   });
   const scheduler = new Scheduler({
     store,
@@ -206,8 +242,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     main,
     batches,
     levels: config.scheduler.levels,
+    preemptStorm: config.scheduler.preemptStorm,
     log: log.child({ component: 'scheduler' }),
     clock,
+    pushInternal,
   });
 
   // Control plane.
@@ -226,6 +264,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     store,
     log: log.child({ component: 'control' }),
     transcript: () => transcript,
+    forks,
     status,
     ready,
     pushConsole: (req, senderKey) =>
@@ -255,6 +294,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     text: `Protea ${VERSION} started (run ${runId}); ${waiting} event(s) were waiting${main.needsResume() ? ' and an interrupted batch is resuming' : ''}.`,
   });
   scheduler.start();
+  forks.recover();
+  forks.start();
   log.info(
     { url: server.url, dataDir, provider: provider.id, model: provider.modelFor('main'), config: sources, providerReady: provider.health().ready },
     'daemon started',
@@ -266,7 +307,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       log.info({ reason }, 'stopping');
       plugins.pushInternal({ type: 'daemon.stopping', level: 4, trigger: 'store', text: `Daemon stopping: ${reason}.` });
       scheduler.drain();
-      const finished = await main.drain(config.daemon.shutdown.graceMs);
+      const graceMs = config.daemon.shutdown.graceMs;
+      const [finished] = await Promise.all([main.drain(graceMs), forks.stop(graceMs)]);
       if (!finished) log.warn('the running batch was aborted at shutdown; it resumes on the next start');
       await plugins.stopAll();
       await server.close();
@@ -291,6 +333,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     main,
     scheduler,
     plugins,
+    forks,
+    budget,
     console: consolePlugin,
     tools,
     status,

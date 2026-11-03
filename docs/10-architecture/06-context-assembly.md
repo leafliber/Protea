@@ -65,7 +65,8 @@
 - 一批 → 一条 `user` 消息；多个 `<event>` 按游标排序。
 - `external` 事件的文本原样放入 `<event>` 内；Core 不转义语义，但会转义会破坏标签结构的字符。
 - 附件（`blobs`）渲染为 `image` / `document` content block（受 Provider 接受的 MIME 类型约束，由 `modelFacts.accepts` 给出）；不接受的类型只给出句柄文本。
-- `<status>` 块固定字段：`now`、`phase`、各等级 pending 数、各等级预算余量、活跃 Fork 数。
+- `<status>` 块固定字段：`now`、`phase`、各等级 pending 数（`pending_l0..4`）；可选字段：各等级预算余量（`budget_lN="82%"`，仅在设置了 `budget.dailyUsd` 时出现）、活跃 Fork 数（`forks="2"`，为 0 时省略）。
+- Fork 的请求用另一个固定前缀：identity → Fork 运行时说明 → owner，所有 Fork 共用，工具表是该 Fork 允许的子集（[05-sessions-and-agent-loop.md](05-sessions-and-agent-loop.md) §5.1）。
 
 ## 6. 会话中系统消息
 

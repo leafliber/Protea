@@ -3,7 +3,17 @@ import path from 'node:path';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { TRIGGERS, type Level, type Trigger } from '@protea/protocol';
-import { ScriptedProvider, reply, sleep, textReply, toolCall, type ProviderRequest } from '../src/index.js';
+import {
+  ScriptedProvider,
+  reply,
+  sleep,
+  textReply,
+  toolCall,
+  type Provider,
+  type ProviderRequest,
+  type ScriptStep,
+  type ToolSpec,
+} from '../src/index.js';
 import { makeHarness, waitFor } from './helpers.js';
 
 function transcriptCursorCounts(file: string): Map<number, number> {
@@ -16,7 +26,192 @@ function transcriptCursorCounts(file: string): Map<number, number> {
   return counts;
 }
 
+/** Wraps a scripted provider to count model calls in flight. */
+function countingProvider(steps: ScriptStep[]): { provider: Provider; inner: ScriptedProvider; inFlight: () => number } {
+  const inner = new ScriptedProvider(steps);
+  let n = 0;
+  const provider: Provider = {
+    id: 'counting',
+    modelFor: (r) => inner.modelFor(r),
+    health: () => inner.health(),
+    generate: async (req, opts) => {
+      n++;
+      try {
+        return await inner.generate(req, opts);
+      } finally {
+        n--;
+      }
+    },
+  };
+  return { provider, inner, inFlight: () => n };
+}
+
+/** Tools that count how many handlers are running; `iwork` is interruptible. */
+function countedTools(): { tools: ToolSpec<never>[]; running: () => number } {
+  let n = 0;
+  const make = (name: string, ms: number, interruptible: boolean): ToolSpec<never> => {
+    const spec: ToolSpec<Record<string, unknown>> = {
+      name,
+      description: name,
+      inputSchema: { type: 'object' },
+      ...(interruptible ? { flags: { interruptible: true } } : {}),
+      handler: (_i, ctx) =>
+        new Promise((resolve) => {
+          n++;
+          const done = (text: string): void => {
+            n--;
+            resolve({ text, ...(text.endsWith('partial') ? { partial: true } : {}) });
+          };
+          const t = setTimeout(() => done(`${name} done`), ms);
+          ctx.signal.addEventListener(
+            'abort',
+            () => {
+              clearTimeout(t);
+              done(`${name} partial`);
+            },
+            { once: true },
+          );
+        }),
+    };
+    return spec as unknown as ToolSpec<never>;
+  };
+  return { tools: [make('work', 8, false), make('iwork', 30, true)], running: () => n };
+}
+
+const SOURCES = [
+  { source: 'test', maxLevel: 1 as Level },
+  { source: 'hook', maxLevel: 2 as Level },
+  { source: 'cron', maxLevel: 3 as Level },
+  { source: 'rss', maxLevel: 4 as Level },
+];
+
+const mixedSteps = (mode: number): ScriptStep[] => [
+  async (_req, i, { signal }) => {
+    await sleep(i === 0 ? 40 : 3 + (i % 3) * 5, signal);
+    switch ((i + mode) % 4) {
+      case 0:
+        return reply([toolCall('work', {}), toolCall('iwork', {}), toolCall('say', { text: 'x' })]);
+      case 1:
+        return reply([toolCall('iwork', {})]);
+      case 2:
+        return textReply('ok');
+      default:
+        return reply([toolCall('idle', {})]);
+    }
+  },
+];
+
+/** Every run starts with a busy L3 batch and an owner event that preempts it, then the random events follow. */
+async function seedPreemption(h: ReturnType<typeof makeHarness>): Promise<void> {
+  h.push({ text: 'seed brief', level: 3, trigger: 'flush' }, 'cron', 3);
+  await waitFor(() => h.main.phase === 'model');
+  h.push({ text: 'seed owner', level: 1, trigger: 'preempt' });
+}
+
 describe('invariants', () => {
+  it('I-3: the conversation only changes at turn boundaries, across preempts and interrupts', async () => {
+    const op = fc.record({
+      src: fc.integer({ min: 0, max: 3 }),
+      level: fc.constantFrom<Level>(1, 2, 3, 4),
+      trigger: fc.constantFrom<Trigger>(...TRIGGERS),
+      gapMs: fc.integer({ min: 0, max: 15 }),
+    });
+    let cancels = 0;
+    await fc.assert(
+      fc.asyncProperty(fc.array(op, { minLength: 1, maxLength: 10 }), fc.integer({ min: 0, max: 3 }), async (ops, mode) => {
+        const { provider, inner, inFlight } = countingProvider(mixedSteps(mode));
+        const counted = countedTools();
+        const h = makeHarness({ provider, extraTools: counted.tools });
+        const violations: string[] = [];
+        const append = h.transcript.appendMessage.bind(h.transcript);
+        h.transcript.appendMessage = (m) => {
+          if (inFlight() > 0 || counted.running() > 0) {
+            violations.push(`append of a ${m.role} message with ${inFlight()} model call(s) and ${counted.running()} tool(s) running`);
+          }
+          append(m);
+        };
+        h.bus.on('scheduler.action', (a) => {
+          if (a.kind === 'preempt' || a.kind === 'interrupt') cancels++;
+        });
+        try {
+          await seedPreemption(h);
+          for (const o of ops) {
+            const s = SOURCES[o.src] as (typeof SOURCES)[number];
+            h.push({ text: `e ${o.level} ${o.trigger}`, level: o.level, trigger: o.trigger }, s.source, s.maxLevel);
+            if (o.gapMs) await sleep(o.gapMs);
+          }
+          await h.idle(10_000);
+          expect(violations).toEqual([]);
+          // Every request extends the one before it: nothing in the context was ever rewritten.
+          const flat = (req: ProviderRequest): string[] => req.messages.flatMap((m) => m.content.map((b) => `${m.role}:${JSON.stringify(b)}`));
+          for (let i = 1; i < inner.calls.length; i++) {
+            const a = flat(inner.calls[i - 1] as ProviderRequest);
+            expect(flat(inner.calls[i] as ProviderRequest).slice(0, a.length)).toEqual(a);
+          }
+        } finally {
+          await h.close();
+        }
+      }),
+      { numRuns: 25 },
+    );
+    expect(cancels).toBeGreaterThan(0); // the runs did exercise preemption
+  }, 120_000);
+
+  it('I-5: a turn is only cut short by a more urgent event, or by an interrupt of the same level', async () => {
+    const op = fc.record({
+      src: fc.integer({ min: 0, max: 3 }),
+      level: fc.constantFrom<Level>(0, 1, 2, 3, 4),
+      trigger: fc.constantFrom<Trigger>(...TRIGGERS),
+      gapMs: fc.integer({ min: 0, max: 12 }),
+    });
+    let checked = 0;
+    await fc.assert(
+      fc.asyncProperty(fc.array(op, { minLength: 2, maxLength: 12 }), fc.integer({ min: 0, max: 3 }), async (ops, mode) => {
+        const counted = countedTools();
+        const h = makeHarness({ steps: mixedSteps(mode), extraTools: counted.tools });
+        // The batch level as observed from outside the scheduler.
+        let current: Level | null = null;
+        h.bus.on('batch.started', (b) => {
+          current = b.level;
+        });
+        h.bus.on('batch.extended', (b) => {
+          current = b.level;
+        });
+        h.bus.on('batch.ended', () => {
+          current = null;
+        });
+        const bad: string[] = [];
+        h.bus.on('scheduler.action', (a) => {
+          if (a.kind !== 'preempt' && a.kind !== 'interrupt') return;
+          checked++;
+          const ev = h.store.get(a.cursor);
+          const lvl = ev?.effLevel;
+          const ok =
+            current !== null &&
+            lvl !== undefined &&
+            lvl <= 2 &&
+            (a.kind === 'preempt' ? lvl < current : lvl <= 1 && lvl <= current) &&
+            a.batchLevel === current;
+          if (!ok) bad.push(`${a.kind} by L${lvl} event #${a.cursor} of a L${current} batch`);
+        });
+        try {
+          await seedPreemption(h);
+          for (const o of ops) {
+            const s = SOURCES[o.src] as (typeof SOURCES)[number];
+            h.push({ text: `e ${o.level} ${o.trigger}`, level: o.level, trigger: o.trigger }, s.source, s.maxLevel);
+            if (o.gapMs) await sleep(o.gapMs);
+          }
+          await h.idle(10_000);
+          expect(bad).toEqual([]);
+        } finally {
+          await h.close();
+        }
+      }),
+      { numRuns: 30 },
+    );
+    expect(checked).toBeGreaterThan(0);
+  }, 120_000);
+
   it('I-1/I-2: batches never overlap and every event ends with exactly one terminal record, across aborts and restarts', async () => {
     const op = fc.record({
       level: fc.constantFrom<Level>(1, 2, 3, 4),

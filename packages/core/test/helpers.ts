@@ -4,26 +4,34 @@ import path from 'node:path';
 import type { EventInput, Level } from '@protea/protocol';
 import {
   BatchRepo,
+  BudgetTracker,
   Bus,
   ContextAssembler,
   EventStore,
+  ForkManager,
   InprocPluginHost,
   KvRepo,
   MainSession,
   OwnerRegistry,
   Scheduler,
   ScriptedProvider,
+  SessionRepo,
   ToolDispatcher,
   ToolRegistry,
   Transcript,
   UsageRepo,
   defaultConfig,
+  forkTools,
+  kernelTools,
   openDatabase,
   reconcileDeliveries,
   silentLogger,
   systemClock,
   textReply,
+  type BudgetSettings,
+  type ForkSchedulerSettings,
   type LevelSettings,
+  type PreemptStormSettings,
   type Provider,
   type ScriptStep,
   type ToolSpec,
@@ -58,6 +66,10 @@ export interface HarnessOptions {
   backoffMs?: number[];
   extraTools?: ToolSpec<never>[];
   start?: boolean;
+  preemptStorm?: PreemptStormSettings;
+  forks?: Partial<ForkSchedulerSettings>;
+  budget?: Partial<BudgetSettings>;
+  outputTap?: (delta: string) => void;
 }
 
 /** A Core assembled the way the daemon does it, minus HTTP, with a scripted provider. */
@@ -81,6 +93,37 @@ export function makeHarness(opts: HarnessOptions = {}) {
   const tools = new ToolRegistry();
   const plugins = new InprocPluginHost({ store, bus, owner, kv, tools, log, clock: systemClock, dataDir: dir, timezone: 'UTC' });
   const provider = opts.provider ?? new ScriptedProvider(opts.steps ?? [() => textReply('ok')]);
+  const pushInternal = (input: Parameters<InprocPluginHost['pushInternal']>[0]): void => {
+    plugins.pushInternal(input);
+  };
+  const defaults = defaultConfig();
+  const dispatcher = new ToolDispatcher(tools, log);
+  const sessions = new SessionRepo(db);
+  const forks = new ForkManager({
+    dir: path.join(dir, 'forks'),
+    dataDir: dir,
+    sessions,
+    usage,
+    bus,
+    provider,
+    tools,
+    dispatcher,
+    log,
+    clock: systemClock,
+    settings: { ...defaults.scheduler.forks, ...opts.forks },
+    backoffMs: opts.backoffMs ?? [5, 5],
+    effortFor: () => 'high',
+    system: () => [{ id: 'runtime', text: 'You are a test fork.' }],
+    pushInternal,
+  });
+  const budget = new BudgetTracker({
+    usage,
+    settings: { ...defaults.budget, ...opts.budget },
+    bus,
+    log,
+    clock: systemClock,
+    pushInternal,
+  });
 
   const outputs: string[] = [];
   const say: ToolSpec<{ text: string }> = {
@@ -101,6 +144,9 @@ export function makeHarness(opts: HarnessOptions = {}) {
     handler: () => 'ok',
   };
   tools.register('core', idle);
+  const kernel = kernelTools({ store, status: () => { throw new Error('self_status is not available in tests'); } });
+  for (const t of kernel.filter((k) => k.name.startsWith('events_'))) tools.register('core', t);
+  for (const t of forkTools(forks, { maxTurns: defaults.scheduler.forks.maxTurns })) tools.register('core', t);
   tools.register('test', say);
   for (const t of opts.extraTools ?? []) tools.register('test', t);
 
@@ -113,16 +159,15 @@ export function makeHarness(opts: HarnessOptions = {}) {
     bus,
     provider,
     assembler,
-    dispatcher: new ToolDispatcher(tools, log),
+    dispatcher,
     log,
     clock: systemClock,
     rounds: opts.rounds ?? { soft: 12, hard: 30 },
     backoffMs: opts.backoffMs ?? [5, 5],
     effortFor: (l) => (l <= 1 ? 'medium' : 'high'),
     status: () => ({ now: '2026-11-03T00:00:00Z', phase: main.phase, pending: store.pendingCounts() }),
-    pushInternal: (input) => {
-      plugins.pushInternal(input);
-    },
+    pushInternal,
+    ...(opts.outputTap ? { outputTap: opts.outputTap } : {}),
   });
   const scheduler = new Scheduler({
     store,
@@ -130,10 +175,16 @@ export function makeHarness(opts: HarnessOptions = {}) {
     main,
     batches,
     levels: opts.levels ?? FAST_LEVELS,
+    preemptStorm: opts.preemptStorm ?? defaults.scheduler.preemptStorm,
     log,
     clock: systemClock,
+    pushInternal,
   });
-  if (opts.start !== false) scheduler.start();
+  if (opts.start !== false) {
+    scheduler.start();
+    forks.recover();
+    forks.start();
+  }
 
   let seq = 0;
   const push = (input: Partial<EventInput> & { text: string }, source = 'test', maxLevel: Level = 1) =>
@@ -167,13 +218,16 @@ export function makeHarness(opts: HarnessOptions = {}) {
     provider,
     main,
     scheduler,
+    forks,
+    budget,
+    sessions,
     outputs,
     listenerErrors,
     push,
     idle: (timeoutMs = 5000) => waitFor(idleNow, timeoutMs, 'idle'),
     close: async (drainMs = 1000) => {
       scheduler.drain();
-      await main.drain(drainMs);
+      await Promise.all([main.drain(drainMs), forks.stop(drainMs)]);
       transcript.close();
       db.close();
     },

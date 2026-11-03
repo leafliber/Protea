@@ -51,13 +51,14 @@ export interface RepairReport {
 }
 
 export const MISSING_RESULT_TEXT = '[result missing (process restart)]';
+export const FORK_MISSING_RESULT_TEXT = '[result missing (fork paused/restarted)]';
 
 export class TranscriptCorruptError extends Error {
   override readonly name = 'TranscriptCorruptError';
 }
 
-function placeholder(toolUseId: string): ToolResultBlock {
-  return { type: 'tool_result', tool_use_id: toolUseId, content: MISSING_RESULT_TEXT, is_error: true };
+function placeholder(toolUseId: string, text = MISSING_RESULT_TEXT): ToolResultBlock {
+  return { type: 'tool_result', tool_use_id: toolUseId, content: text, is_error: true };
 }
 
 interface Derived {
@@ -67,7 +68,11 @@ interface Derived {
 }
 
 /** Rebuild the message list from raw records and recorded repair actions. Deterministic. */
-export function deriveMessages(records: readonly MsgRecord[], repairs: readonly RepairAction[]): Derived[] {
+export function deriveMessages(
+  records: readonly MsgRecord[],
+  repairs: readonly RepairAction[],
+  missingText = MISSING_RESULT_TEXT,
+): Derived[] {
   const drops = new Map<number, Set<string>>();
   const inserts = new Map<number, string[]>();
   for (const r of repairs) {
@@ -93,7 +98,7 @@ export function deriveMessages(records: readonly MsgRecord[], repairs: readonly 
     if (content.length > 0) out.push({ msg: { role: rec.role, content }, src: i });
     const ins = inserts.get(i);
     if (ins && ins.length > 0) {
-      const blocks = ins.map(placeholder);
+      const blocks = ins.map((id) => placeholder(id, missingText));
       if (records[i + 1]?.role === 'user') prepend = blocks;
       else out.push({ msg: { role: 'user', content: blocks }, src: null });
     }
@@ -153,13 +158,19 @@ export class Transcript {
   private constructor(
     readonly file: string,
     private readonly now: () => string,
+    private readonly missingText: string,
   ) {
     this.fd = fs.openSync(file, 'a');
   }
 
   static open(
     file: string,
-    opts: { now?: () => string; onDiscarded?: (record: Record<string, unknown>) => void } = {},
+    opts: {
+      now?: () => string;
+      onDiscarded?: (record: Record<string, unknown>) => void;
+      /** Text of placeholder results for tool calls whose result was lost. */
+      missingResultText?: string;
+    } = {},
   ): { transcript: Transcript; report: RepairReport } {
     const now = opts.now ?? (() => new Date().toISOString());
     const report: RepairReport = { file, terminatedLastLine: false, truncatedBytes: 0, actions: [], placeholderResults: [] };
@@ -189,7 +200,8 @@ export class Transcript {
       }
     }
 
-    const t = new Transcript(file, now);
+    const missingText = opts.missingResultText ?? MISSING_RESULT_TEXT;
+    const t = new Transcript(file, now, missingText);
     if (isNew) t.appendMark('session_start', { file: path.basename(file) });
     else t.load(opts.onDiscarded);
 
@@ -203,11 +215,11 @@ export class Transcript {
       }
       t.appendMark('repair', { actions: plan.actions });
       t.repairs.push(...plan.actions);
-      t.derived = deriveMessages(t.records, t.repairs);
+      t.derived = deriveMessages(t.records, t.repairs, missingText);
       report.actions = plan.actions;
     }
     if (plan.appendPlaceholders.length > 0) {
-      t.appendMessage({ role: 'user', content: plan.appendPlaceholders.map(placeholder), repair: true });
+      t.appendMessage({ role: 'user', content: plan.appendPlaceholders.map((id) => placeholder(id, missingText)), repair: true });
       report.placeholderResults = plan.appendPlaceholders;
     }
     return { transcript: t, report };
@@ -237,7 +249,7 @@ export class Transcript {
         onDiscarded?.({ kind: 'unknown-record', file: this.file, line: i + 1 });
       }
     });
-    this.derived = deriveMessages(this.records, this.repairs);
+    this.derived = deriveMessages(this.records, this.repairs, this.missingText);
   }
 
   private writeLine(obj: TranscriptRecord): void {
@@ -296,6 +308,27 @@ export class Transcript {
   close(): void {
     fs.closeSync(this.fd);
   }
+}
+
+/** Read a transcript's messages without opening it for writing (nothing is repaired or recorded). */
+export function readTranscript(file: string, missingText = MISSING_RESULT_TEXT): TranscriptMessage[] {
+  if (!fs.existsSync(file)) return [];
+  const records: MsgRecord[] = [];
+  const repairs: RepairAction[] = [];
+  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+    if (line.trim() === '') continue;
+    let rec: TranscriptRecord;
+    try {
+      rec = JSON.parse(line) as TranscriptRecord;
+    } catch {
+      continue; // an unterminated tail; the writer repairs it on open
+    }
+    if (rec.t === 'msg' && Array.isArray(rec.content)) records.push(rec);
+    else if (rec.t === 'mark' && rec.kind === 'repair' && Array.isArray(rec['actions'])) {
+      repairs.push(...(rec['actions'] as RepairAction[]));
+    }
+  }
+  return deriveMessages(records, repairs, missingText).map((d) => d.msg);
 }
 
 /** Resolve the current main transcript file via the `main.current` pointer (handoff rotates it from M4). */

@@ -31,12 +31,16 @@ export class ContextAssembler {
     private readonly tools: ToolRegistry,
   ) {}
 
-  build(messages: readonly TranscriptMessage[], opts: { role: ModelRole; effort: Effort }): ProviderRequest {
+  build(
+    messages: readonly TranscriptMessage[],
+    opts: { role: ModelRole; effort: Effort; tools?: ReadonlySet<string> },
+  ): ProviderRequest {
+    const allowed = opts.tools;
     return {
       role: opts.role,
       system: this.source.segments(),
       messages: mergeConsecutive(messages),
-      tools: this.tools.forProvider(),
+      tools: this.tools.forProvider(allowed ? (d) => allowed.has(d.name) : undefined),
       effort: opts.effort,
     };
   }

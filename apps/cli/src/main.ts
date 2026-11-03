@@ -1,8 +1,17 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
-import { LEVELS, TRIGGERS, isLevel, isTrigger, type EventEnvelope, type PushEventResponse, type StatusResponse } from '@protea/protocol';
+import {
+  LEVELS,
+  TRIGGERS,
+  isLevel,
+  isTrigger,
+  type EventEnvelope,
+  type ForkInfo,
+  type PushEventResponse,
+  type StatusResponse,
+} from '@protea/protocol';
 import { api, defaultDataDir, resolveClient, stream, type ClientOptions } from './client.js';
-import { bold, dim, formatEvent, formatStatus, green, red } from './format.js';
+import { bold, dim, formatEvent, formatFork, formatStatus, green, red, yellow } from './format.js';
 
 const HELP = `protea — Protea personal assistant runtime
 
@@ -14,6 +23,9 @@ Usage:
   protea events tail [--since CURSOR] [--level N] [--source ID]
                                                 follow events, batches and outputs live
   protea events ls [--limit N] [--state S]      list recent events
+  protea forks [ls]                             list unfinished and recently ended forks
+  protea forks show <id>                        show a fork and its transcript
+  protea forks cancel <id>                      cancel a fork
 
 Common options:
   --url URL        control API (default $PROTEA_URL or http://127.0.0.1:7788)
@@ -154,6 +166,22 @@ async function tail(): Promise<void> {
         case 'output':
           console.log(`${bold('◂')} ${dim(`${String(data['plugin'])}:`)} ${String(data['text'])}`);
           break;
+        case 'scheduler': {
+          const kind = String(data['kind']);
+          const detail =
+            kind === 'preempt' || kind === 'interrupt'
+              ? `#${String(data['cursor'])} (L${String(data['level'])}) cut ${String(data['batchId'])} (L${String(data['batchLevel'])}, ${String(data['phase'])})`
+              : kind === 'aged'
+                ? (data['cursors'] as number[]).map((c) => `#${c}`).join(' ')
+                : kind === 'storm_cooldown'
+                  ? String(data['source'])
+                  : (data['forkIds'] as string[]).join(' ');
+          console.log(yellow(`  ⚡ ${kind} ${detail}`));
+          break;
+        }
+        case 'fork':
+          console.log(dim(`  ⑂ ${formatFork(data as unknown as ForkInfo)}`));
+          break;
       }
     }
   } catch (err) {
@@ -166,6 +194,44 @@ async function ls(): Promise<void> {
   const q = new URLSearchParams({ limit: String(limit), ...(values.state ? { state: values.state } : {}) });
   const { events } = await api<{ events: EventEnvelope[] }>(client(), 'GET', `/api/events?${q.toString()}`);
   for (const e of [...events].reverse()) console.log(formatEvent(e));
+}
+
+async function forks(sub: string | undefined, id: string | undefined): Promise<number> {
+  const o = client();
+  if (sub === undefined || sub === 'ls') {
+    const { forks: all } = await api<{ forks: ForkInfo[] }>(o, 'GET', '/api/sessions/forks');
+    if (all.length === 0) console.log(dim('no forks'));
+    for (const f of all) console.log(formatFork(f));
+    return 0;
+  }
+  if (!id) throw new Error(`forks ${sub} needs a fork id`);
+  if (sub === 'cancel') {
+    console.log(formatFork(await api<ForkInfo>(o, 'POST', `/api/sessions/forks/${encodeURIComponent(id)}/cancel`)));
+    return 0;
+  }
+  if (sub === 'show') {
+    console.log(formatFork(await api<ForkInfo>(o, 'GET', `/api/sessions/forks/${encodeURIComponent(id)}`)));
+    const t = await api<{ messages: Array<{ role: string; content: Array<Record<string, unknown>> }> }>(
+      o,
+      'GET',
+      `/api/sessions/${encodeURIComponent(id)}/transcript?from=0&limit=500`,
+    );
+    for (const m of t.messages) {
+      for (const b of m.content) {
+        const body =
+          b['type'] === 'text'
+            ? String(b['text'])
+            : b['type'] === 'tool_use'
+              ? `→ ${String(b['name'])} ${JSON.stringify(b['input'])}`
+              : b['type'] === 'tool_result'
+                ? `← ${typeof b['content'] === 'string' ? b['content'] : JSON.stringify(b['content'])}`
+                : `[${String(b['type'])}]`;
+        console.log(`${m.role === 'assistant' ? bold('assistant') : dim('user')}  ${body}`);
+      }
+    }
+    return 0;
+  }
+  throw new Error(`unknown forks command: ${sub}`);
 }
 
 async function main(): Promise<number> {
@@ -191,6 +257,8 @@ async function main(): Promise<number> {
       if (sub === 'tail') return tail().then(() => 0);
       if (sub === 'ls') return ls().then(() => 0);
       break;
+    case 'forks':
+      return forks(sub, rest[0]);
   }
   console.error(`unknown command: ${positionals.join(' ')}\n\n${HELP}`);
   return 1;

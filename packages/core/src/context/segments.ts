@@ -5,7 +5,7 @@ import type { Logger } from '../observability/logger.js';
 import { errorMessage } from '../util/errors.js';
 import type { SegmentSource } from './assembler.js';
 import { loadEnvPromptTemplate, renderEnvPrompt } from './env-prompts.js';
-import { runtimeNotes } from './runtime-notes.js';
+import { forkNotes, runtimeNotes } from './runtime-notes.js';
 
 export interface SegmentSourceOptions {
   persona: PersonaFiles;
@@ -22,16 +22,31 @@ export interface SegmentSourceOptions {
  */
 export class SystemSegments implements SegmentSource {
   private cached: SystemSegment[] | null = null;
+  private cachedFork: SystemSegment[] | null = null;
 
   constructor(private readonly o: SegmentSourceOptions) {}
 
   refresh(): void {
     this.cached = null;
+    this.cachedFork = null;
   }
 
   segments(): SystemSegment[] {
     if (!this.cached) this.cached = this.build();
     return this.cached;
+  }
+
+  /** Prefix for forks: identity → fork runtime → owner. Shared by all forks so it caches. */
+  forkSegments(): SystemSegment[] {
+    if (!this.cachedFork) {
+      const { persona } = this.o;
+      const segs: SystemSegment[] = [];
+      if (persona.soul) segs.push({ id: 'identity', text: persona.soul });
+      segs.push({ id: 'runtime', text: forkNotes({ timezone: this.o.timezone }) });
+      if (persona.user) segs.push({ id: 'owner', text: persona.user });
+      this.cachedFork = segs;
+    }
+    return this.cachedFork;
   }
 
   private build(): SystemSegment[] {

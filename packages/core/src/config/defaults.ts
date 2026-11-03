@@ -14,7 +14,10 @@ export function defaultConfig(): ProteaConfig {
         3: { debounceMs: 30_000, maxWaitMs: 300_000 },
         4: { debounceMs: null, maxWaitMs: 1_800_000 },
       },
+      preemptStorm: { count: 3, windowMs: 10_000, cooldownMs: 60_000 },
+      forks: { maxConcurrent: 2, maxQueued: 8, yieldLevel: 1, yieldTimeoutMs: 30_000, maxTurns: 20 },
     },
+    budget: { dailyUsd: null, shares: { 0: null, 1: 0.6, 2: 0.2, 3: 0.15, 4: 0.05 }, warnAt: 0.9 },
     session: { rounds: { soft: 12, hard: 30 }, backoffMs: [5_000, 15_000, 45_000] },
     providers: {
       default: 'anthropic',
@@ -51,6 +54,9 @@ export const STARTER_CONFIG_YAML = `# Protea configuration. Every key is optiona
 # owner:
 #   identities:
 #     - { plugin: console, senderKey: "*" }
+
+# budget:
+#   dailyUsd: 5              # tracked per level (L1 60 %, L2 20 %, L3 15 %, L4 5 %); not enforced yet
 
 # providers:
 #   default: anthropic        # or "echo" for offline development

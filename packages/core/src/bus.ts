@@ -1,4 +1,13 @@
-import type { BatchEndReason, BatchReason, EventEnvelope, Level, RunPhase, TerminalOutcome } from '@protea/protocol';
+import type {
+  BatchEndReason,
+  BatchReason,
+  EventEnvelope,
+  ForkInfo,
+  Level,
+  RunPhase,
+  SchedulerAction,
+  TerminalOutcome,
+} from '@protea/protocol';
 import type { UsageRecord } from './db/repos.js';
 
 export interface SettledData {
@@ -10,13 +19,17 @@ export interface SettledData {
 
 export interface BusTopics {
   'event.stored': EventEnvelope;
+  /** A pending or archived event got a new trigger (aging, events_promote). */
+  'event.promoted': EventEnvelope;
   'event.settled': SettledData;
   'session.phase': { sessionId: string; phase: RunPhase; batchId?: string; round?: number };
   'batch.started': { batchId: string; level: Level; reason: BatchReason; cursors: number[] };
-  'batch.extended': { batchId: string; cursors: number[] };
+  'batch.extended': { batchId: string; cursors: number[]; level: Level };
   'batch.ended': { batchId: string; endReason: BatchEndReason; rounds: number };
   'plugin.output': { plugin: string; channel?: string; text: string; at: string };
   'usage.recorded': UsageRecord;
+  'scheduler.action': SchedulerAction;
+  'fork.changed': ForkInfo;
 }
 
 export type BusTopic = keyof BusTopics;

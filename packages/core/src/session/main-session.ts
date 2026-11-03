@@ -2,6 +2,7 @@ import {
   isToolUseBlock,
   type BatchEndReason,
   type BatchReason,
+  type CancelKind,
   type ContentBlock,
   type Effort,
   type EventEnvelope,
@@ -17,6 +18,7 @@ import { renderEventsBlock, renderStatusBlock, type StatusSnapshot } from '../ev
 import type { EventStore } from '../events/store.js';
 import type { Logger } from '../observability/logger.js';
 import { ProviderError, type Provider, type ProviderResponse } from '../providers/types.js';
+import type { RunningTurn } from '../scheduler/preemption.js';
 import type { ToolDispatcher } from '../tools/dispatcher.js';
 import { isAbortError, sleep } from '../util/abort.js';
 import { errorMessage } from '../util/errors.js';
@@ -29,6 +31,14 @@ export interface Batch {
   level: Level;
   reason: BatchReason;
   events: EventEnvelope[];
+}
+
+/** The event that cut a turn short. */
+export interface CancelCause {
+  kind: CancelKind;
+  cursor: number;
+  source: string;
+  level: Level;
 }
 
 /** What the session needs from the scheduler. */
@@ -56,6 +66,25 @@ export interface MainSessionOptions {
   status: () => StatusSnapshot;
   /** Push an internal (Core) event. */
   pushInternal: (input: Omit<EventInput, 'ts' | 'origin'> & { ts?: string }) => void;
+  /**
+   * Optional streaming output tap (e.g. a typing indicator or live text to a channel).
+   * Once it has received text, the model call counts as having external output and
+   * can no longer be preempted (only interrupted).
+   */
+  outputTap?: (delta: string, ctx: { batchId: string }) => void;
+}
+
+interface Running {
+  batch: Batch;
+  /** Hard abort: shutdown. Everything stops; the batch resumes after restart. */
+  abort: AbortController;
+  /** Interrupt: cancels the model call and interruptible tools; the batch ends. */
+  turn: AbortController;
+  /** Preempt: cancels only the current model call, which is then re-issued with the new events. */
+  call: AbortController | null;
+  externalOutput: boolean;
+  cancel: CancelCause | null;
+  done: Promise<void>;
 }
 
 const SESSION_ID = 'main';
@@ -67,7 +96,7 @@ const SESSION_ID = 'main';
  */
 export class MainSession {
   private _phase: RunPhase = 'idle';
-  private current: { batch: Batch; abort: AbortController; done: Promise<void> } | null = null;
+  private current: Running | null = null;
   private feed: BatchFeed | null = null;
 
   constructor(private readonly o: MainSessionOptions) {}
@@ -88,6 +117,34 @@ export class MainSession {
     return this.current?.batch.id ?? null;
   }
 
+  /** The running batch as the preemption matrix sees it; null when idle. */
+  runningTurn(): (RunningTurn & { batchId: string }) | null {
+    const cur = this.current;
+    if (!cur) return null;
+    return { batchId: cur.batch.id, batchLevel: cur.batch.level, phase: this._phase, externalOutput: cur.externalOutput };
+  }
+
+  /**
+   * Cut the running turn short on behalf of a more urgent event. `preempt` cancels the
+   * model call (or its backoff) and re-issues it with the new events merged in;
+   * `interrupt` also cancels interruptible tools and ends the batch, so the interrupting
+   * events start the next one. Returns false if there is nothing to cancel.
+   */
+  cancel(cause: CancelCause): boolean {
+    const cur = this.current;
+    if (!cur || cur.abort.signal.aborted) return false;
+    if (cause.kind === 'preempt') {
+      if (cur.cancel || !cur.call || (this._phase !== 'model' && this._phase !== 'backoff')) return false;
+      cur.cancel = cause;
+      cur.call.abort(cause);
+      return true;
+    }
+    if (cur.cancel?.kind === 'interrupt') return false;
+    cur.cancel = cause; // an interrupt supersedes a preempt that has not been handled yet
+    cur.turn.abort(cause);
+    return true;
+  }
+
   needsResume(): boolean {
     return this.o.transcript.needsResume();
   }
@@ -101,8 +158,17 @@ export class MainSession {
   /** Start a batch. Throws if one is running: the scheduler must only deliver when idle. */
   deliver(batch: Batch): Promise<void> {
     if (this.current) throw new Error(`main session is busy with ${this.current.batch.id}; cannot deliver ${batch.id}`);
-    const abort = new AbortController();
-    const done = this.runBatch(batch, abort.signal)
+    const cur: Running = {
+      batch,
+      abort: new AbortController(),
+      turn: new AbortController(),
+      call: null,
+      externalOutput: false,
+      cancel: null,
+      done: Promise.resolve(),
+    };
+    this.current = cur;
+    cur.done = this.runBatch(cur)
       .catch((err: unknown) => {
         this.o.log.error({ err: errorMessage(err), batch: batch.id }, 'batch crashed');
       })
@@ -111,8 +177,7 @@ export class MainSession {
         this.setPhase('idle');
         this.feed?.onIdle();
       });
-    this.current = { batch, abort, done };
-    return done;
+    return cur.done;
   }
 
   /** Wait for the running batch; abort it if it does not finish in time. Returns true if it finished on its own. */
@@ -159,8 +224,51 @@ export class MainSession {
     }
   }
 
-  private async runBatch(batch: Batch, signal: AbortSignal): Promise<void> {
+  /** Events that became due at a boundary join the conversation in the given user message content. */
+  private appendWithBoundaryEvents(batch: Batch, head: ContentBlock[]): void {
+    const extra = this.feed?.takeBoundaryEvents() ?? [];
+    if (head.length === 0 && extra.length === 0) return;
+    if (extra.length > 0) this.raiseLevel(batch, extra);
+    this.o.transcript.appendMessage({
+      role: 'user',
+      content: [...head, ...this.eventBlocks(batch, extra)],
+      batch: batch.id,
+      ...(extra.length > 0 ? { cursors: extra.map((e) => e.cursor) } : {}),
+    });
+    if (extra.length > 0) {
+      this.settleDelivered(batch, extra);
+      this.o.bus.emit('batch.extended', { batchId: batch.id, cursors: extra.map((e) => e.cursor), level: batch.level });
+    }
+  }
+
+  private noteInterrupted(batch: Batch, cause: CancelCause, during: 'model' | 'tools'): void {
+    this.o.transcript.appendMark('turn_cancelled', { batch: batch.id, reason: 'interrupt', by: cause.cursor, during });
+    this.o.pushInternal({
+      type: 'session.turn_cancelled',
+      level: 4,
+      trigger: 'piggyback',
+      text: `Turn cancelled: batch ${batch.id} was interrupted by L${cause.level} event #${cause.cursor} during ${during === 'model' ? 'the model call' : 'tool calls'}. Tool results above show what had finished.`,
+      correlation: String(cause.cursor),
+    });
+    this.o.log.info({ batch: batch.id, by: cause.cursor, during }, 'turn interrupted');
+  }
+
+  private notePreempted(batch: Batch, cause: CancelCause): void {
+    this.o.transcript.appendMark('model_call_cancelled', { batch: batch.id, reason: 'preempt', by: cause.cursor });
+    this.o.pushInternal({
+      type: 'session.preempted',
+      level: 4,
+      trigger: 'store',
+      text: `A model call in batch ${batch.id} was cancelled and re-issued to take in L${cause.level} event #${cause.cursor}.`,
+      correlation: String(cause.cursor),
+    });
+    this.o.log.info({ batch: batch.id, by: cause.cursor }, 'model call preempted');
+  }
+
+  private async runBatch(cur: Running): Promise<void> {
     const o = this.o;
+    const { batch } = cur;
+    const signal = cur.abort.signal;
     o.batches.start({ id: batch.id, level: batch.level, reason: batch.reason, sessionId: SESSION_ID, startedAt: this.nowIso() });
     o.bus.emit('batch.started', { batchId: batch.id, level: batch.level, reason: batch.reason, cursors: batch.events.map((e) => e.cursor) });
     this.setPhase('delivering', { batchId: batch.id });
@@ -190,13 +298,28 @@ export class MainSession {
           break;
         }
         this.setPhase('model', { batchId: batch.id, round: rounds + 1 });
-        const response = await this.callModel(batch, signal);
-        if (!response) {
+        const response = await this.callModel(cur);
+        if (response === 'error') {
           endReason = 'model_error';
           break;
         }
         rounds++;
         o.batches.addRound(batch.id);
+        if (response === 'cancelled') {
+          // A cancelled call counts as a round; nothing of it reaches the transcript.
+          const cause = cur.cancel as CancelCause;
+          if (cause.kind === 'interrupt') {
+            this.noteInterrupted(batch, cause, 'model');
+            endReason = 'interrupted';
+            break;
+          }
+          cur.cancel = null;
+          this.notePreempted(batch, cause);
+          this.appendWithBoundaryEvents(batch, []);
+          continue;
+        }
+        // A preempt that lost the race with the response is moot; its event joins at the next boundary.
+        if (cur.cancel?.kind === 'preempt') cur.cancel = null;
         o.transcript.appendMessage({
           role: 'assistant',
           content: response.content,
@@ -234,10 +357,18 @@ export class MainSession {
         this.setPhase('tools', { batchId: batch.id, round: rounds });
         const dispatched = await o.dispatcher.runAll(uses, {
           signal,
+          interrupt: cur.turn.signal,
           sessionId: SESSION_ID,
           batchId: batch.id,
           batchLevel: batch.level,
         });
+        if (cur.cancel?.kind === 'interrupt' && !signal.aborted) {
+          // Every call has its (possibly partial) result; the interrupting events start the next batch.
+          o.transcript.appendMessage({ role: 'user', content: dispatched.results, batch: batch.id });
+          this.noteInterrupted(batch, cur.cancel, 'tools');
+          endReason = 'interrupted';
+          break;
+        }
 
         if (rounds === o.rounds.soft) {
           o.pushInternal({
@@ -248,18 +379,7 @@ export class MainSession {
           });
         }
         // Turn boundary: due events join the tool results in the same user message.
-        const extra = this.feed?.takeBoundaryEvents() ?? [];
-        if (extra.length > 0) this.raiseLevel(batch, extra);
-        o.transcript.appendMessage({
-          role: 'user',
-          content: [...dispatched.results, ...this.eventBlocks(batch, extra)],
-          batch: batch.id,
-          ...(extra.length > 0 ? { cursors: extra.map((e) => e.cursor) } : {}),
-        });
-        if (extra.length > 0) {
-          this.settleDelivered(batch, extra);
-          o.bus.emit('batch.extended', { batchId: batch.id, cursors: extra.map((e) => e.cursor) });
-        }
+        this.appendWithBoundaryEvents(batch, dispatched.results);
         if (dispatched.endsTurn) {
           endReason = 'ends_turn';
           break;
@@ -287,21 +407,50 @@ export class MainSession {
     if (results.length > 0) this.o.transcript.appendMessage({ role: 'user', content: results, batch: batch.id });
   }
 
-  /** One model call with backoff on retryable errors. Returns null when the batch should end. */
-  private async callModel(batch: Batch, signal: AbortSignal): Promise<ProviderResponse | null> {
+  /**
+   * One model call with backoff on retryable errors. Returns 'error' when the batch should
+   * end, 'cancelled' when a preempt or interrupt cut the call (or its backoff) short.
+   */
+  private async callModel(cur: Running): Promise<ProviderResponse | 'error' | 'cancelled'> {
     const o = this.o;
+    const { batch } = cur;
+    const hard = cur.abort.signal;
     for (let attempt = 0; ; attempt++) {
       const req = o.assembler.build(o.transcript.messages, { role: 'main', effort: o.effortFor(batch.level) });
+      const call = new AbortController();
+      cur.call = call;
+      cur.externalOutput = false;
+      const signal = AbortSignal.any([hard, cur.turn.signal, call.signal]);
+      const tap = o.outputTap;
       try {
-        return await o.provider.generate(req, { signal });
+        return await o.provider.generate(req, {
+          signal,
+          ...(tap
+            ? {
+                onText: (delta: string) => {
+                  if (delta.length === 0) return;
+                  cur.externalOutput = true;
+                  tap(delta, { batchId: batch.id });
+                },
+              }
+            : {}),
+        });
       } catch (err) {
-        if (isAbortError(err) || signal.aborted) throw err;
+        if (hard.aborted) throw err;
+        if (cur.cancel && signal.aborted) return 'cancelled';
+        if (isAbortError(err)) throw err;
         const kind = err instanceof ProviderError ? err.kind : 'fatal';
         const delay = o.backoffMs[attempt];
         if (kind === 'retryable' && delay !== undefined) {
           o.log.warn({ batch: batch.id, attempt: attempt + 1, delayMs: delay, err: errorMessage(err) }, 'model call failed; backing off');
           this.setPhase('backoff', { batchId: batch.id });
-          await sleep(delay, signal);
+          try {
+            await sleep(delay, signal);
+          } catch (sleepErr) {
+            if (hard.aborted) throw sleepErr;
+            if (cur.cancel) return 'cancelled';
+            throw sleepErr;
+          }
           this.setPhase('model', { batchId: batch.id });
           continue;
         }
@@ -312,7 +461,9 @@ export class MainSession {
           trigger: 'store',
           text: `Model call failed for batch ${batch.id} (${kind}): ${errorMessage(err)}`,
         });
-        return null;
+        return 'error';
+      } finally {
+        cur.call = null;
       }
     }
   }

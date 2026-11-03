@@ -96,4 +96,53 @@ describe('ToolDispatcher', () => {
     const r = await p;
     expect(r.results[0]).toMatchObject({ is_error: true, content: 'wait was cancelled' });
   });
+
+  it('on interrupt: interruptible tools return partial receipts, others finish, unstarted calls are skipped', async () => {
+    const interrupt = new AbortController();
+    const log: string[] = [];
+    const d = setup([
+      spec(
+        'fetch',
+        (_i, c) =>
+          new Promise((resolve) => {
+            c.signal.addEventListener('abort', () => resolve({ text: 'fetched 2 of 5', partial: true }), { once: true });
+          }),
+        { flags: { interruptible: true } },
+      ),
+      spec('write', async (_i, c) => {
+        await sleep(60);
+        log.push(`write aborted=${c.signal.aborted}`);
+        return 'written';
+      }),
+      spec('gate', () => 'gate', { flags: { barrierAfter: true } }),
+      spec('later', () => {
+        log.push('later ran');
+        return 'later';
+      }),
+    ]);
+    setTimeout(() => interrupt.abort('interrupt'), 10);
+    const r = await d.runAll([use('fetch'), use('write'), use('gate'), use('later')], { ...ctx(), interrupt: interrupt.signal });
+    expect(r.results.map((b) => [b.content, !!b.is_error])).toEqual([
+      ['fetched 2 of 5', false],
+      ['written', false],
+      ['gate', false],
+      ['not run: the turn was interrupted', true],
+    ]);
+    expect(log).toEqual(['write aborted=false']);
+  });
+
+  it('fails an interruptible tool that ignores the interrupt after the grace period', async () => {
+    const interrupt = new AbortController();
+    interrupt.abort('interrupt');
+    const d = setup([spec('stubborn', () => new Promise(() => {}), { flags: { interruptible: true } })]);
+    // Already interrupted before the call: it never starts.
+    const r = await d.runAll([use('stubborn')], { ...ctx(), interrupt: interrupt.signal });
+    expect(r.results[0]).toMatchObject({ is_error: true, content: 'not run: the turn was interrupted' });
+  });
+
+  it('answers calls outside the allowed set as unavailable', async () => {
+    const d = setup([spec('a', () => 'A'), spec('b', () => 'B')]);
+    const r = await d.runAll([use('a'), use('b')], { ...ctx(), allowed: new Set(['a']) });
+    expect(r.results.map((b) => b.content)).toEqual(['A', 'tool b is not available']);
+  });
 });
