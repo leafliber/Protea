@@ -9,7 +9,7 @@ Protea 是一个 **24/7 常驻、事件流驱动、可热插拔** 的云端个�
 
 设计参考了 [Cortico](https://github.com/Pal-AI-Lab/Cortico) 的事件流 harness 思想，完整设计见 [docs/README.md](docs/README.md)，进度见 [路线图](docs/40-plan/01-roadmap.md)。
 
-## 当前状态：M3 MCP 与 Skills
+## 当前状态：M4 记忆、交接、人格
 
 已可运行：
 - **M0**：事件库与门禁、批窗口调度、主会话代理循环（Claude，流式 + 自适应思考 + 提示缓存）、append-only 转录与崩溃恢复、console 与 cron 两个内置插件、HTTP 控制 API（含 SSE 实时流）与 CLI。
@@ -17,7 +17,9 @@ Protea 是一个 **24/7 常驻、事件流驱动、可热插拔** 的云端个�
 - **M2**：进程外插件（JSON-RPC over stdio）的发现、监督与热插拔（安装/启用/禁用/重载/卸载，配置热更新）；TypeScript 与 Python 插件 SDK；内置 `telegram`、`webhook`、`filewatch`；工具权限策略、经 Telegram 或终端的审批流与审计。
 - **M3**：MCP 客户端（stdio、Streamable HTTP、SSE；bearer 与 OAuth；运行中增删，工具名 `mcp__<服务器>__<工具>`）；工具很多时启用 Claude 的工具搜索，MCP 工具按需加载；Skills 注册表（`SKILL.md`，热加载、`skill_load`）与 3 个内置 Skills；内置来源 `rss`、`imap`。
 
-记忆与交接、控制台与 Docker 镜像按路线图在 M4–M6 实现。
+- **M4**：记忆目录 `/data/memory`（`memory` 工具，命令面同 Claude 的 memory tool；全文检索 `memory_search`，中文可搜；`INDEX.md` 进系统前缀）；对话变长时自动交接（cheap 模型写交接笔记，新对话带着最近的消息继续）；人格文件与可选钩子热加载；所有发往模型的请求做秘密扫描。
+
+控制台与 Docker 镜像按路线图在 M5–M6 实现。
 
 ## 快速开始
 
@@ -102,6 +104,18 @@ PROTEA_DATA_DIR=.dev-data pnpm protea skills
 ```
 
 格式有问题的 Skill 不会注册，`protea skills` 会显示原因。MCP 服务器提供的 prompts 也会以 `mcp:<服务器>/<名字>` 出现在目录里。
+
+## 记忆与人格
+
+助理的记忆是 `.dev-data/memory/` 下的 Markdown 文件，模型用 `memory` 工具读写（路径写作 `/memories/...`），`INDEX.md` 每次请求都会带上，所以只放"去哪找"的指针。你也可以直接编辑这些文件，索引会跟上。
+
+人格在 `.dev-data/persona/`：`SOUL.md`（是谁）、`OPERATING.md`（怎么做事）、`USER.md`（关于你）。改完从下一次模型请求生效。需要代码时可以加 `persona/hooks.mjs`（例如自定义交接），见 [docs/10-architecture/11-memory-and-persona.md](docs/10-architecture/11-memory-and-persona.md) §6。
+
+对话超过 `context.handoff.softTokens`（默认 200k token）时会交接：较早的部分写成 `memory/handoff/` 下的笔记，新对话带着最近的消息继续。也可以手动触发：
+
+```bash
+curl -X POST -H "Authorization: Bearer $(cat .dev-data/secrets/PROTEA_ADMIN_TOKEN)" http://127.0.0.1:7788/api/sessions/main/handoff
+```
 
 ## 写一个插件
 

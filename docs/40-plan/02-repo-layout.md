@@ -13,7 +13,7 @@ Protea/
 ├── tsconfig.json                全仓类型检查（paths 指向各包 src，noEmit）
 ├── vitest.config.ts             测试入口（alias 指向各包 src）
 ├── docs/                        设计文档
-├── personas/default/            默认人格（SOUL.md、OPERATING.md、USER.md），首次启动复制到 /data/persona
+├── personas/default/            默认人格（SOUL.md、OPERATING.md、USER.md），首次启动复制到 /data/persona；memory/ 是记忆目录模板（INDEX.md）
 ├── packages/
 │   ├── protocol/                @protea/protocol：事件、会话、控制 API、插件清单与协议的类型，事件 JSON Schema，JSON-RPC 对等端（rpc.ts，无运行时依赖）
 │   ├── plugin-sdk/              @protea/plugin-sdk：definePlugin / runPlugin，测试用 FakeHost（@protea/plugin-sdk/testing）
@@ -22,15 +22,16 @@ Protea/
 │   │   │   ├── events/          校验（ajv）、门禁、主人映射、事件库、渲染
 │   │   │   ├── scheduler/       批窗口与投递、抢占矩阵（preemption.ts）、风暴防护、老化、预算统计（budget.ts）
 │   │   │   ├── forks/           Fork 管理器（排队、让渡/恢复、检查点、重启恢复）与 fork_* 工具
-│   │   │   ├── session/         主会话循环、转录与修复、启动对账
-│   │   │   ├── context/         系统分段、运行时说明、环境提示模板、请求装配、工具搜索（tool-search.ts）
+│   │   │   ├── session/         主会话循环、转录与修复（含 thinking 截止标记）、启动对账、容量交接（handoff.ts）
+│   │   │   ├── context/         系统分段、运行时说明、环境提示模板、请求装配、工具搜索（tool-search.ts）、前缀指纹（prefix.ts）
 │   │   │   ├── tools/           工具注册表、分发器、内核工具
-│   │   │   ├── providers/       Provider 接口、anthropic、echo、scripted、价格表
+│   │   │   ├── providers/       Provider 接口、anthropic、echo、scripted、价格表、秘密扫描包装（redact.ts）
 │   │   │   ├── plugins/         PluginHost（生命周期、监督、事件网关）、清单与发现、子进程运行时、一致性检查、开发加载器
 │   │   │   ├── permissions/     权限策略、审批、审计、权限守卫、approval_request 工具
 │   │   │   ├── mcp/             MCP 客户端管理器（连接、监督、工具命名与注册、资源与 prompts、OAuth）
 │   │   │   ├── skills/          SKILL.md 解析、Skills 注册表与目录段、skill_load / skill_read
-│   │   │   ├── persona/         人格文件加载
+│   │   │   ├── persona/         人格文件加载与热重载、可选钩子（hooks.*）
+│   │   │   ├── memory/          记忆存储（memory 工具命令面）、FTS5 索引、memory / memory_search / memory_recent
 │   │   │   ├── config/          默认值、层叠加载、环境变量映射、秘密
 │   │   │   ├── db/              SQLite 打开与内嵌迁移、仓储（batches/usage/kv/sessions/tool_stats）
 │   │   │   ├── observability/   pino 日志（TTY 美化 + 运行目录 JSON）

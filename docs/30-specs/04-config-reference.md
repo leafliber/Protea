@@ -1,10 +1,10 @@
 # 规范：配置参考
 
-> 状态：Accepted（M0–M3 部分）· 更新：2026-11-03 · 设计：[../10-architecture/16-deployment.md](../10-architecture/16-deployment.md) §4
+> 状态：Accepted（M0–M4 部分）· 更新：2026-11-03 · 设计：[../10-architecture/16-deployment.md](../10-architecture/16-deployment.md) §4
 
 配置文件 `/data/config.yaml`，首次启动时写入一份带注释的模板。所有键都有默认值。层叠顺序（后者覆盖前者）：内置默认 → `config.yaml` → `PROTEA_*` 环境变量。对象逐层合并，数组与标量整体替换。
 
-## 1. 已生效的键（M0–M3）
+## 1. 已生效的键（M0–M4）
 
 ```yaml
 daemon:
@@ -59,6 +59,7 @@ providers:
       fork: high
       cheap: low
     fallbacks: default                 # 服务端拒答回退（beta server-side-fallback-2026-07-01）；null 关闭
+    thinkingMismatch: drop_block       # thinking 块前缀不匹配时：drop_block | error | null（beta thinking-binding-controls-2026-08-01；M4）
     thinkingDisplay: omitted           # omitted | summarized
     cacheTtl: 1h                       # 5m | 1h
     maxOutputTokens: 64000
@@ -125,6 +126,23 @@ context:
     mode: auto                         # auto：工具总数超过 threshold 时延迟加载 MCP 工具；always；never
     threshold: 40
     keepPerServer: 3                   # 每个 MCP 服务器调用最多的几个工具保持加载
+  handoff:                             # 容量交接（M4，docs/10-architecture/05-sessions-and-agent-loop.md §8）
+    softTokens: 200000                 # 批开始时估算超过它就交接
+    hardTokens: null                   # 任何请求前超过它就交接；null = 上下文窗口 − maxOutputTokens − max(8000, 5 %)
+    keepRatio: 0.333                   # 新对话原样保留的尾部 = keepRatio × softTokens
+    notesMaxTokens: 8000               # 交接笔记请求的输出上限（cheap 模型）
+    notesInputTokens: 150000           # 交给笔记模型的历史上限，超出先丢最早的部分
+    recentInIndex: 5                   # INDEX.md 的 "Recent handoffs" 保留几条
+  compaction:                          # 服务端压缩（M4，Anthropic beta compact-2026-01-12），交接前的第一道
+    enabled: false
+    triggerTokens: 150000              # ≥ 50000
+    instructions: null                 # 替换默认的摘要提示
+
+memory:
+  nativeTool: false                    # true：声明官方 memory_20250818（API 会自动加入"先查看记忆目录"的指令）
+
+persona:
+  dir: persona                         # 人格目录，相对数据目录
 
 observability:
   logLevel: info                       # trace | debug | info | warn | error | silent
@@ -140,7 +158,6 @@ observability:
 | `budget.enforce`（耗尽时降级/存储） | M6 |
 | `permissions.conditions`（按批等级/参数/时间窗）、`permissions.egress` | M6 |
 | `pluginHost.resources`（插件内存/CPU 上限） | M6 |
-| `context.*`（交接比例等）、`memory.*`、`persona.dir` | M4 |
 | `control.allowCidrs`、`control.readonlyTokenSecret`、`observability.metrics`、`observability.otlp` | M5 |
 
 ## 3. 环境变量映射
@@ -161,7 +178,8 @@ observability:
 | `plugins.<id>.config` | 热键：`config/changed`；`x-hot: false` 的键：重载该插件；进程内插件：重载 |
 | `mcp.servers.<id>` | 新增 → 启动；删除 → 停止并移除工具；改动 → 重启该服务器 |
 | `skills` | 立即重扫，目录在下一个回合边界更新 |
-| `context.toolSearch` | 下一次模型请求生效 |
+| `context.toolSearch`、`context.handoff`、`context.compaction` | 下一次模型请求生效 |
+| `persona/` 目录里的文件（不是配置键） | 下一次模型请求生效（目录监视） |
 | 其他部分 | 需要重启，日志会列出改动了哪些部分 |
 
 通过 API 或 CLI 做的修改（插件的启用、禁用、卸载、`PATCH /api/plugins/:id/config`；MCP 服务器的增删与启停；Skill 的启用/禁用）会写回 `config.yaml`。写入用 YAML 文档模型，保留注释与格式，并以"临时文件 + rename"原子替换。环境变量覆盖的值不会被文件改动覆盖。

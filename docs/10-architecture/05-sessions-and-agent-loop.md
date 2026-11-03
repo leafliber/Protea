@@ -173,15 +173,25 @@ M2 实现：步骤 1 的"审批出口"是所有声明了 `approvals` 能力的�
 
 ## 8. 容量与交接（handoff）
 
-- 输入上限 `hardTokens = contextWindow − maxOutputTokens − 安全余量`。
-- 触发：请求前估算（`count_tokens`）超过 `hardTokens`，或服务端返回"输入过长"。
-- 流程（[11-memory-and-persona.md](11-memory-and-persona.md) §5 描述人格侧）：
-  1. Core 切到 `handoff` 阶段，调用人格钩子 `onHandoff(snapshot, { hardTokens })`；默认实现（无自定义钩子时）：用 `cheap` 模型从转录生成交接笔记写入 `memory/handoff/<ts>.md`，保留最近 N 条消息作为尾部。
-  2. 重建系统前缀。
-  3. 新建转录文件 `main.<seq>.jsonl`，写入 `{ t: 'handoff_from', ... }`，尾部消息原样复制（含 thinking 块）。
-  4. 旧文件只追加一条 `handoff` 标记，不删除。
-  5. 重投当前批。
-- 循环保护：若交接后立刻又超限（前缀过大），不再交接，记 error，并发 L0 `internal` 事件请求主人处理（例如缩减 Skills 目录或 MCP 工具数）。
+- 阈值（`context.handoff`，M4）：`hardTokens` 默认 `contextWindow − maxOutputTokens − max(8000, 5 % 窗口)`（Opus 5.5 为 886 000）；`softTokens` 默认 200 000（不超过 hardTokens）。
+- 估算：上一次模型响应的 usage（输入 + 缓存读写 + 输出）加上之后追加的消息的本地估算（按文字类别估 token，图片与文档按固定值）；估算到达阈值的 90 % 时改用 Provider 的 `count_tokens` 求精确值。新转录还没有 usage 时整份请求本地估算。
+- 触发：批开始时（第一次模型请求前）超过 `softTokens`；任何模型请求前超过 `hardTokens`；Provider 返回"输入过长"（Anthropic：400 `prompt is too long` 或 413），此时交接一次后重试。`POST /api/sessions/main/handoff` 请求交接：空闲时立即执行，否则等下一批开始时执行。
+- 流程（[11-memory-and-persona.md](11-memory-and-persona.md) §5 描述笔记与尾部）：
+  1. Core 切到 `handoff` 阶段；有 `onHandoff` 钩子时由它决定尾部与笔记，否则用默认策略（`cheap` 模型写 `memory/handoff/<ts>.md`）。
+  2. 新建转录文件 `main.<seq>.jsonl`：`session_start`、`handoff_from {file, notes, reason, dropped, kept}` 标记，第一条 user 消息是 `session.handoff` 事件，然后是尾部消息（**去掉 thinking 块**，保留原 `batch` 与 `cursors`）。同名文件已存在（上次交接在切换指针前崩溃）时先改名为 `.abandoned-<ms>`。
+  3. 旧文件只追加一条 `handoff {to, notes, reason}` 标记，不删除。
+  4. 原子替换 `main.current`，更新 `sessions` 表，发 `session.handoff` 总线事件（SSE 主题 `handoff`）。
+  5. 系统前缀在下一次请求时按新的 `INDEX.md` 重建，当前批在新转录里继续（不是从头重投：正在运行的批完整保留在尾部）。
+- 循环保护：交接后估算仍超过 `hardTokens`（前缀本身或正在运行的批太大）时，记 error，发一条 L0 `flush` 事件 `context.overflow` 请主人处理（缩减 Skills 目录、MCP 工具或 `INDEX.md`），批以 `context_overflow` 结束；此后在下一次成功的模型调用之前不再尝试交接、也不再发事件，批次直接以 `context_overflow` 结束。
+
+### 8.1 前缀变化与 thinking 块（保留思考）
+
+Claude 5 系列的 thinking 块绑定产生它的对话前缀（system、工具集合、它之前的全部消息），并且逐块成链：前缀被改过之后再回传旧块，新账户（2026-08-31 起创建）会收到 400，老账户也只是暂不执行。Protea 的转录只追加，所以消息部分天然不变；会变的是 system 与工具集合：人格、插件、MCP、Skills、记忆索引、需要脱敏的秘密集合。处理方式：
+
+- 每次模型请求前计算前缀指纹（system 文本 + 已加载工具的定义，按名排序；延迟加载的工具不计，追加它们不算编辑；再加上秘密集合的指纹）。指纹变了而转录里还有未截止的 thinking 块时，追加 `{"t":"mark","kind":"prefix","hash":…,"floor":<记录数>}`：此后序号小于 `floor` 的消息发送时去掉 thinking 块（去掉对话"开头一段"的块不影响之后的块；只剩 thinking 的消息整条不发）。加载转录时按最大的 `floor` 重放，所以重启后请求字节不变。
+- 交接复制尾部时同样去掉 thinking 块。
+- Anthropic 请求带 `thinking.block_binding.prefix_mismatch_behavior`（`providers.anthropic.thinkingMismatch`，默认 `drop_block`，beta `thinking-binding-controls-2026-08-01`）作为兜底：万一仍有不匹配，API 丢弃这些块而不是拒绝请求；响应里的 `input_transformations` 记在 `ProviderResponse` 上。
+- Fork 使用同样的截止标记（Fork 不做交接）。
 - 可选优化：开启 Provider 的服务端压缩（Anthropic `compact` beta）作为交接之前的第一道；但交接仍是最终保障，且保证 Provider 无关（[ADR-0008](../20-decisions/ADR-0008-append-only-history-and-handoff.md)）。
 
 ## 9. 内核工具（所有会话可用）

@@ -2,7 +2,7 @@ import type { Db } from '../db/database.js';
 import type { Clock } from '../util/time.js';
 
 export interface AuditRecord {
-  kind: 'tool_call' | 'tool_blocked' | 'approval_requested' | 'approval_decided' | 'approval_expired';
+  kind: 'tool_call' | 'tool_blocked' | 'approval_requested' | 'approval_decided' | 'approval_expired' | 'memory_write';
   tool?: string;
   owner?: string;
   sessionId?: string;

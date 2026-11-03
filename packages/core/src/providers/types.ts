@@ -18,6 +18,10 @@ export interface ProviderRequest {
   /** Some tools are deferred: declare the provider's tool search tool. */
   toolSearch?: boolean;
   effort: Effort;
+  /** Output budget for this request; the provider's configured maximum when omitted. */
+  maxOutputTokens?: number;
+  /** Let the provider compact the conversation server-side above this many input tokens. */
+  compaction?: { triggerTokens: number; instructions: string | null };
 }
 
 export interface ProviderUsage {
@@ -36,6 +40,8 @@ export interface ProviderResponse {
   requestedModel: string;
   costUsd?: number;
   stopDetails?: unknown;
+  /** Changes the provider made to the input, e.g. thinking blocks it dropped (logged, never fatal). */
+  inputTransformations?: Array<{ type: string; path?: string; reason?: string }>;
 }
 
 export type ProviderErrorKind = 'retryable' | 'fatal' | 'overflow' | 'config';
@@ -63,6 +69,10 @@ export interface Provider {
   health(): ProviderHealth;
   /** Can search deferred tool definitions (`deferLoading`) for this role. */
   supportsToolSearch?(role: ModelRole): boolean;
+  /** Input tokens the model for this role accepts (its context window), when known. */
+  contextWindow?(role: ModelRole): number | undefined;
+  /** Exact input tokens of a request, when the provider can count them; undefined otherwise. */
+  countTokens?(req: ProviderRequest, opts: { signal: AbortSignal }): Promise<number | undefined>;
   /** Streams internally; resolves with the complete message. Throws ProviderError or an abort error. */
   generate(req: ProviderRequest, opts: { signal: AbortSignal; onText?: (delta: string) => void }): Promise<ProviderResponse>;
 }

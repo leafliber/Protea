@@ -44,9 +44,9 @@
 | `env:<plugin>` | 插件 `envPrompt()` 模板 + `envPromptVars()` | 低（插件启停时） | 插件生命周期事件 → 回合边界重建 |
 | `env:mcp:<server>` | MCP 服务器配置里的 `envPrompt`（M3） | 低（服务器启停时） | 服务器状态变化 → 回合边界重建 |
 | `skills-catalog` | Skills 注册表（M3） | 低 | 目录文本变化 → 回合边界重建 |
-| `memory-index` | `memory/INDEX.md` | 中 | 文件变化 → 回合边界重建 |
+| `memory-index` | `memory/INDEX.md`，包在 `<memory_index path="/memories/INDEX.md">` 里（M4） | 中 | 文件变化 → 回合边界重建 |
 
-**重建代价**：任何分段变化都会让该分段之后的缓存失效。因此变动频繁的内容（记忆索引）放在最后一段；真正高频的内容（今天的待办）不进前缀，而是由模型通过 `memory_read` 按需取。
+**重建代价**：任何分段变化都会让该分段之后的缓存失效，并且此前的 thinking 块从此不再回传（它们绑定旧前缀，[05-sessions-and-agent-loop.md](05-sessions-and-agent-loop.md) §8.1）。因此变动频繁的内容（记忆索引）放在最后一段；真正高频的内容（今天的待办）不进前缀，而是由模型通过 `memory` 工具按需读取。人格钩子 `systemSegments({ defaults })` 可以改写主会话的分段（M4）。
 
 ### 3.1 环境提示模板
 
@@ -83,4 +83,4 @@
 
 ## 8. 容量估算
 
-每次请求前用 Provider 的 `count_tokens`（或本地估算回退）得到输入 token；超过 `hardTokens` 则进入交接（[05-sessions-and-agent-loop.md](05-sessions-and-agent-loop.md) §8）。估算结果与阈值写入 `usage` 表，控制台画"上下文占用环"。
+每次请求前估算输入 token：上一次响应的 usage 加上之后消息的本地估算，接近阈值（90 %）时用 Provider 的 `count_tokens` 求精确值；批开始时超过 `softTokens`、任何请求前超过 `hardTokens` 则进入交接（[05-sessions-and-agent-loop.md](05-sessions-and-agent-loop.md) §8）。当前估算与阈值见 `/api/status` 的 `context` 字段（控制台的"上下文占用环"在 M5）。可选的服务端压缩（`context.compaction`）只用于主会话请求。

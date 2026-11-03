@@ -40,7 +40,7 @@ metadata:
 - `description`：**触发条件 + 做什么**，≤ 1024 字符；它是模型在目录中看到的唯一信息，质量决定 Skill 是否被正确触发。
 - `allowed-tools`（可选）：加载该 Skill 后建议的工具子集；Core 不强制（回执里列为"Suggested tools"），以后在 Fork 中可用作 `tools` 过滤。
 - `metadata.level`（Protea 扩展，可选）：该 Skill 运行时的建议等级（用于派生 Fork）。
-- `metadata.requires-tools`（Protea 扩展，可选）：所需工具（名称或 glob）都存在时才进入目录，例如内置的 `memory-hygiene` 要等 M4 的记忆工具。
+- `metadata.requires-tools`（Protea 扩展，可选）：所需工具（名称或 glob）都存在时才进入目录，例如内置的 `memory-hygiene` 需要记忆工具 `memory` 与 `memory_search`（M4 起都有）。
 
 ## 3. 渐进式披露
 
@@ -80,4 +80,4 @@ Skill 的脚本通过内核 `shell` 工具在容器内执行（受限用户、�
 |---|---|
 | `protea-self-ops` | 让助理知道如何用 `self_status`、`events_query`、`schedule_*`、`fork_*` 与审批管理自己 |
 | `daily-brief` | 晨报流程模板（与 cron 的 morning-brief 例程配合） |
-| `memory-hygiene` | 定期整理记忆目录的做法（去重、归档、更新 INDEX.md）；`requires-tools: memory memory_search`，M4 之前不进目录 |
+| `memory-hygiene` | 定期整理记忆目录的做法（去重、归档、更新 INDEX.md）；`requires-tools: memory memory_search`（M4 起进入目录） |

@@ -32,6 +32,8 @@ export class ContextAssembler {
     private readonly tools: ToolRegistry,
     /** Tool search: which definitions are deferred. Without it every tool loads up front. */
     private readonly exposure?: ToolExposure,
+    /** Server-side compaction for main-session requests (null: off). */
+    private readonly compaction?: () => { triggerTokens: number; instructions: string | null } | null,
   ) {}
 
   build(
@@ -46,6 +48,8 @@ export class ContextAssembler {
       tools: [],
       effort: opts.effort,
     };
+    const compaction = opts.role === 'main' ? this.compaction?.() : null;
+    if (compaction) req.compaction = compaction;
     if (this.exposure) {
       const set = this.exposure.forRequest(messages, { role: opts.role, ...(allowed ? { allowed } : {}) });
       req.tools = set.tools;

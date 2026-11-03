@@ -55,6 +55,7 @@ export class ToolExposure {
       name: d.name,
       description: d.description,
       inputSchema: d.inputSchema,
+      ...(d.providerType ? { providerType: d.providerType } : {}),
       ...(deferred.has(d.name) ? { deferLoading: true } : {}),
     }));
     let toolSearch = tools.some((t) => t.deferLoading);

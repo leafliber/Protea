@@ -1,6 +1,6 @@
 # 规范：控制 API
 
-> 状态：Draft（M0–M3 部分已实现，见文末）· 更新：2026-11-03 · 设计：[../10-architecture/13-control-plane.md](../10-architecture/13-control-plane.md)
+> 状态：Draft（M0–M4 部分已实现，见文末）· 更新：2026-11-03 · 设计：[../10-architecture/13-control-plane.md](../10-architecture/13-control-plane.md)
 
 基址 `http://host:7788`。JSON；错误形态 `{ error: { code, message, details? } }`。鉴权 `Authorization: Bearer <token>`。分页用 `?cursor=&limit=`（事件按游标）或 `?page=&size=`。
 
@@ -11,7 +11,7 @@
 | GET | `/healthz` | 存活 |
 | GET | `/readyz` | 就绪（含原因列表） |
 | GET | `/metrics` | Prometheus |
-| GET | `/api/status` | `StatusResponse`：`{ runId, version, startedAt, uptimeSec, phase, batchId, pending: {0..4}, provider, plugins, usage24h, forks: ForkInfo[], budget: { enforced, dailyUsd, levels: {0..4: { spentUsd, tokens, limitUsd, usedRatio }} } }` |
+| GET | `/api/status` | `StatusResponse`：`{ runId, version, startedAt, uptimeSec, phase, batchId, pending: {0..4}, provider, plugins, mcp, skills, tools, context, memory, persona, usage24h, forks: ForkInfo[], budget: { enforced, dailyUsd, levels: {0..4: { spentUsd, tokens, limitUsd, usedRatio }} } }` |
 
 ## 事件
 
@@ -31,7 +31,7 @@
 | GET | `/api/sessions` | 主会话 + Fork 列表（`{ sessions: [{ id: 'main', kind, phase, batchId }, { kind: 'fork', ...ForkInfo }] }`） |
 | GET | `/api/sessions/:id/transcript?from=&limit=&thinking=summary\|none` | 转录；`:id` 为 `main` 或 Fork id（M1 未实现 `thinking` 参数） |
 | GET | `/api/sessions/forks` · `/api/sessions/forks/:id` | Fork 列表（未结束的 + 最近 10 个已结束的）、详情（`ForkInfo`） |
-| POST | `/api/sessions/main/handoff` | 手动交接 |
+| POST | `/api/sessions/main/handoff` | 手动交接 `{ reason? }`：空闲时立即执行，返回 `{ handedOff, transcript?, notes?, dropped?, kept? }`（没有可丢弃的内容时 `handedOff: false`）；忙时 202 `{ scheduled: true }`，在下一批开始时执行 |
 | POST | `/api/sessions/forks` | 派生 Fork（ForkOptions） |
 | POST | `/api/sessions/forks/:id/cancel` · `/pause` · `/resume` | 返回 `ForkInfo`；对已结束的 Fork 无副作用 |
 
@@ -89,12 +89,14 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/memory/tree` · `/api/memory/file?path=` | |
-| PUT | `/api/memory/file?path=` | 写入（记审计） |
+| GET | `/api/memory/tree` | `{ files: [{ path, size, mtime }] }`（相对记忆目录） |
+| GET | `/api/memory/file?path=` | `{ path, text }`；`path` 可写 `notes/a.md` 或 `/memories/notes/a.md`；越界 400，不存在 404 |
+| PUT | `/api/memory/file?path=` | 请求体为纯文本，整份写入（原子替换），记审计 `memory_write`；越界或超过 1 MB 400 |
+| GET | `/api/memory/search?q=&paths=&limit=` | `{ hits: [{ path, snippet }] }`，同 `memory_search` |
 
 ## 实时流
 
-**SSE（M0 起）** `GET /api/stream?since=<cursor>`。连接后先发 `hello {runId}`；带 `since` 时先按游标补发之后的事件，再转为实时。事件名：`event`（id 为游标）、`settled`、`phase`、`batch.started`、`batch.extended`（M1 起带 `level`）、`batch.ended`、`output`（插件输出，如 `con_send`）、`scheduler`（M1：`preempt` / `interrupt` / `aged` / `storm_cooldown` / `fork_yield` / `fork_resume`）、`fork`（M1：`ForkInfo` 变化）、`plugin`（M2：`PluginStatus` 变化）、`approval`（M2：`ApprovalInfo` 变化）、`mcp`（M3：`McpServerStatus` 变化）、`skills`（M3：目录变化，`{ names }`）、`ping`（15 s 保活）。载荷形态见 `@protea/protocol` 的 `StreamMessage` 与 `SchedulerAction`。
+**SSE（M0 起）** `GET /api/stream?since=<cursor>`。连接后先发 `hello {runId}`；带 `since` 时先按游标补发之后的事件，再转为实时。事件名：`event`（id 为游标）、`settled`、`phase`、`batch.started`、`batch.extended`（M1 起带 `level`）、`batch.ended`、`output`（插件输出，如 `con_send`）、`scheduler`（M1：`preempt` / `interrupt` / `aged` / `storm_cooldown` / `fork_yield` / `fork_resume`）、`fork`（M1：`ForkInfo` 变化）、`plugin`（M2：`PluginStatus` 变化）、`approval`（M2：`ApprovalInfo` 变化）、`mcp`（M3：`McpServerStatus` 变化）、`skills`（M3：目录变化，`{ names }`）、`handoff`（M4：`{ from, to, notes, dropped, kept }`）、`ping`（15 s 保活）。载荷形态见 `@protea/protocol` 的 `StreamMessage` 与 `SchedulerAction`。
 
 已实现的 HTTP 端点：
 - M0：`/healthz`、`/readyz`、`GET /api/status`、`POST|GET /api/events`、`GET /api/events/:cursor`、`GET /api/stream`。
@@ -102,7 +104,9 @@
 - M2：`GET /api/plugins`、`GET /api/plugins/:id`、`POST /api/plugins`、`POST /api/plugins/:id/enable|disable|reload|restart`、`PATCH /api/plugins/:id/config`、`DELETE /api/plugins/:id`、`GET /api/approvals`、`POST /api/approvals/:id/decide`、`/hooks/<name>`。`PluginStatus`：`{ id, kind, state, enabled, origin: inproc|builtin|data, version?, tools, pid?, restarts?, error? }`。
 - M3：`/api/mcp/servers*`、`/api/mcp/oauth/callback`、`/api/skills*`（见上表）。`McpServerStatus`：`{ id, transport, state（PluginState 或 auth_required）, enabled, trust, origin: config, server?: {name, version}, tools, prompts, resources, pid?, restarts?, error?, authorizeUrl?, avgLatencyMs? }`；`SkillInfo`：`{ name, description, origin: builtin|user|plugin|mcp, owner?, version?, enabled, listed, errors, warnings, allowedTools, requiresTools, level?, loads, lastLoadedAt? }`。`/api/status` 增加 `mcp`、`skills: {listed, rejected}`、`tools: {total, deferred}`；`/readyz` 也报告 `failed` 的已启用 MCP 服务器。
 
-其余端点在 M4–M5 实现。
+- M4：`POST /api/sessions/main/handoff`、`GET /api/memory/tree`、`GET|PUT /api/memory/file`、`GET /api/memory/search`。`/api/status` 增加 `context: { transcript, handoffs, estimatedTokens, softTokens, hardTokens }`、`memory: { files }`、`persona: { hooks, problem? }`。
+
+其余端点在 M5 实现。
 
 ### WebSocket `/ws`（M5）
 

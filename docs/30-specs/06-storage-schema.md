@@ -114,19 +114,29 @@ CREATE TABLE tool_stats (                               -- 每个工具一行，
 
 工具搜索用 `calls` 决定每个 MCP 服务器哪几个工具保持加载。Skills 的加载统计与"本会话已加载"记录在 `kv` 表的 `skills` 命名空间（`stats`、`loaded:main`）。
 
-### 1.4 后续迁移（计划）
+### 1.4 迁移 4：`memory-index`（M4）
+
+```sql
+CREATE TABLE memory_files (                             -- 已索引的记忆文件，用于启动时增量同步
+  path TEXT PRIMARY KEY, mtime_ms INTEGER NOT NULL, size INTEGER NOT NULL, indexed_at TEXT NOT NULL
+);
+CREATE VIRTUAL TABLE memory_fts USING fts5(path UNINDEXED, body, tokenize = 'trigram');
+```
+
+`path` 相对 `/data/memory`。`blobs/` 与隐藏文件、超过 1 MB 或含 NUL 的文件不进索引。启动时按 `(mtime_ms, size)` 与目录比对；记忆工具的写入立即更新；目录监视补上外部改动。
+
+### 1.5 后续迁移（计划）
 
 | 表 | 用途 | 里程碑 |
 |---|---|---|
 | `plugin_state` | 插件生命周期状态（M2 用内存状态 + `config.yaml` 的 enabled，未建表） | 按需 |
 | `blobs` / `event_blobs` | 附件元数据与引用计数 | 按需（随 `blob/*` 协议方法） |
-| `memory_fts`（FTS5 虚表） | 记忆全文检索 | M4 |
 
 ## 2. 文件
 
 | 路径 | 格式 | 说明 |
 |---|---|---|
-| `sessions/main.current` | 文本 | 当前主转录的文件名（交接时轮换，M4） |
+| `sessions/main.current` | 文本 | 当前主转录的文件名；交接时以"临时文件 + rename"切换（M4） |
 | `sessions/main.<seq>.jsonl` | NDJSON | 主会话转录，只追加，每条记录写入后 `fdatasync` |
 | `sessions/forks/<id>.jsonl` | NDJSON | Fork 转录，记录格式同主转录；缺失回执的占位文本为 `[result missing (fork paused/restarted)]`；结束时追加 `fork_ended` 标记 |
 | `sessions/forks/<id>.checkpoint.json` | JSON | Fork 检查点，每回合与状态变化后以"临时文件 + rename"原子替换（字段见 [05-sessions-and-agent-loop.md](../10-architecture/05-sessions-and-agent-loop.md) §5.3） |
@@ -140,7 +150,9 @@ CREATE TABLE tool_stats (                               -- 每个工具一行，
 | `runs/<runId>/transcript.jsonl` | NDJSON | 启动修复时移出的内容（`truncated-tail`、`orphan-result-drop`） |
 | `secrets/<NAME>` | 文本，0600 | 秘密 |
 | `secrets/mcp-oauth/<id>.json` | JSON，0600 | MCP 服务器的 OAuth 客户端注册、令牌与 PKCE verifier |
-| `persona/*.md` | Markdown | 人格文件，首次启动从默认人格复制 |
+| `persona/*.md` | Markdown | 人格文件，首次启动从默认人格复制；`persona/hooks.{ts,mts,mjs,js}` 为可选钩子（M4） |
+| `memory/` | 目录（0700），文件 0600 | 记忆（M4）：`INDEX.md`（进系统前缀）、`journal/`、`notes/`、`tasks.md`、`handoff/<UTC>Z.md`（交接笔记）、`blobs/`；首次启动从 `personas/default/memory/` 创建 |
+| `sessions/main.<seq>.jsonl.abandoned-<ms>` | NDJSON | 交接在切换指针前崩溃留下的新转录（不再使用） |
 | `protea.lock` | 文本 | 单实例锁（pid） |
 
 ### 2.1 转录记录
@@ -154,8 +166,13 @@ CREATE TABLE tool_stats (                               -- 每个工具一行，
 {"t":"mark","kind":"turn_cancelled","batch":"b_…","reason":"interrupt","by":18240,"during":"tools","at":"…"}
 {"t":"mark","kind":"batch_ended","batch":"b_…","reason":"end_turn","rounds":2,"resumable":false,"at":"…"}
 {"t":"mark","kind":"repair","actions":[{"action":"drop-result","msgIndex":7,"toolUseId":"toolu_…"}],"at":"…"}
+{"t":"mark","kind":"prefix","hash":"3f2a…","floor":42,"at":"…"}
+{"t":"mark","kind":"handoff","to":"main.0002.jsonl","notes":"handoff/2026-11-03T08-00-00Z.md","reason":"…","at":"…"}
+{"t":"mark","kind":"handoff_from","file":"main.0001.jsonl","notes":"handoff/2026-11-03T08-00-00Z.md","reason":"…","dropped":120,"kept":14,"at":"…"}
 ```
 
-`batch_ended.reason` 取值：`end_turn`、`ends_turn`、`max_tokens`、`refusal`、`round_limit`、`model_error`、`interrupted`（M1）、`aborted`；只有 `aborted` 是 `resumable: true`。
+M4：`prefix` 记录下一次请求的前缀指纹；带 `floor` 时，序号小于 `floor` 的 `msg` 记录发送时去掉 thinking 块（[../10-architecture/05-sessions-and-agent-loop.md](../10-architecture/05-sessions-and-agent-loop.md) §8.1）。`handoff` 写在旧转录末尾，`handoff_from` 写在新转录开头。
+
+`batch_ended.reason` 取值：`end_turn`、`ends_turn`、`max_tokens`、`refusal`、`round_limit`、`model_error`、`interrupted`（M1）、`context_overflow`（M4）、`handoff`（M4：空闲时手动交接后，新转录以 user 消息结尾，不需要续跑）、`aborted`；只有 `aborted` 是 `resumable: true`。
 
 `msgIndex` 指已提交的 `msg` 记录序号（从 0 开始），因此修复动作在任何一次加载中都指向同一条消息。修复规则见 [../10-architecture/05-sessions-and-agent-loop.md](../10-architecture/05-sessions-and-agent-loop.md) §6.2。

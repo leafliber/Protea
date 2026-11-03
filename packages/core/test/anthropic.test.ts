@@ -38,11 +38,11 @@ describe('AnthropicProvider.buildParams', () => {
       { type: 'text', text: 'Runtime notes.', cache_control: { type: 'ephemeral', ttl: '1h' } },
     ]);
     expect(p.cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
-    expect(p.thinking).toEqual({ type: 'adaptive', display: 'omitted' });
+    expect(p.thinking).toEqual({ type: 'adaptive', display: 'omitted', block_binding: { prefix_mismatch_behavior: 'drop_block' } });
     expect(p.output_config).toEqual({ effort: 'medium' });
     expect(p.tools?.[0]).toMatchObject({ name: 'con_send', eager_input_streaming: true });
     expect(p.fallbacks).toBe('default');
-    expect(p.betas).toEqual(['server-side-fallback-2026-07-01']);
+    expect(p.betas).toEqual(['thinking-binding-controls-2026-08-01', 'server-side-fallback-2026-07-01']);
     expect(p).not.toHaveProperty('tool_choice');
     expect(p).not.toHaveProperty('temperature');
   });
@@ -50,7 +50,9 @@ describe('AnthropicProvider.buildParams', () => {
   it('omits fallbacks when disabled or unsupported', () => {
     expect(new AnthropicProvider(settings({ fallbacks: null }), 'k').buildParams(request)).not.toHaveProperty('fallbacks');
     const haiku = settings({ models: { main: 'claude-haiku-5-5', fork: 'x', cheap: 'y' } });
-    expect(new AnthropicProvider(haiku, 'k').buildParams(request)).not.toHaveProperty('betas');
+    expect(new AnthropicProvider(haiku, 'k').buildParams(request).betas).toEqual(['thinking-binding-controls-2026-08-01']);
+    const plain = new AnthropicProvider(settings({ models: { main: 'claude-haiku-5-5', fork: 'x', cheap: 'y' }, thinkingMismatch: null }), 'k');
+    expect(plain.buildParams(request)).not.toHaveProperty('betas');
   });
 
   it('reports missing credentials instead of calling the API', async () => {

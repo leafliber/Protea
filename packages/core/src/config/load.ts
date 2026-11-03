@@ -137,6 +137,23 @@ function validate(cfg: ProteaConfig, warnings: string[]): void {
   if (!['auto', 'always', 'never'].includes(ts.mode)) throw new Error('context.toolSearch.mode must be auto, always or never');
   if (!(Number.isInteger(ts.threshold) && ts.threshold >= 0)) throw new Error('context.toolSearch.threshold must be a non-negative integer');
   if (!(Number.isInteger(ts.keepPerServer) && ts.keepPerServer >= 0)) throw new Error('context.toolSearch.keepPerServer must be a non-negative integer');
+  const h = cfg.context.handoff;
+  const posInt = (v: unknown): boolean => Number.isInteger(v) && (v as number) > 0;
+  if (!posInt(h.softTokens)) throw new Error('context.handoff.softTokens must be a positive integer');
+  if (h.hardTokens !== null && !posInt(h.hardTokens)) throw new Error('context.handoff.hardTokens must be a positive integer or null');
+  if (h.hardTokens !== null && h.hardTokens < h.softTokens) throw new Error('context.handoff.hardTokens must not be below softTokens');
+  if (!(typeof h.keepRatio === 'number' && h.keepRatio > 0 && h.keepRatio < 1)) throw new Error('context.handoff.keepRatio must be between 0 and 1');
+  if (!posInt(h.notesMaxTokens) || !posInt(h.notesInputTokens) || !posInt(h.recentInIndex)) {
+    throw new Error('context.handoff.notesMaxTokens, notesInputTokens and recentInIndex must be positive integers');
+  }
+  const c = cfg.context.compaction;
+  if (typeof c.enabled !== 'boolean') throw new Error('context.compaction.enabled must be a boolean');
+  if (!posInt(c.triggerTokens) || c.triggerTokens < 50_000) throw new Error('context.compaction.triggerTokens must be an integer of at least 50000');
+  if (c.instructions !== null && typeof c.instructions !== 'string') throw new Error('context.compaction.instructions must be text or null');
+  if (typeof cfg.memory.nativeTool !== 'boolean') throw new Error('memory.nativeTool must be a boolean');
+  if (typeof cfg.persona.dir !== 'string' || cfg.persona.dir.trim() === '') throw new Error('persona.dir must be a path');
+  const mm = cfg.providers.anthropic.thinkingMismatch;
+  if (mm !== null && mm !== 'drop_block' && mm !== 'error') throw new Error('providers.anthropic.thinkingMismatch must be drop_block, error or null');
   for (const [id, p] of Object.entries(cfg.plugins)) {
     if (p.enabled === undefined) p.enabled = false; // plugins without built-in defaults start disabled
     if (typeof p.enabled !== 'boolean') throw new Error(`plugins.${id}.enabled must be a boolean`);

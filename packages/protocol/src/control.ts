@@ -124,6 +124,14 @@ export interface StatusResponse {
   skills: { listed: number; rejected: number };
   /** Tools sent to the model, and how many of them sit behind tool search. */
   tools: { total: number; deferred: number };
+  /**
+   * M4: the main conversation's size. `estimatedTokens` is the last response's usage plus an
+   * estimate of what came after; a handoff starts when it passes `softTokens` at a batch start or `hardTokens` anytime.
+   */
+  context: { transcript: string; handoffs: number; estimatedTokens: number; softTokens: number; hardTokens: number };
+  /** M4: files in the memory directory, and whether persona hooks are loaded (or why not). */
+  memory: { files: number };
+  persona: { hooks: boolean; problem?: string };
   usage24h: UsageTotals;
   /** Non-terminal forks first, then the most recently ended ones. */
   forks: ForkInfo[];
@@ -187,6 +195,8 @@ export type StreamMessage =
   | { topic: 'fork'; data: ForkInfo }
   | { topic: 'mcp'; data: McpServerStatus }
   | { topic: 'skills'; data: { names: string[] } }
+  /** M4: the main session handed off to a new transcript. */
+  | { topic: 'handoff'; data: { from: string; to: string; notes: string; dropped: number; kept: number } }
   | { topic: 'plugin'; data: PluginStatus }
   | { topic: 'approval'; data: ApprovalInfo };
 

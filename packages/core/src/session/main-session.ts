@@ -12,18 +12,21 @@ import {
   type ToolResultBlock,
 } from '@protea/protocol';
 import type { Bus } from '../bus.js';
-import type { ContextAssembler } from '../context/assembler.js';
+import { mergeConsecutive, type ContextAssembler } from '../context/assembler.js';
+import { prefixFingerprint } from '../context/prefix.js';
 import type { BatchRepo, UsageRepo } from '../db/repos.js';
 import { renderEventsBlock, renderStatusBlock, type StatusSnapshot } from '../events/render.js';
+import { MEMORY_ROOT } from '../memory/store.js';
 import type { EventStore } from '../events/store.js';
 import type { Logger } from '../observability/logger.js';
-import { ProviderError, type Provider, type ProviderResponse } from '../providers/types.js';
+import { ProviderError, type Provider, type ProviderRequest, type ProviderResponse } from '../providers/types.js';
 import type { RunningTurn } from '../scheduler/preemption.js';
 import type { ToolDispatcher } from '../tools/dispatcher.js';
 import { isAbortError, sleep } from '../util/abort.js';
 import { errorMessage } from '../util/errors.js';
 import { newId } from '../util/ids.js';
 import type { Clock } from '../util/time.js';
+import { estimateMessagesTokens, estimateRequestTokens, type ContextLimits, type Handoff, type HandoffResult } from './handoff.js';
 import type { Transcript } from './transcript.js';
 
 export interface Batch {
@@ -64,8 +67,18 @@ export interface MainSessionOptions {
   backoffMs: readonly number[];
   effortFor: (level: Level) => Effort;
   status: () => StatusSnapshot;
-  /** Push an internal (Core) event. */
-  pushInternal: (input: Omit<EventInput, 'ts' | 'origin'> & { ts?: string }) => void;
+  /** Push an internal (Core) event; returns its cursor when it was stored. */
+  pushInternal: (input: Omit<EventInput, 'ts' | 'origin'> & { ts?: string }) => { cursor?: number } | void;
+  /** Capacity handoff (M4); without it the conversation grows until the provider refuses it. */
+  handoff?: Handoff;
+  /** Context thresholds for the main model. */
+  limits?: () => ContextLimits;
+  /** A transcript was retired by a handoff. */
+  onHandoff?: (r: HandoffResult & { from: string }) => void;
+  /** Extra input to the thinking-prefix fingerprint (e.g. the redacted secret set). */
+  prefixSalt?: () => string;
+  /** After each batch (persona hook). */
+  onBatchEnd?: (stats: { batchId: string; level: Level; endReason: BatchEndReason; rounds: number }) => void;
   /**
    * Optional streaming output tap (e.g. a typing indicator or live text to a channel).
    * Once it has received text, the model call counts as having external output and
@@ -85,6 +98,7 @@ interface Running {
   externalOutput: boolean;
   cancel: CancelCause | null;
   done: Promise<void>;
+  handoffs: number;
 }
 
 const SESSION_ID = 'main';
@@ -98,8 +112,20 @@ export class MainSession {
   private _phase: RunPhase = 'idle';
   private current: Running | null = null;
   private feed: BatchFeed | null = null;
+  private transcript: Transcript;
+  private handoffRequested: string | null = null;
+  private idleWork: Promise<unknown> | null = null;
+  /** The context did not fit even after a handoff; cleared by the next successful model call. */
+  private overflowed = false;
 
-  constructor(private readonly o: MainSessionOptions) {}
+  constructor(private readonly o: MainSessionOptions) {
+    this.transcript = o.transcript;
+  }
+
+  /** The current main transcript (handoffs replace it). */
+  get currentTranscript(): Transcript {
+    return this.transcript;
+  }
 
   attachFeed(feed: BatchFeed): void {
     this.feed = feed;
@@ -110,7 +136,7 @@ export class MainSession {
   }
 
   get busy(): boolean {
-    return this.current !== null;
+    return this.current !== null || this.idleWork !== null;
   }
 
   get currentBatchId(): string | null {
@@ -146,18 +172,19 @@ export class MainSession {
   }
 
   needsResume(): boolean {
-    return this.o.transcript.needsResume();
+    return this.transcript.needsResume();
   }
 
   /** Level of the batch that was interrupted (for effort selection when resuming). */
   resumeLevel(): Level {
-    const id = this.o.transcript.lastBatchId();
+    const id = this.transcript.lastBatchId();
     return (id ? this.o.batches.get(id)?.level : undefined) ?? 2;
   }
 
   /** Start a batch. Throws if one is running: the scheduler must only deliver when idle. */
   deliver(batch: Batch): Promise<void> {
     if (this.current) throw new Error(`main session is busy with ${this.current.batch.id}; cannot deliver ${batch.id}`);
+    if (this.idleWork) throw new Error(`main session is handing off; cannot deliver ${batch.id}`);
     const cur: Running = {
       batch,
       abort: new AbortController(),
@@ -166,6 +193,7 @@ export class MainSession {
       externalOutput: false,
       cancel: null,
       done: Promise.resolve(),
+      handoffs: 0,
     };
     this.current = cur;
     cur.done = this.runBatch(cur)
@@ -183,7 +211,10 @@ export class MainSession {
   /** Wait for the running batch; abort it if it does not finish in time. Returns true if it finished on its own. */
   async drain(timeoutMs: number): Promise<boolean> {
     const cur = this.current;
-    if (!cur) return true;
+    if (!cur) {
+      if (this.idleWork) await this.idleWork.catch(() => undefined);
+      return true;
+    }
     const finished = await Promise.race([cur.done.then(() => true), sleep(timeoutMs).then(() => false)]);
     if (!finished) {
       cur.abort.abort('shutdown');
@@ -229,7 +260,7 @@ export class MainSession {
     const extra = this.feed?.takeBoundaryEvents() ?? [];
     if (head.length === 0 && extra.length === 0) return;
     if (extra.length > 0) this.raiseLevel(batch, extra);
-    this.o.transcript.appendMessage({
+    this.transcript.appendMessage({
       role: 'user',
       content: [...head, ...this.eventBlocks(batch, extra)],
       batch: batch.id,
@@ -242,7 +273,7 @@ export class MainSession {
   }
 
   private noteInterrupted(batch: Batch, cause: CancelCause, during: 'model' | 'tools'): void {
-    this.o.transcript.appendMark('turn_cancelled', { batch: batch.id, reason: 'interrupt', by: cause.cursor, during });
+    this.transcript.appendMark('turn_cancelled', { batch: batch.id, reason: 'interrupt', by: cause.cursor, during });
     this.o.pushInternal({
       type: 'session.turn_cancelled',
       level: 4,
@@ -254,7 +285,7 @@ export class MainSession {
   }
 
   private notePreempted(batch: Batch, cause: CancelCause): void {
-    this.o.transcript.appendMark('model_call_cancelled', { batch: batch.id, reason: 'preempt', by: cause.cursor });
+    this.transcript.appendMark('model_call_cancelled', { batch: batch.id, reason: 'preempt', by: cause.cursor });
     this.o.pushInternal({
       type: 'session.preempted',
       level: 4,
@@ -274,7 +305,7 @@ export class MainSession {
     this.setPhase('delivering', { batchId: batch.id });
 
     if (batch.events.length > 0) {
-      o.transcript.appendMessage({
+      this.transcript.appendMessage({
         role: 'user',
         content: this.eventBlocks(batch, batch.events),
         batch: batch.id,
@@ -297,8 +328,18 @@ export class MainSession {
           });
           break;
         }
+        if (!(await this.ensureCapacity(cur, rounds === 0 ? 'batch' : 'round'))) {
+          endReason = 'context_overflow';
+          break;
+        }
         this.setPhase('model', { batchId: batch.id, round: rounds + 1 });
         const response = await this.callModel(cur);
+        if (response === 'overflow') {
+          // The provider counted more than we estimated: hand off now, once.
+          if (cur.handoffs === 0 && (await this.ensureCapacity(cur, 'overflow'))) continue;
+          endReason = 'context_overflow';
+          break;
+        }
         if (response === 'error') {
           endReason = 'model_error';
           break;
@@ -320,7 +361,8 @@ export class MainSession {
         }
         // A preempt that lost the race with the response is moot; its event joins at the next boundary.
         if (cur.cancel?.kind === 'preempt') cur.cancel = null;
-        o.transcript.appendMessage({
+        this.overflowed = false;
+        this.transcript.appendMessage({
           role: 'assistant',
           content: response.content,
           batch: batch.id,
@@ -364,7 +406,7 @@ export class MainSession {
         });
         if (cur.cancel?.kind === 'interrupt' && !signal.aborted) {
           // Every call has its (possibly partial) result; the interrupting events start the next batch.
-          o.transcript.appendMessage({ role: 'user', content: dispatched.results, batch: batch.id });
+          this.transcript.appendMessage({ role: 'user', content: dispatched.results, batch: batch.id });
           this.noteInterrupted(batch, cur.cancel, 'tools');
           endReason = 'interrupted';
           break;
@@ -393,10 +435,163 @@ export class MainSession {
       if (!isAbortError(err)) throw err;
       endReason = 'aborted';
     } finally {
-      o.transcript.appendMark('batch_ended', { batch: batch.id, reason: endReason, rounds, resumable: endReason === 'aborted' });
+      this.transcript.appendMark('batch_ended', { batch: batch.id, reason: endReason, rounds, resumable: endReason === 'aborted' });
       o.batches.end(batch.id, endReason, this.nowIso());
       o.bus.emit('batch.ended', { batchId: batch.id, endReason, rounds });
       o.log.info({ batch: batch.id, endReason, rounds, batchLevel: batch.level }, 'batch ended');
+      try {
+        o.onBatchEnd?.({ batchId: batch.id, level: batch.level, endReason, rounds });
+      } catch (err) {
+        o.log.warn({ err: errorMessage(err) }, 'onBatchEnd failed');
+      }
+    }
+  }
+
+  /** The next request: messages from the transcript, with the thinking floor moved first if the prefix changed. */
+  private buildRequest(level: Level): ProviderRequest {
+    const o = this.o;
+    const req = o.assembler.build(this.transcript.messages, { role: 'main', effort: o.effortFor(level) });
+    if (this.transcript.notePrefix(prefixFingerprint(req, o.prefixSalt?.() ?? ''))) {
+      return { ...req, messages: mergeConsecutive(this.transcript.messages) };
+    }
+    return req;
+  }
+
+  /** Input tokens of the next request: the last response's usage plus a local estimate of what came after; exact near the threshold. */
+  private async estimate(level: Level, threshold: number, signal: AbortSignal): Promise<number> {
+    const o = this.o;
+    const req = this.buildRequest(level);
+    const base = this.transcript.sinceLastUsage();
+    let est = base ? base.tokens + estimateMessagesTokens(base.after) : estimateRequestTokens(req);
+    if (o.provider.countTokens && est >= threshold * 0.9) {
+      try {
+        const exact = await o.provider.countTokens(req, { signal });
+        if (exact !== undefined) est = exact;
+      } catch (err) {
+        if (signal.aborted) throw err;
+        o.log.debug({ err: errorMessage(err) }, 'token count failed; using the estimate');
+      }
+    }
+    return est;
+  }
+
+  /**
+   * Hand off when the next request is too large (docs/10-architecture/05-sessions-and-agent-loop.md §8):
+   * over softTokens at the start of a batch, over hardTokens before any request, or after the provider
+   * refused the input. Returns false when the conversation cannot be made to fit (loop protection).
+   */
+  private async ensureCapacity(cur: Running, at: 'batch' | 'round' | 'overflow'): Promise<boolean> {
+    const o = this.o;
+    if (!o.handoff || !o.limits) return true;
+    const limits = o.limits();
+    const signal = cur.abort.signal;
+    const est = await this.estimate(cur.batch.level, at === 'batch' ? limits.soft : limits.hard, signal);
+    const requested = this.handoffRequested;
+    // Still too large since the last failed attempt: no new handoff (it would only churn transcripts).
+    if (this.overflowed && est > limits.hard && requested === null) return false;
+    const over = at === 'overflow' || est > limits.hard || (at === 'batch' && est > limits.soft);
+    if (!over && requested === null) return true;
+    if (!over && at !== 'batch' && requested !== null) {
+      // A requested handoff waits for a clean point: the start of the next batch.
+      return true;
+    }
+    this.handoffRequested = null;
+    const reason =
+      requested ??
+      (at === 'overflow'
+        ? 'the provider refused the input as too long'
+        : est > limits.hard
+          ? `about ${est} input tokens, over the limit of ${limits.hard}`
+          : `about ${est} input tokens at the start of a batch, over ${limits.soft}`);
+    this.setPhase('handoff', { batchId: cur.batch.id });
+    // A requested handoff, or one after the provider refused the input (our estimate was too low),
+    // carries over as little as possible: the running batch.
+    const minimal = requested !== null || at === 'overflow';
+    const r = await this.handOff(reason, est, minimal ? { ...limits, keep: 0 } : limits, this.transcript.batchStart(cur.batch.id), cur.batch.id, signal);
+    if (r) cur.handoffs++;
+    const after = r ? await this.estimate(cur.batch.level, limits.hard, signal) : est;
+    if (after > limits.hard || (at === 'overflow' && !r)) return this.overflow(after, limits);
+    return true;
+  }
+
+  private overflow(est: number, limits: ContextLimits): false {
+    if (!this.overflowed) {
+      this.overflowed = true;
+      this.o.log.error({ estimatedTokens: est, hardTokens: limits.hard }, 'context still too large after a handoff');
+      this.o.pushInternal({
+        type: 'context.overflow',
+        level: 0,
+        trigger: 'flush',
+        text: `The conversation does not fit the model's context even after a handoff (about ${est} input tokens, limit ${limits.hard}). The system prompt, tools or the running batch take too much room: shorten the Skills catalog, the MCP tool set or ${MEMORY_ROOT}/INDEX.md. Batches end without a model call until this is fixed.`,
+      });
+    }
+    return false;
+  }
+
+  private async handOff(
+    reason: string,
+    est: number,
+    limits: ContextLimits,
+    mustKeepFrom: number,
+    batchId: string | null,
+    signal: AbortSignal,
+  ): Promise<HandoffResult | null> {
+    const o = this.o;
+    const h = o.handoff as Handoff;
+    const r = await h.run(this.transcript, {
+      mustKeepFrom,
+      limits,
+      estimatedTokens: est,
+      reason,
+      signal,
+      notice: (info) => this.handoffNotice(info, reason, batchId),
+    });
+    if (!r) return null;
+    const old = this.transcript;
+    this.transcript = r.transcript;
+    old.close();
+    o.bus.emit('session.handoff', { sessionId: SESSION_ID, from: old.file, to: r.transcript.file, notes: r.notesPath, dropped: r.dropped, kept: r.kept });
+    o.onHandoff?.({ ...r, from: old.file });
+    return r;
+  }
+
+  /** The first message of the new conversation: a session.handoff event pointing at the notes. */
+  private handoffNotice(info: { notesPath: string; dropped: number; kept: number }, reason: string, batchId: string | null): { content: ContentBlock[]; cursors?: number[]; batch?: string } {
+    const text = `The conversation was handed off (${reason}). ${info.dropped} earlier message(s) are summarised in ${MEMORY_ROOT}/${info.notesPath}; the ${info.kept} most recent message(s) follow unchanged. Read the notes before relying on anything from before the handoff.`;
+    const pushed = this.o.pushInternal({ type: 'session.handoff', level: 4, trigger: 'store', text, correlation: info.notesPath });
+    const cursor = pushed && typeof pushed.cursor === 'number' ? pushed.cursor : undefined;
+    const env = cursor !== undefined ? this.o.store.get(cursor) : undefined;
+    const block = env ? renderEventsBlock([env], batchId ?? 'handoff') : { type: 'text', text };
+    return { content: [block], ...(cursor !== undefined && env ? { cursors: [cursor] } : {}), ...(batchId ? { batch: batchId } : {}) };
+  }
+
+  /**
+   * Hand off on request (control API): now when idle, otherwise at the start of the next batch.
+   */
+  async requestHandoff(reason = 'requested through the control API'): Promise<{ scheduled: true } | { result: HandoffResult | null }> {
+    const o = this.o;
+    if (!o.handoff || !o.limits) throw new Error('handoff is not configured');
+    if (this.current || this.idleWork) {
+      this.handoffRequested = reason;
+      return { scheduled: true };
+    }
+    const limits = o.limits();
+    const ac = new AbortController();
+    const work = (async (): Promise<HandoffResult | null> => {
+      this.setPhase('handoff');
+      const est = await this.estimate(2, limits.hard, ac.signal);
+      const r = await this.handOff(reason, est, { ...limits, keep: 0 }, this.transcript.length, null, ac.signal);
+      // Nothing waits for a reply: do not resume the notice as an interrupted batch after a restart.
+      if (r && this.transcript.lastMessage()?.role === 'user') this.transcript.appendMark('batch_ended', { reason: 'handoff', rounds: 0, resumable: false });
+      return r;
+    })();
+    this.idleWork = work;
+    try {
+      return { result: await work };
+    } finally {
+      this.idleWork = null;
+      this.setPhase('idle');
+      this.feed?.onIdle();
     }
   }
 
@@ -404,19 +599,19 @@ export class MainSession {
     const results: ToolResultBlock[] = content
       .filter(isToolUseBlock)
       .map((u) => ({ type: 'tool_result', tool_use_id: u.id, content: text, is_error: true }));
-    if (results.length > 0) this.o.transcript.appendMessage({ role: 'user', content: results, batch: batch.id });
+    if (results.length > 0) this.transcript.appendMessage({ role: 'user', content: results, batch: batch.id });
   }
 
   /**
    * One model call with backoff on retryable errors. Returns 'error' when the batch should
    * end, 'cancelled' when a preempt or interrupt cut the call (or its backoff) short.
    */
-  private async callModel(cur: Running): Promise<ProviderResponse | 'error' | 'cancelled'> {
+  private async callModel(cur: Running): Promise<ProviderResponse | 'error' | 'cancelled' | 'overflow'> {
     const o = this.o;
     const { batch } = cur;
     const hard = cur.abort.signal;
     for (let attempt = 0; ; attempt++) {
-      const req = o.assembler.build(o.transcript.messages, { role: 'main', effort: o.effortFor(batch.level) });
+      const req = this.buildRequest(batch.level);
       const call = new AbortController();
       cur.call = call;
       cur.externalOutput = false;
@@ -440,6 +635,10 @@ export class MainSession {
         if (cur.cancel && signal.aborted) return 'cancelled';
         if (isAbortError(err)) throw err;
         const kind = err instanceof ProviderError ? err.kind : 'fatal';
+        if (kind === 'overflow' && o.handoff) {
+          o.log.warn({ batch: batch.id, err: errorMessage(err) }, 'the provider refused the input as too long');
+          return 'overflow';
+        }
         const delay = o.backoffMs[attempt];
         if (kind === 'retryable' && delay !== undefined) {
           o.log.warn({ batch: batch.id, attempt: attempt + 1, delayMs: delay, err: errorMessage(err) }, 'model call failed; backing off');

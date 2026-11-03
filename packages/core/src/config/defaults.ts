@@ -1,6 +1,7 @@
 import { DEFAULT_TOOL_SEARCH } from '../context/tool-search.js';
 import { DEFAULT_MCP_SETTINGS } from '../mcp/settings.js';
 import { DEFAULT_PLUGIN_HOST_SETTINGS } from '../plugins/host.js';
+import { DEFAULT_HANDOFF } from '../session/handoff.js';
 import { defaultTimeZone } from '../util/time.js';
 import type { ProteaConfig } from './types.js';
 
@@ -33,6 +34,7 @@ export function defaultConfig(): ProteaConfig {
         thinkingDisplay: 'omitted',
         cacheTtl: '1h',
         maxOutputTokens: 64_000,
+        thinkingMismatch: 'drop_block',
         timeoutMs: 600_000,
         maxRetries: 2,
         pricing: {},
@@ -47,7 +49,13 @@ export function defaultConfig(): ProteaConfig {
     permissions: { default: 'allow', tools: {}, approvalTtlMs: 86_400_000 },
     mcp: { ...DEFAULT_MCP_SETTINGS, servers: {} },
     skills: { disabled: [], mcpPrompts: true },
-    context: { toolSearch: { ...DEFAULT_TOOL_SEARCH } },
+    context: {
+      toolSearch: { ...DEFAULT_TOOL_SEARCH },
+      handoff: { ...DEFAULT_HANDOFF },
+      compaction: { enabled: false, triggerTokens: 150_000, instructions: null },
+    },
+    memory: { nativeTool: false },
+    persona: { dir: 'persona' },
     observability: { logLevel: 'info', logFormat: 'auto', logEventText: false },
   };
 }
@@ -90,4 +98,9 @@ export const STARTER_CONFIG_YAML = `# Protea configuration. Every key is optiona
 
 # skills:
 #   disabled: []              # names hidden from the catalog; skills live in /data/skills/<name>/SKILL.md
+
+# context:
+#   handoff:                  # when the conversation grows too long it is handed off to a new one
+#     softTokens: 200000      # at the start of a batch above this; the newest third is carried over
+#     hardTokens: null        # before any request above this (null: context window - max output - 5 %)
 `;

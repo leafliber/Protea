@@ -145,19 +145,29 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 - Skills 只能从本地目录安装；Git URL 留到 M5。例程把 Skill 作为 Fork 目标、描述相似度诊断未实现。
 - `rss` 默认 L4 `piggyback`（可配 L3 `debounce`），首次读取只报最新 3 条；`imap` 默认 L2 `flush`，邮件列表与自动邮件（`List-*`、`Precedence: bulk`、`Auto-Submitted`）降为 L4，首次连接只记录邮箱当前位置。
 
-## M4 · 记忆、交接、人格（2 周）
+## M4 · 记忆、交接、人格（2 周）· 状态：已实现（2026-11-03），回答质量待真实模型评测
 
 **目标**：换上下文不换人。
 
-- 记忆工具（memory tool 命令面 + FTS 搜索）、INDEX.md 段。
-- 交接：容量估算、默认交接策略（cheap 模型生成笔记）、新转录、循环保护。
-- 人格文件与可选钩子热加载；默认人格与 `OPERATING.md` 模板。
-- 服务端压缩（可选）与拒答回退接入。
+- [x] 记忆（`packages/core/src/memory/`）：`memory` 工具（memory tool 的 `view / create / str_replace / insert / delete / rename` 命令面，路径 `/memories/…` 映射到 `/data/memory`，原子写入，拒绝越界与符号链接逃逸，单文件 ≤ 1 MB）、`memory_search`（SQLite FTS5 trigram 索引，中文不分词也能搜；短于 3 字的词按子串过滤）、`memory_recent`；`memory-index` 段（`INDEX.md`，系统前缀最后一段）；目录监视增量更新索引；控制 API `/api/memory/*`（写入记审计）。
+- [x] 交接（`packages/core/src/session/handoff.ts`）：容量估算（上一次响应的 usage + 之后消息的本地估算，接近阈值时用 Provider 的 `count_tokens`）；批开始时超过 `softTokens`、任何请求前超过 `hardTokens`、或 Provider 报"输入过长"时交接；默认策略用 `cheap` 模型写 `memory/handoff/<ts>.md`（上一份笔记一并交给它，保证笔记链不断），失败时写机械笔记；新转录 `main.<seq>.jsonl` 以 `session.handoff` 事件开头，尾部消息**去掉 thinking 块**后原样复制；`INDEX.md` 维护"Recent handoffs"列表；循环保护；`POST /api/sessions/main/handoff` 手动交接。
+- [x] 人格热加载：`SOUL.md` / `OPERATING.md` / `USER.md` / 环境提示覆盖变化后从下一次模型请求生效；可选钩子 `persona/hooks.{ts,mts,mjs,js}`（`systemSegments`、`onHandoff`、`onBatchEnd`、`rounds`），文件变化时重载，出错回退默认实现；默认人格的 `OPERATING.md` 增加记忆约定，首次启动创建带模板 `INDEX.md` 的记忆目录。
+- [x] Provider：thinking 块绑定控制（beta `thinking-binding-controls-2026-08-01`，默认 `drop_block`）；拒答回退后按规则回传内容（丢弃最后一个 `fallback` 块之前的 thinking 与工具调用）；费用按 `usage.iterations` 逐次计价；可选服务端压缩（`compact-2026-01-12`，默认关）；`count_tokens`、上下文窗口与"输入过长"错误分类；可声明官方 memory 工具类型（`memory.nativeTool`，默认关）。
+- [x] 不变量 I-7：所有 Provider 请求在发出前做秘密值扫描（`RedactingProvider`），命中替换为 `[REDACTED:<NAME>]` 并记一次 `secret.redacted` 事件。
 
 **验收**：
-- [ ] 回放 2000 条事件触发 ≥ 3 次交接，交接后助理仍能正确回答"我们昨天说好的三件事是什么"（评测集）。
-- [ ] 修改 `SOUL.md` 后下一回合生效，缓存只失效一次。
-- [ ] 不变量 I-7 测试通过（秘密扫描）。
+- [~] 回放 2000 条事件触发 ≥ 3 次交接，交接后助理仍能正确回答"我们昨天说好的三件事是什么"（评测集）。
+  - 机制已验证（`apps/daemon/test/m4.e2e.test.ts`）：真实守护进程，2000 条事件分 101 批推送，`softTokens` 12000 时交接 24 次（5 s）；"三件事"早已离开对话，模型从 `session.handoff` 事件找到最新笔记、用 `memory` 工具读出并答对三项。笔记模型在测试里是确定性的替身（保留上一份笔记的承诺并加入新的约定），**真实 `cheap` 模型的笔记质量与回答正确率需要 API key 跑评测**。
+- [x] 修改 `SOUL.md` 后下一回合生效，缓存只失效一次（同一测试文件）：按"上一请求的工具 → system → messages 是否是本请求的前缀"模拟缓存，6 个请求里只有修改后的第一个未命中；修改之前的 thinking 块不再发送，之后产生的照常回传。
+- [x] 不变量 I-7 测试通过（同一测试文件）：秘密出现在 `USER.md`（系统前缀）、主人消息、记忆文件（经工具结果）与交接笔记请求里，所有发给模型的请求都不含其值，`secret.redacted` 只记一次。
+
+**M4 与原设计的差异**（已同步进各文档）：
+- **保留思考（preserved thinking）**：Claude 5 系列的 thinking 块绑定产生它的对话前缀（system、工具集合、之前的消息），前缀一变，之后回传旧块会被新账户以 400 拒绝。因此：交接复制尾部时去掉 thinking 块（文本、工具调用与结果保留）；系统前缀或已加载工具集合变化（人格、插件、MCP、Skills、记忆索引、秘密集合）时，在转录里追加 `prefix` 标记，之前的 thinking 块从此不再发送（去掉"开头一段"不会使之后的块失效）。这也修正了 M2/M3 热更新在新账户上的同类问题。Anthropic 请求另带 `block_binding.prefix_mismatch_behavior: drop_block` 作为兜底。
+- memory 工具默认以**普通自定义工具**提供（同一命令面与回执文本），不声明官方类型 `memory_20250818`：官方工具会自动在系统提示里加入"做任何事之前先查看记忆目录"的指令，对事件驱动、每批都很短的助理意味着每批多一次读取；需要时用 `memory.nativeTool: true` 开启。
+- 交接事件名为 `session.handoff`（与其他 `session.*` 一致；原设计称 `handoff.completed`），以 `store` 模式记入事件库后直接写进新转录的第一条消息。手动交接与"输入过长"后的交接只保留正在运行的批（或最近一批）。
+- 钩子只实现了 `systemSegments`、`onHandoff`、`onBatchEnd`、`rounds`；`onDelivery`、`onPluginLifecycle`、`eventDelivery` 未实现。钩子模块可以是 `.ts`（需要 Node.js 22.18+ 的类型剥离）或 `.mjs/.js`。
+- 人格变化走"重建系统前缀"（缓存失效一次），而不是 API 推荐的"会话中系统消息"追加形式；后者能做到缓存不失效，记为后续优化（[04-risks-and-open-questions.md](04-risks-and-open-questions.md) Q11）。
+- Fork 不做交接（受 `maxTurns` 约束），但同样使用 thinking 截止标记。记忆向量检索（sqlite-vec）未实现。
 
 ## M5 · 控制平面（3 周）
 

@@ -60,7 +60,9 @@ export type BatchEndReason =
   | 'model_error'
   /** Cancelled by an `interrupt` event; the interrupting events start the next batch. */
   | 'interrupted'
-  | 'aborted';
+  | 'aborted'
+  /** The conversation did not fit the context even after a handoff (M4). */
+  | 'context_overflow';
 
 /** How a running turn was cut short (docs/10-architecture/04-scheduling-and-preemption.md §4). */
 export type CancelKind = 'preempt' | 'interrupt';

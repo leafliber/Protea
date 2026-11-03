@@ -10,6 +10,11 @@ import {
   ContextAssembler,
   ForkManager,
   EventStore,
+  Handoff,
+  MemoryIndex,
+  MemoryStore,
+  Persona,
+  RedactingProvider,
   PluginHost,
   KvRepo,
   MainSession,
@@ -30,7 +35,10 @@ import {
   UsageRepo,
   approvalTools,
   createLogger,
+  contextLimits,
   createProvider,
+  ensureMemoryDir,
+  estimateMessagesTokens,
   ensurePersona,
   errorMessage,
   forkTools,
@@ -38,16 +46,18 @@ import {
   kernelTools,
   kvNamespace,
   loadConfig,
-  loadPersona,
   mainTranscriptPath,
+  memoryTools,
   newId,
   normalizeMcpServer,
   openDatabase,
   reconcileDeliveries,
   resolveDevLoader,
+  secretsEpoch,
   setConfigValue,
   skillTools,
   systemClock,
+  transcriptSeq,
   watchPaths,
   type Clock,
   type Db,
@@ -85,7 +95,8 @@ export interface Daemon {
   db: Db;
   bus: Bus;
   store: EventStore;
-  transcript: Transcript;
+  /** The current main transcript (a handoff replaces it). */
+  readonly transcript: Transcript;
   main: MainSession;
   scheduler: Scheduler;
   plugins: PluginHost;
@@ -97,6 +108,9 @@ export interface Daemon {
   tools: ToolRegistry;
   mcp: McpManager;
   skills: SkillRegistry;
+  memory: MemoryStore;
+  memoryIndex: MemoryIndex;
+  persona: Persona;
   /** Resolves once the MCP servers configured at start have been tried (they start in the background). */
   mcpReady: Promise<void>;
   status(): StatusResponse;
@@ -178,7 +192,21 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const owner = new OwnerRegistry(config.owner.identities);
   if (!owner.hasAny()) log.warn('owner.identities is empty: no event can reach level 1');
   const secrets = new SecretStore(path.join(dataDir, 'secrets'), env);
-  const provider = opts.provider ?? createProvider(config, secrets);
+  // Invariant I-7: no request carries a secret value, whatever path it took into the context.
+  const redactedNames = new Set<string>();
+  let pushInternalLater: ((input: Parameters<PluginHost['pushInternal']>[0]) => void) | null = null;
+  const provider = new RedactingProvider(opts.provider ?? createProvider(config, secrets), secrets, (names) => {
+    const fresh = names.filter((n) => !redactedNames.has(n));
+    if (fresh.length === 0) return;
+    for (const n of fresh) redactedNames.add(n);
+    log.warn({ secrets: fresh }, 'secret values were redacted from a model request');
+    pushInternalLater?.({
+      type: 'secret.redacted',
+      level: 4,
+      trigger: 'store',
+      text: `The value of secret(s) ${fresh.join(', ')} appeared in text bound for the model and was replaced with [REDACTED:<name>].`,
+    });
+  });
   const tools = new ToolRegistry();
   const assets = assetsDir(env);
   const loader = devLoader(env);
@@ -269,12 +297,25 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   });
   plugins.attachApprovals(approvals);
 
-  const personaDir = path.join(dataDir, 'persona');
+  const personaDir = path.resolve(dataDir, config.persona.dir);
   if (ensurePersona(personaDir, path.join(assets, 'personas', 'default')).created) log.info({ dir: personaDir }, 'installed the default persona');
-  const persona = loadPersona(personaDir);
-  const pushInternal = (input: Parameters<PluginHost['pushInternal']>[0]): void => {
-    plugins.pushInternal(input);
-  };
+  const persona = new Persona(personaDir, log.child({ component: 'persona' }));
+  await persona.loadHooks();
+  const pushInternal = (input: Parameters<PluginHost['pushInternal']>[0]) => plugins.pushInternal(input);
+  pushInternalLater = pushInternal;
+
+  // Memory (docs/10-architecture/11-memory-and-persona.md): files under /data/memory, a full-text index, the INDEX.md segment.
+  const memoryDir = path.join(dataDir, 'memory');
+  if (ensureMemoryDir(memoryDir, path.join(assets, 'personas', 'default', 'memory')).created) log.info({ dir: memoryDir }, 'created the memory directory');
+  let memoryIndex: MemoryIndex | null = null;
+  let refreshSegments = (): void => undefined;
+  const memory = new MemoryStore(memoryDir, (paths) => {
+    memoryIndex?.update(paths);
+    if (paths.includes('INDEX.md')) refreshSegments();
+  });
+  memoryIndex = new MemoryIndex(db, memory, () => new Date(clock.now()).toISOString());
+  const synced = memoryIndex.sync();
+  if (synced.indexed + synced.removed > 0) log.info(synced, 'memory index updated');
 
   // Skills (docs/10-architecture/10-skills.md): built-in → data volume → plugins → MCP prompts.
   const skills = new SkillRegistry({
@@ -296,7 +337,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
 
   const budget = new BudgetTracker({ usage, settings: config.budget, bus, log: log.child({ component: 'budget' }), clock, pushInternal });
   const segments = new SystemSegments({
-    persona,
+    persona: () => persona.current,
+    hooks: () => persona.hooks,
+    memoryIndex: () => memory.readText('INDEX.md') ?? null,
     plugins,
     timezone: tz,
     overridesDir: path.join(dataDir, 'overrides'),
@@ -315,6 +358,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     segments.refresh();
   });
   bus.on('skills.changed', () => segments.refresh());
+  refreshSegments = () => segments.refresh();
   const dispatcher = new ToolDispatcher(tools, log.child({ component: 'tools' }));
   dispatcher.setGuard(new PermissionGuard(policy, approvals, audit));
   const toolStats = new ToolStatsRepo(db);
@@ -343,10 +387,36 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     backoffMs: config.session.backoffMs,
     effortFor: (role) => (role === 'main' ? effort.main[2] : effort[role]),
     system: () => segments.forkSegments(),
+    prefixSalt: () => secretsEpoch(secrets),
     pushInternal,
   });
 
   const startedAt = clock.now();
+  const roundsNow = (): { soft: number; hard: number } => {
+    const custom = persona.hooks?.rounds;
+    if (custom) {
+      try {
+        const r = custom();
+        if (Number.isInteger(r?.soft) && Number.isInteger(r?.hard) && r.soft > 0 && r.hard >= r.soft) return r;
+        log.warn({ rounds: r }, 'persona rounds hook returned invalid limits; using session.rounds');
+      } catch (err) {
+        log.warn({ err: errorMessage(err) }, 'persona rounds hook failed; using session.rounds');
+      }
+    }
+    return config.session.rounds;
+  };
+  const reloadPersona = async (): Promise<void> => {
+    try {
+      if (await persona.reload()) {
+        segments.refresh();
+        bus.emit('persona.changed', { files: ['persona'] });
+        log.info('persona reloaded; it applies from the next model request');
+      }
+    } catch (err) {
+      log.warn({ err: errorMessage(err) }, 'persona reload failed');
+    }
+  };
+  const limits = () => contextLimits(config.context.handoff, provider.contextWindow('main'), config.providers.anthropic.maxOutputTokens);
   let main: MainSession;
   const status = (): StatusResponse => {
     const h = provider.health();
@@ -367,7 +437,21 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       plugins: plugins.status(),
       mcp: mcp.status(),
       skills: { listed: skills.listedNames().length, rejected: skills.list().filter((k) => k.errors.length > 0).length },
-      tools: { total: tools.list().length, deferred: provider.supportsToolSearch?.('main') ? exposure.deferredNames().length : 0 },
+      tools: { total: tools.list().length, deferred: provider.supportsToolSearch('main') ? exposure.deferredNames().length : 0 },
+      context: (() => {
+        const t = main.currentTranscript;
+        const lim = limits();
+        const base = t.sinceLastUsage();
+        return {
+          transcript: path.basename(t.file),
+          handoffs: transcriptSeq(t.file) - 1,
+          estimatedTokens: base ? base.tokens + estimateMessagesTokens(base.after) : estimateMessagesTokens(t.messages),
+          softTokens: lim.soft,
+          hardTokens: lim.hard,
+        };
+      })(),
+      memory: { files: memoryIndex?.size ?? 0 },
+      persona: { hooks: persona.hooks !== null, ...(persona.hooksProblem ? { problem: persona.hooksProblem } : {}) },
       usage24h: usage.totalsSince(clock.now() - 86_400_000),
       forks: forks.list(),
       budget: budget.status(),
@@ -377,6 +461,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   for (const spec of forkTools(forks, { maxTurns: config.scheduler.forks.maxTurns })) tools.register('core', spec);
   for (const spec of approvalTools({ approvals, policy, tools })) tools.register('core', spec);
   for (const spec of skillTools(skills)) tools.register('core', spec);
+  for (const spec of memoryTools({ store: memory, index: memoryIndex, clock, timezone: tz, nativeType: config.memory.nativeTool })) tools.register('core', spec);
   await plugins.startAll();
   skills.rescan();
   const mcpReady = mcp.apply(config.mcp.servers).catch((err: unknown) => log.error({ err: errorMessage(err) }, 'MCP servers not applied'));
@@ -388,11 +473,21 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     usage,
     bus,
     provider,
-    assembler: new ContextAssembler(segments, tools, exposure),
+    assembler: new ContextAssembler(segments, tools, exposure, () =>
+      config.context.compaction.enabled ? { triggerTokens: config.context.compaction.triggerTokens, instructions: config.context.compaction.instructions } : null,
+    ),
     dispatcher,
     log: log.child({ component: 'session' }),
     clock,
-    rounds: config.session.rounds,
+    // Persona hooks may set the round limits; read on every batch.
+    rounds: {
+      get soft() {
+        return roundsNow().soft;
+      },
+      get hard() {
+        return roundsNow().hard;
+      },
+    },
     backoffMs: config.session.backoffMs,
     effortFor: (level: Level) => effort.main[level],
     status: () => ({
@@ -403,6 +498,33 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       forks: forks.activeCount(),
     }),
     pushInternal,
+    handoff: new Handoff({
+      provider,
+      memory,
+      sessionsDir: path.join(dataDir, 'sessions'),
+      dataDir,
+      log: log.child({ component: 'handoff' }),
+      clock,
+      timezone: tz,
+      settings: () => config.context.handoff,
+      hooks: () => persona.hooks,
+      cheapEffort: () => effort.cheap,
+    }),
+    limits,
+    prefixSalt: () => secretsEpoch(secrets),
+    onHandoff: (r) => {
+      sessions.upsert({
+        id: 'main',
+        kind: 'main',
+        state: 'active',
+        transcriptPath: path.relative(dataDir, r.transcript.file),
+        createdAt: new Date(clock.now()).toISOString(),
+      });
+    },
+    onBatchEnd: (stats) => {
+      const hook = persona.hooks?.onBatchEnd;
+      if (hook) void Promise.resolve(hook(stats)).catch((err: unknown) => log.warn({ err: errorMessage(err) }, 'persona onBatchEnd failed'));
+    },
   });
   const scheduler = new Scheduler({
     store,
@@ -497,7 +619,13 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     bus,
     store,
     log: log.child({ component: 'control' }),
-    transcript: () => transcript,
+    transcript: () => main.currentTranscript,
+    handoff: (reason) => main.requestHandoff(reason),
+    memory: {
+      store: memory,
+      index: memoryIndex,
+      onWrite: (rel) => audit.record({ kind: 'memory_write', summary: `/memories/${rel}`, owner: 'console:admin' }),
+    },
     forks,
     plugins,
     approvals,
@@ -553,6 +681,19 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       debounceMs: 300,
       onError: (err) => log.warn({ err: err.message }, 'skills directory watcher error'),
     }),
+    // Persona edits (SOUL.md, OPERATING.md, USER.md, env prompt overrides, hooks) reach the prefix at the next request.
+    watchPaths([{ path: personaDir, recursive: true }], () => void reloadPersona(), {
+      debounceMs: 300,
+      onError: (err) => log.warn({ err: err.message }, 'persona directory watcher error'),
+    }),
+    // The owner may edit memory files directly; keep the index (and the INDEX.md segment) in step.
+    watchPaths([{ path: memoryDir, recursive: true, filter: (name) => name === null || !path.basename(name).startsWith('.tmp-') }], () => {
+      memoryIndex?.sync();
+      segments.refresh();
+    }, {
+      debounceMs: 500,
+      onError: (err) => log.warn({ err: err.message }, 'memory directory watcher error'),
+    }),
   ];
   const expiry = setInterval(() => approvals.expireDue(), 60_000);
   expiry.unref();
@@ -575,7 +716,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       await mcp.stopAll();
       await plugins.stopAll();
       await server.close();
-      transcript.close();
+      main.currentTranscript.close();
       db.close();
       lock.release();
       log.info('stopped');
@@ -594,7 +735,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     db,
     bus,
     store,
-    transcript,
+    get transcript() {
+      return main.currentTranscript;
+    },
     main,
     scheduler,
     plugins,
@@ -606,6 +749,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     tools,
     mcp,
     skills,
+    memory,
+    memoryIndex,
+    persona,
     mcpReady,
     status,
     reloadConfig,

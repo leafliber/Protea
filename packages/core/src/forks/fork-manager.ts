@@ -17,6 +17,7 @@ import {
 import type { Bus } from '../bus.js';
 import type { ForkSchedulerSettings } from '../config/types.js';
 import { mergeConsecutive } from '../context/assembler.js';
+import { prefixFingerprint } from '../context/prefix.js';
 import type { ToolExposure } from '../context/tool-search.js';
 import type { SessionRepo, UsageRepo } from '../db/repos.js';
 import type { Logger } from '../observability/logger.js';
@@ -101,6 +102,8 @@ export interface ForkManagerOptions {
   effortFor: (role: ModelRole) => Effort;
   /** System prompt segments for forks (stable across forks, so it caches). */
   system: () => SystemSegment[];
+  /** Extra input to the thinking-prefix fingerprint (e.g. the redacted secret set). */
+  prefixSalt?: () => string;
   pushInternal: (input: Omit<EventInput, 'ts' | 'origin'> & { ts?: string }) => void;
 }
 
@@ -456,14 +459,17 @@ export class ForkManager {
         return { kind: 'completed', summary: `Stopped at the limit of ${f.cp.maxTurns} rounds without a final summary.` };
       }
       const toolSet = o.exposure?.forRequest(t.messages, { role: f.cp.model, allowed });
-      const res = await this.callModel(f, {
+      const req: Parameters<Provider['generate']>[0] = {
         role: f.cp.model,
         system: o.system(),
         messages: mergeConsecutive(t.messages),
         tools: toolSet ? toolSet.tools : o.tools.forProvider((d) => allowed.has(d.name)),
         ...(toolSet?.toolSearch ? { toolSearch: true } : {}),
         effort: o.effortFor(f.cp.model),
-      });
+      };
+      // Thinking blocks are bound to the prefix: when it changed, earlier ones are left out.
+      if (t.notePrefix(prefixFingerprint(req, o.prefixSalt?.() ?? ''))) req.messages = mergeConsecutive(t.messages);
+      const res = await this.callModel(f, req);
       if ('kind' in res) return res;
       f.cp.rounds++;
       t.appendMessage({ role: 'assistant', content: res.content, usage: res.usage, stop: res.stopReason, model: res.model });

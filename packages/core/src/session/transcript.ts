@@ -7,6 +7,7 @@ import {
   type ToolResultBlock,
   type TranscriptMessage,
 } from '@protea/protocol';
+import { hasThinking, stripThinking } from '../context/prefix.js';
 
 export interface UsageSummary {
   inputTokens: number;
@@ -153,6 +154,11 @@ export class Transcript {
   private repairs: RepairAction[] = [];
   private derived: Derived[] = [];
   private trailingBatchEnd: { resumable: boolean } | null = null;
+  /** Messages from records before this index go out without thinking blocks (see notePrefix). */
+  private floor = 0;
+  private prefix: string | null = null;
+  /** Notes of the handoff that started this transcript (memory-relative path). */
+  private handoffNotes: string | null = null;
   private fd: number;
 
   private constructor(
@@ -245,6 +251,11 @@ export class Transcript {
       } else if (rec.t === 'mark') {
         if (rec.kind === 'repair' && Array.isArray(rec['actions'])) this.repairs.push(...(rec['actions'] as RepairAction[]));
         if (rec.kind === 'batch_ended') this.trailingBatchEnd = { resumable: rec['resumable'] === true };
+        if (rec.kind === 'handoff_from' && typeof rec['notes'] === 'string') this.handoffNotes = rec['notes'];
+        if (rec.kind === 'prefix') {
+          if (typeof rec['hash'] === 'string') this.prefix = rec['hash'];
+          if (typeof rec['floor'] === 'number') this.floor = Math.max(this.floor, rec['floor']);
+        }
       } else {
         onDiscarded?.({ kind: 'unknown-record', file: this.file, line: i + 1 });
       }
@@ -269,10 +280,37 @@ export class Transcript {
     const { t: _t, kind: _k, at: _a, ...rest } = data;
     this.writeLine({ t: 'mark', kind, ...rest, at: this.now() });
     if (kind === 'batch_ended') this.trailingBatchEnd = { resumable: data['resumable'] === true };
+    if (kind === 'handoff_from' && typeof data['notes'] === 'string') this.handoffNotes = data['notes'];
   }
 
   get messages(): TranscriptMessage[] {
-    return this.derived.map((d) => d.msg);
+    if (this.floor === 0) return this.derived.map((d) => d.msg);
+    const out: TranscriptMessage[] = [];
+    for (const d of this.derived) {
+      const m = d.src !== null && d.src < this.floor ? stripThinking(d.msg) : d.msg;
+      if (m.content.length > 0) out.push(m);
+    }
+    return out;
+  }
+
+  /**
+   * Record the request prefix (system prompt and tools) the next model call uses. Thinking
+   * blocks are bound to the prefix that produced them, so when it changes every earlier
+   * thinking block is dropped from later requests (removing a leading run of thinking blocks
+   * keeps the rest valid). Append-only: a `prefix` mark with the new floor. Returns true
+   * when the floor moved, so the caller rebuilds its messages.
+   */
+  notePrefix(hash: string): boolean {
+    if (hash === this.prefix) return false;
+    const pending = this.records.slice(this.floor).some((r) => hasThinking(r.content));
+    this.prefix = hash;
+    if (!pending) {
+      this.appendMark('prefix', { hash });
+      return false;
+    }
+    this.floor = this.records.length;
+    this.appendMark('prefix', { hash, floor: this.floor });
+    return true;
   }
 
   get length(): number {
@@ -295,6 +333,54 @@ export class Transcript {
     const set = new Set<number>();
     for (const r of this.records) for (const c of r.cursors ?? []) set.add(c);
     return set;
+  }
+
+  /** Notes of the handoff this transcript started from, if any. */
+  get previousNotes(): string | null {
+    return this.handoffNotes;
+  }
+
+  /** Records (with batch and cursors) behind `messages`, for copying a tail into a new transcript. */
+  recordsFrom(messageIndex: number): Array<{ msg: TranscriptMessage; batch?: string; cursors?: number[] }> {
+    const msgs = this.messages;
+    const out: Array<{ msg: TranscriptMessage; batch?: string; cursors?: number[] }> = [];
+    // `messages` drops messages left empty by the thinking floor; map back through the same filter.
+    const kept = this.derived.filter((d) => {
+      const m = d.src !== null && d.src < this.floor ? stripThinking(d.msg) : d.msg;
+      return m.content.length > 0;
+    });
+    kept.forEach((d, i) => {
+      if (i < messageIndex) return;
+      const rec = d.src !== null ? this.records[d.src] : undefined;
+      out.push({ msg: msgs[i] as TranscriptMessage, ...(rec?.batch ? { batch: rec.batch } : {}), ...(rec?.cursors ? { cursors: rec.cursors } : {}) });
+    });
+    return out;
+  }
+
+  /** Index into `messages` of the first message of a batch (`messages.length` when it has none yet). */
+  batchStart(batchId: string): number {
+    const msgs = this.recordsFrom(0);
+    const i = msgs.findIndex((m) => m.batch === batchId);
+    return i < 0 ? msgs.length : i;
+  }
+
+  /**
+   * The last model response with usage, as an input-token baseline: its input plus output
+   * tokens, and the messages appended after it. Null when no response recorded usage.
+   */
+  sinceLastUsage(): { tokens: number; after: TranscriptMessage[] } | null {
+    for (let i = this.records.length - 1; i >= 0; i--) {
+      const r = this.records[i] as MsgRecord;
+      if (r.role !== 'assistant' || !r.usage) continue;
+      const u = r.usage;
+      const k = this.derived.findIndex((d) => d.src === i);
+      if (k < 0) return null;
+      return {
+        tokens: u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens + u.outputTokens,
+        after: this.derived.slice(k + 1).map((d) => d.msg),
+      };
+    }
+    return null;
   }
 
   lastBatchId(): string | undefined {

@@ -1,4 +1,5 @@
 import type { Effort, Level, ModelRole } from '@protea/protocol';
+import type { HandoffSettings } from '../session/handoff.js';
 import type { ToolSearchSettings } from '../context/tool-search.js';
 import type { McpSettings } from '../mcp/settings.js';
 import type { PermissionSettings } from '../permissions/policy.js';
@@ -57,6 +58,12 @@ export interface AnthropicSettings {
   /** Prompt cache TTL. Events arrive minutes apart, so 1h is the default. */
   cacheTtl: '5m' | '1h';
   maxOutputTokens: number;
+  /**
+   * What the API does with a thinking block whose conversation prefix changed (beta
+   * thinking-binding-controls-2026-08-01): drop_block degrades instead of failing; error
+   * fails the request; null sends nothing (the account's default applies).
+   */
+  thinkingMismatch: 'drop_block' | 'error' | null;
   timeoutMs: number;
   maxRetries: number;
   pricing: Record<string, ModelPricing>;
@@ -81,8 +88,24 @@ export interface SkillsSettings {
   mcpPrompts: boolean;
 }
 
+export interface CompactionSettings {
+  /** Server-side compaction before the handoff threshold (Anthropic beta compact-2026-01-12). */
+  enabled: boolean;
+  /** Input tokens at which the provider compacts. */
+  triggerTokens: number;
+  /** Replaces the provider's summarization prompt; null keeps it. */
+  instructions: string | null;
+}
+
 export interface ContextSettings {
   toolSearch: ToolSearchSettings;
+  handoff: HandoffSettings;
+  compaction: CompactionSettings;
+}
+
+export interface MemorySettings {
+  /** Declare the provider's own memory tool type instead of a schema (the API then adds its own memory instructions). */
+  nativeTool: boolean;
 }
 
 export interface ProteaConfig {
@@ -104,5 +127,8 @@ export interface ProteaConfig {
   mcp: McpSettings;
   skills: SkillsSettings;
   context: ContextSettings;
+  memory: MemorySettings;
+  /** Persona directory, relative to the data directory. */
+  persona: { dir: string };
   observability: { logLevel: string; logFormat: 'json' | 'pretty' | 'auto'; logEventText: boolean };
 }

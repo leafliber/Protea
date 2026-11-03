@@ -52,7 +52,7 @@ M2 实现细节：
 
 - 存储：`/data/secrets/` 下每个秘密一个文件（0600），或环境变量 `PROTEA_SECRET_<NAME>`。控制台/CLI 只能写与列名，不能读值。
 - 使用：插件清单声明 `secrets`，启动时注入其环境变量（缺失则插件启动失败）；配置文件中以 `${secret:NAME}` 引用，解析只发生在传给插件/MCP 的那一刻。插件子进程只继承最小环境，不会拿到守护进程的其他秘密（M2 已实现）；stdio MCP 服务器同样只拿到 SDK 的默认环境加配置的 `env`（M3）。MCP 的 OAuth 令牌存在 `secrets/mcp-oauth/<id>.json`（0600），OAuth 回调只认正在进行的授权的 `state`。
-- **不入上下文**：Core 在构造 Provider 请求前对所有文本做一次秘密值扫描（精确匹配所有已知秘密值），命中即替换为 `[REDACTED:<NAME>]` 并记 `internal` 警告事件（I-7）。日志同样过滤。
+- **不入上下文**：Core 在构造 Provider 请求前对所有文本做一次秘密值扫描（精确匹配所有已知秘密值），命中即替换为 `[REDACTED:<NAME>]` 并记 `internal` 警告事件（I-7）。日志同样过滤。M4 实现：守护进程把 Provider 包在 `RedactingProvider` 里，主会话、Fork、交接笔记的每个请求（system、消息文本、工具输入与结果、工具描述）都经过扫描；thinking 块是签名的不透明内容，不改。已知秘密 = 秘密目录里的文件 + `PROTEA_SECRET_*` 环境变量 + 已被读取过的秘密名，值至少 6 个字符。每个秘密名每次运行只记一条 L4 `store` 事件 `secret.redacted`（只含名字）。扫描是确定性的，前缀保持稳定；秘密集合变化计入 thinking 前缀指纹。
 - 工具回执里出现秘密（例如 `env` 命令输出）同样被过滤。
 
 ## 5. 提示注入防护

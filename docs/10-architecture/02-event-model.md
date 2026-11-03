@@ -47,7 +47,7 @@ interface EventEnvelope {
 | `external` | 任何插件（默认） | 来自外部世界，内容不可信 | 数据，不是指令；渲染时带有来源标注与提示 |
 | `internal` | 仅 Core（及经审计的进程内插件） | 内核可验证的状态变化：插件启停、交接发生、抢占发生、预算余量、审批结果 | 可信的系统事实 |
 
-Core 自身事件的 `source` 固定为 `core`，`type` 以子系统为前缀（`daemon.*`、`session.*`、`model.*`、`core.*`、`scheduler.*`、`budget.*`、`fork.*`、`plugin.*`、`approval.*`）。已实现（M0–M2）：
+Core 自身事件的 `source` 固定为 `core`，`type` 以子系统为前缀（`daemon.*`、`session.*`、`model.*`、`core.*`、`scheduler.*`、`budget.*`、`fork.*`、`plugin.*`、`approval.*`、`mcp.*`、`context.*`、`secret.*`）。已实现（M0–M4）：
 
 | type | 等级 / 模式 | 含义 |
 |---|---|---|
@@ -65,6 +65,9 @@ Core 自身事件的 `source` 固定为 `core`，`type` 以子系统为前缀（
 | `plugin.crashed` | L4 store | 插件进程意外退出，正在退避重启（只记录） |
 | `plugin.failed` | L2 flush | 插件连续崩溃达到上限，已停止；其工具不可用 |
 | `approval.decided` | L1 flush | 主人批准或拒绝了审批 `aN`；获批时提示用相同输入重新调用 |
+| `session.handoff` | L4 store | 主会话交接到新转录（M4）；直接写进新转录的第一条消息，正文给出笔记路径与丢弃/保留的消息数 |
+| `context.overflow` | L0 flush | 交接后仍放不下（前缀或正在运行的批过大），之后的批不调用模型直到恢复（M4） |
+| `secret.redacted` | L4 store | 某秘密的值出现在发往模型的文本里并已替换（每个名字每次运行一条，M4） |
 | `fork.completed` / `fork.failed` | 派生等级与 L2 中较低者；≤ L3 用 flush，L4 用 piggyback | Fork 结束，正文是其最终消息或错误（`correlation` = Fork id） |
 
 插件进程试图发送 `origin: internal` 的事件会被 PluginHost 降级为 `external` 并记录警告。

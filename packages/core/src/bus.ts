@@ -38,6 +38,10 @@ export interface BusTopics {
   'mcp.changed': McpServerStatus;
   /** The Skills catalog changed (listed names). */
   'skills.changed': { names: string[] };
+  /** The main session handed off to a new transcript (M4). */
+  'session.handoff': { sessionId: string; from: string; to: string; notes: string; dropped: number; kept: number };
+  /** Persona files or hooks changed on disk (M4). */
+  'persona.changed': { files: string[] };
 }
 
 export type BusTopic = keyof BusTopics;

@@ -11,7 +11,22 @@ import {
   type StatusResponse,
   type StreamMessage,
 } from '@protea/protocol';
-import type { ApprovalService, Bus, EventStore, ForkManager, Logger, McpManager, PluginHost, PushResult, SkillRegistry, Transcript } from '@protea/core';
+import {
+  MemoryError,
+  type ApprovalService,
+  type Bus,
+  type EventStore,
+  type ForkManager,
+  type HandoffResult,
+  type Logger,
+  type McpManager,
+  type MemoryIndex,
+  type MemoryStore,
+  type PluginHost,
+  type PushResult,
+  type SkillRegistry,
+  type Transcript,
+} from '@protea/core';
 
 export interface ControlDeps {
   adminToken: string;
@@ -33,6 +48,9 @@ export interface ControlDeps {
   skills?: SkillRegistry;
   /** Persist `skills.disabled` and update the catalog. */
   setSkillEnabled?: (name: string, enabled: boolean) => void;
+  /** Hand the main session off now (idle) or at the start of the next batch. */
+  handoff?: (reason?: string) => Promise<{ scheduled: true } | { result: HandoffResult | null }>;
+  memory?: { store: MemoryStore; index: MemoryIndex; onWrite?: (path: string) => void };
   status: () => StatusResponse;
   ready: () => { ready: boolean; reasons: string[] };
   /** Deliver an operator message through the console plugin. */
@@ -208,6 +226,56 @@ export function createControlApp(d: ControlDeps): Hono {
         ...(d.forks?.list() ?? []).map((f) => ({ kind: 'fork', ...f })),
       ],
     });
+  });
+
+  app.post('/api/sessions/main/handoff', async (c) => {
+    if (!d.handoff) return c.json({ error: { code: 'not_found', message: 'handoff is not available' } }, 404);
+    const body = (await c.req.json().catch(() => ({}))) as { reason?: unknown };
+    const out = await d.handoff(typeof body.reason === 'string' && body.reason.trim() ? body.reason.trim() : undefined);
+    if ('scheduled' in out) return c.json({ scheduled: true }, 202);
+    const r = out.result;
+    return c.json(r ? { handedOff: true, transcript: r.transcript.file.split('/').pop(), notes: r.notesPath, dropped: r.dropped, kept: r.kept } : { handedOff: false });
+  });
+
+  // Memory (docs/10-architecture/11-memory-and-persona.md); writes are audited.
+  const memoryPath = (raw: string | undefined): string => {
+    const p = (raw ?? '').trim();
+    return p.startsWith('/memories') ? p : `/memories/${p.replace(/^\/+/, '')}`;
+  };
+  app.get('/api/memory/tree', (c) => {
+    if (!d.memory) return c.json({ files: [] });
+    return c.json({ files: d.memory.store.listFiles().map((f) => ({ path: f.path, size: f.size, mtime: new Date(f.mtimeMs).toISOString() })) });
+  });
+  app.get('/api/memory/file', (c) => {
+    if (!d.memory) return c.json({ error: { code: 'not_found', message: 'no memory directory' } }, 404);
+    try {
+      const rel = d.memory.store.relative(memoryPath(c.req.query('path')));
+      const text = d.memory.store.readText(rel);
+      if (text === undefined) return c.json({ error: { code: 'not_found', message: 'no such memory file' } }, 404);
+      return c.json({ path: rel, text });
+    } catch (err) {
+      return errorJson(c, 400, 'invalid_path', err);
+    }
+  });
+  app.put('/api/memory/file', async (c) => {
+    if (!d.memory) return c.json({ error: { code: 'not_found', message: 'no memory directory' } }, 404);
+    try {
+      const rel = d.memory.store.relative(memoryPath(c.req.query('path')));
+      if (rel === '') throw new MemoryError('a file path is required');
+      const text = await c.req.text();
+      d.memory.store.writeText(rel, text);
+      d.memory.onWrite?.(rel);
+      return c.json({ ok: true, path: rel });
+    } catch (err) {
+      return errorJson(c, 400, 'invalid_path', err);
+    }
+  });
+  app.get('/api/memory/search', (c) => {
+    if (!d.memory) return c.json({ hits: [] });
+    const q = c.req.query('q') ?? '';
+    const paths = c.req.queries('paths');
+    const limit = Math.min(Math.max(intParam(c, 'limit') ?? 10, 1), 50);
+    return c.json({ hits: d.memory.index.search(q, { ...(paths ? { paths } : {}), limit }) });
   });
 
   app.get('/api/sessions/forks', (c) => c.json({ forks: d.forks?.list() ?? [] }));
@@ -422,6 +490,7 @@ export function createControlApp(d: ControlDeps): Hono {
         d.bus.on('approval.changed', (a) => push({ topic: 'approval', data: a })),
         d.bus.on('mcp.changed', (m) => push({ topic: 'mcp', data: m })),
         d.bus.on('skills.changed', (k) => push({ topic: 'skills', data: k })),
+        d.bus.on('session.handoff', (h) => push({ topic: 'handoff', data: { from: h.from.split('/').pop() ?? h.from, to: h.to.split('/').pop() ?? h.to, notes: h.notes, dropped: h.dropped, kept: h.kept } })),
       ];
       stream.onAbort(() => {
         for (const u of unsubs) u();

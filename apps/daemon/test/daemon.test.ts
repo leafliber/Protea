@@ -81,15 +81,20 @@ describe('daemon', () => {
 
     // The system prefix: persona, runtime notes, plugin environment prompts, then the Skills catalog; kernel and plugin tools.
     const req = provider.calls[0];
-    expect(req?.system.map((s) => s.id)).toEqual(['identity', 'runtime', 'operating', 'owner', 'env:console', 'env:cron', 'skills-catalog']);
-    expect(req?.system.at(-1)?.text).toMatch(/- daily-brief: .*\(source: builtin\)\n- protea-self-ops: .*\(source: builtin\)$/);
+    expect(req?.system.map((s) => s.id)).toEqual(['identity', 'runtime', 'operating', 'owner', 'env:console', 'env:cron', 'skills-catalog', 'memory-index']);
+    expect(req?.system.find((s) => s.id === 'skills-catalog')?.text).toMatch(
+      /- daily-brief: .*\(source: builtin\)\n- memory-hygiene: .*\(source: builtin\)\n- protea-self-ops: .*\(source: builtin\)$/,
+    );
+    expect(req?.system.at(-1)?.text).toMatch(/^<memory_index path="\/memories\/INDEX.md">\n# Memory index\n/);
     expect(req?.tools.map((t) => t.name)).toEqual([
-      'approval_request', 'events_promote', 'events_query', 'fork_cancel', 'fork_spawn', 'fork_status', 'idle', 'self_status', 'skill_load', 'skill_read',
+      'approval_request', 'events_promote', 'events_query', 'fork_cancel', 'fork_spawn', 'fork_status', 'idle', 'memory', 'memory_recent', 'memory_search', 'self_status', 'skill_load', 'skill_read',
       'con_send', 'schedule_create', 'schedule_delete', 'schedule_list', 'sleep_until',
     ]);
     expect(req?.toolSearch).toBeUndefined();
     expect(status['forks']).toEqual([]);
-    expect(status).toMatchObject({ mcp: [], skills: { listed: 2, rejected: 0 }, tools: { total: 15, deferred: 0 } });
+    expect(status).toMatchObject({ mcp: [], skills: { listed: 3, rejected: 0 }, tools: { total: 18, deferred: 0 }, memory: { files: 1 } });
+    // The scripted provider reports no context window: 200k − 64k output − 10k margin.
+    expect(status['context']).toMatchObject({ transcript: 'main.0001.jsonl', handoffs: 0, softTokens: 126_000, hardTokens: 126_000 });
     expect((status['budget'] as { enforced: boolean }).enforced).toBe(false);
   });
 

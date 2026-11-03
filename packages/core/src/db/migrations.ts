@@ -161,4 +161,17 @@ CREATE TABLE tool_stats (
 );
 `,
   },
+  {
+    version: 4,
+    name: 'memory-index',
+    sql: `
+CREATE TABLE memory_files (
+  path        TEXT PRIMARY KEY,
+  mtime_ms    INTEGER NOT NULL,
+  size        INTEGER NOT NULL,
+  indexed_at  TEXT NOT NULL
+);
+CREATE VIRTUAL TABLE memory_fts USING fts5(path UNINDEXED, body, tokenize = 'trigram');
+`,
+  },
 ];

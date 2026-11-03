@@ -11,7 +11,9 @@ interface Provider {
   health(): { ready: boolean; problem?: string };   // 例如缺少 API key
   // 内部总是流式；完成后返回完整消息。失败抛 ProviderError{kind: retryable|fatal|overflow|config}
   generate(req: ProviderRequest, opts: { signal: AbortSignal; onText?: (delta: string) => void }): Promise<ProviderResponse>;
-  // 计划中（M4）：facts(role)（上下文窗口、MIME 等）与 countTokens(req)
+  supportsToolSearch?(role): boolean;                // M3
+  contextWindow?(role): number | undefined;          // M4：输入上限
+  countTokens?(req, { signal }): Promise<number | undefined>;   // M4：精确输入 token
 }
 
 type ModelRole = 'main' | 'fork' | 'cheap';
@@ -39,13 +41,15 @@ type ModelRole = 'main' | 'fork' | 'cheap';
 |---|---|
 | 流式 | 一律 `messages.stream()`；`finalMessage()` 取完整消息；工具输入开启 `eager_input_streaming: true` 并在执行前按 schema 校验 |
 | 思考 | `thinking: { type: 'adaptive' }`；`output_config.effort` 按角色/等级设置；`display: 'omitted'`（默认），控制台调试模式切 `summarized` |
-| 历史回传 | assistant 消息的 `content` **原样**追加（含 thinking 块）；绝不编辑既有回合（preserved thinking） |
+| 历史回传 | assistant 消息的 `content` **原样**追加（含 thinking 块）；绝不编辑既有回合（preserved thinking）。前缀变化后旧 thinking 块按截止标记不再发送，并带 `thinking.block_binding.prefix_mismatch_behavior: drop_block`（beta `thinking-binding-controls-2026-08-01`，`thinkingMismatch` 可改为 `error` 或关闭）兜底（M4，[05-sessions-and-agent-loop.md](05-sessions-and-agent-loop.md) §8.1） |
 | 提示缓存 | 断点见 [06-context-assembly.md](06-context-assembly.md) §7；监控 `usage.cache_read_input_tokens` |
 | 会话中系统消息 | 操作性提醒用 `{"role":"system"}` 追加到 `messages`；单回合提醒用 `clear_at: "next_user_message"`（beta `mid-conversation-system-clear-at-2026-08-21`） |
 | 工具搜索 | 工具数超阈值时声明 `tool_search_tool_regex_20251119`，其余工具 `defer_loading: true`；搜索工具本身与内核工具不延迟 |
-| 拒答回退 | 默认开启 `betas: ['server-side-fallback-2026-07-01']` + `fallbacks: 'default'`；`stop_reason: 'refusal'` 仍到达时记 `internal` 事件并结束回合 |
+| 拒答回退 | 默认开启 `betas: ['server-side-fallback-2026-07-01']` + `fallbacks: 'default'`（Haiku 不支持，不发）；`stop_reason: 'refusal'` 仍到达时记 `internal` 事件并结束回合。输出中途回退时，最后一个 `fallback` 块之前的 thinking、`tool_use` 与没有配对结果的 `server_tool_use` 不进入转录（不回传）；费用按 `usage.iterations` 逐次以各自模型的价格计算（M4） |
 | 强制工具 | 不使用 `tool_choice: any/tool`（Opus 5.5 / Sonnet 5.5 / Fable 5.1 返回 400）；需要结构化结果时用 `output_config.format` 或 `strict: true` |
-| 容量 | 请求前 `messages.countTokens`；超限走交接；可选 `compact-2026-01-12` 服务端压缩作为交接前的第一道（需原样回传 compaction 块） |
+| 容量 | 估算接近阈值时 `beta.messages.countTokens`；超限走交接；400 `prompt is too long` / 413 归为 `overflow`，交接后重试一次；上下文窗口：Claude 5 系列与 Opus/Sonnet 4.6+ 为 1M，其余 200k。可选 `compact-2026-01-12` 服务端压缩（`context.compaction.enabled`，默认关）作为交接前的第一道：主会话请求带 `context_management.edits: [{ type: 'compact_20260112', trigger: { type: 'input_tokens', value } }]`，compaction 块原样留在转录里回传（M4） |
+| 记忆工具 | 默认作为普通自定义工具；`memory.nativeTool: true` 时声明 `{ type: 'memory_20250818', name: 'memory' }`（工具定义的 `providerType`，M4） |
+| 输出上限 | `ProviderRequest.maxOutputTokens` 覆盖 `maxOutputTokens`（交接笔记用） |
 | 上下文编辑 | 可选 `context-management-2025-06-27` 的 `clear_tool_uses_20250919` 清理旧工具结果（只对 Fork 默认开启；主会话默认关，因为它改变了"只追加"的字节前缀会影响缓存命中的推理，需实测） |
 | 错误 | 最具体优先：`NotFoundError` → `RateLimitError`（退避、让渡 Fork 容量）→ `APIStatusError` → `APIConnectionError`；进入 `backoff` 阶段 |
 | 认证 | 秘密 `ANTHROPIC_API_KEY`（环境变量或 `/data/secrets/`）；缺失时守护进程照常启动，`/readyz` 报告原因，批次以 `model_error` 结束 |

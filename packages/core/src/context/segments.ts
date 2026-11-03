@@ -1,4 +1,5 @@
-import type { PersonaFiles } from '../persona/persona.js';
+import { MEMORY_ROOT } from '../memory/store.js';
+import type { PersonaFiles, PersonaHooks } from '../persona/persona.js';
 import type { EnvPromptSource } from '../plugins/host.js';
 import type { SystemSegment } from '../providers/types.js';
 import type { Logger } from '../observability/logger.js';
@@ -7,8 +8,16 @@ import type { SegmentSource } from './assembler.js';
 import { loadEnvPromptTemplate, renderEnvPrompt } from './env-prompts.js';
 import { forkNotes, runtimeNotes } from './runtime-notes.js';
 
+/** Longest memory index that goes into the prefix as is. */
+export const MAX_INDEX_CHARS = 32_000;
+
 export interface SegmentSourceOptions {
-  persona: PersonaFiles;
+  /** The persona files as they are now (reloaded when they change). */
+  persona: () => PersonaFiles;
+  /** Persona hooks; `systemSegments` may rewrite the main prefix. */
+  hooks?: () => PersonaHooks | null;
+  /** Text of memory/INDEX.md; null when there is none. */
+  memoryIndex?: () => string | null;
   plugins: { envSources(): EnvPromptSource[] };
   /** The permission summary (P3: restrictions are stated in advance); null when nothing is restricted. */
   permissions?: () => string | null;
@@ -23,7 +32,7 @@ export interface SegmentSourceOptions {
 
 /**
  * System prefix: identity → runtime → operating → permissions → owner → env:<plugin>… →
- * env:mcp:<server>… → skills-catalog.
+ * env:mcp:<server>… → skills-catalog → memory-index.
  * Built once and rebuilt only on explicit refresh (at a turn boundary), so the
  * prefix stays byte-identical between requests.
  */
@@ -46,7 +55,7 @@ export class SystemSegments implements SegmentSource {
   /** Prefix for forks: identity → fork runtime → owner. Shared by all forks so it caches. */
   forkSegments(): SystemSegment[] {
     if (!this.cachedFork) {
-      const { persona } = this.o;
+      const persona = this.o.persona();
       const segs: SystemSegment[] = [];
       if (persona.soul) segs.push({ id: 'identity', text: persona.soul });
       segs.push({ id: 'runtime', text: forkNotes({ timezone: this.o.timezone }) });
@@ -57,7 +66,23 @@ export class SystemSegments implements SegmentSource {
   }
 
   private build(): SystemSegment[] {
-    const { persona } = this.o;
+    const defaults = this.defaults();
+    const custom = this.o.hooks?.()?.systemSegments;
+    if (!custom) return defaults;
+    try {
+      const segs = custom({ defaults: defaults.map((s) => ({ ...s })) });
+      if (!Array.isArray(segs) || segs.some((s) => !s || typeof s.id !== 'string' || typeof s.text !== 'string')) {
+        throw new Error('systemSegments must return an array of { id, text }');
+      }
+      return segs.filter((s) => s.text.length > 0);
+    } catch (err) {
+      this.o.log.warn({ err: errorMessage(err) }, 'persona systemSegments hook failed; using the default segments');
+      return defaults;
+    }
+  }
+
+  private defaults(): SystemSegment[] {
+    const persona = this.o.persona();
     const segs: SystemSegment[] = [];
     if (persona.soul) segs.push({ id: 'identity', text: persona.soul });
     segs.push({ id: 'runtime', text: runtimeNotes({ timezone: this.o.timezone }) });
@@ -81,6 +106,11 @@ export class SystemSegments implements SegmentSource {
     for (const seg of this.o.extraEnv?.() ?? []) segs.push(seg);
     const catalog = this.o.skills?.();
     if (catalog) segs.push({ id: 'skills-catalog', text: catalog });
+    const index = this.o.memoryIndex?.()?.trim();
+    if (index) {
+      const body = index.length > MAX_INDEX_CHARS ? `${index.slice(0, MAX_INDEX_CHARS)}\n… [truncated: shorten ${MEMORY_ROOT}/INDEX.md]` : index;
+      segs.push({ id: 'memory-index', text: `<memory_index path="${MEMORY_ROOT}/INDEX.md">\n${body}\n</memory_index>` });
+    }
     return segs;
   }
 }

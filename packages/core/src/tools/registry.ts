@@ -10,6 +10,8 @@ export interface ProviderToolDef {
   inputSchema: Record<string, unknown>;
   /** Not loaded up front; the model finds it through the provider's tool search. */
   deferLoading?: boolean;
+  /** Provider-defined tool type (see ToolSpec.providerType). */
+  providerType?: string;
 }
 
 /** Sort rank of a tool owner: kernel, then plugins, then MCP servers (owners "mcp" and "mcp:<id>"). */
@@ -140,6 +142,6 @@ export class ToolRegistry {
   forProvider(filter?: (d: ToolDef) => boolean): ProviderToolDef[] {
     return this.list()
       .filter((d) => !filter || filter(d))
-      .map((d) => ({ name: d.name, description: d.description, inputSchema: d.inputSchema }));
+      .map((d) => ({ name: d.name, description: d.description, inputSchema: d.inputSchema, ...(d.providerType ? { providerType: d.providerType } : {}) }));
   }
 }
