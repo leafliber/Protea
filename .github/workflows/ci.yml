@@ -58,7 +58,8 @@ jobs:
       - name: Smoke test (non-root, healthy, answers, survives stop/start, backup)
         run: scripts/container-smoke.sh protea:ci-${{ matrix.target }}
       - name: Scan (high and critical, fixable)
-        uses: aquasecurity/trivy-action@0.28.0
+        # Pinned to the commit of v0.36.0 (2026-04-22): tags can be moved, a commit cannot.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
           image-ref: protea:ci-${{ matrix.target }}
           severity: HIGH,CRITICAL

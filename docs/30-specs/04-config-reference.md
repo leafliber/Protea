@@ -160,8 +160,10 @@ persona:
 observability:
   logLevel: info                       # 终端级别：trace | debug | info | warn | error | silent；log.jsonl 与内存缓冲总是 debug 起
   logFormat: auto                      # auto（TTY 下 pretty）| json | pretty；运行目录里的 log.jsonl 总是 JSON
-  logEventText: false
+  logEventText: false                  # true："event stored" 追踪日志带上事件正文（截到 2000 字）
   keepRuns: 20                         # /data/runs 下保留的运行目录数（M5）
+  logRotateMb: 50                      # 一次运行的 log.jsonl 超过这个大小就轮转成 log.1.jsonl（0 = 不轮转）
+  logRotateKeep: 4                     # 每次运行保留的轮转文件数（0–100）
   requiredPlugins: []                  # 这些插件不在 running 时 /readyz 不就绪（M5）
   recordProvider: off                  # off | responses | full：把模型调用录到 runs/<id>/provider.jsonl（回放与测试夹具；M6）。
                                        # full 还录请求（已脱敏，但每条都含整个上下文，体积大）

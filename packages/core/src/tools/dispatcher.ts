@@ -86,10 +86,10 @@ export class ToolDispatcher {
   }
 
   private async runOne(use: ToolUseBlock, dctx: DispatchContext): Promise<OneResult> {
-    const fail = (text: string): OneResult => ({
-      block: { type: 'tool_result', tool_use_id: use.id, content: text, is_error: true },
-      endsTurn: false,
-    });
+    const fail = (text: string): OneResult => {
+      this.log.info({ tool: use.name, callId: use.id, reason: text.slice(0, 200) }, 'tool not run');
+      return { block: { type: 'tool_result', tool_use_id: use.id, content: text, is_error: true }, endsTurn: false };
+    };
     const { interrupt, allowed, ...ctx } = dctx;
     const def = this.registry.get(use.name);
     if (!def || (allowed && !allowed.has(use.name))) {
@@ -113,6 +113,7 @@ export class ToolDispatcher {
         return fail(`not run: the permission check failed (${errorMessage(err)})`);
       }
       if (decision.action === 'block') {
+        this.log.info({ tool: use.name, callId: use.id, reason: decision.text.slice(0, 200) }, 'tool held by the permission policy');
         const block: ToolResultBlock = { type: 'tool_result', tool_use_id: use.id, content: decision.text };
         if (decision.isError) block.is_error = true;
         return { block, endsTurn: false };
@@ -165,7 +166,7 @@ export class ToolDispatcher {
         }),
       ]);
       const outcome: ToolOutcome = typeof raced === 'string' ? { text: raced } : raced;
-      this.log.debug({ tool: use.name, callId: use.id, ms: Date.now() - started, failed: !!outcome.failed }, 'tool done');
+      this.log.info({ tool: use.name, callId: use.id, ms: Date.now() - started, failed: !!outcome.failed, resultChars: outcome.text.length }, 'tool done');
       this.notify(use.name, Date.now() - started, !!outcome.failed);
       const block: ToolResultBlock = { type: 'tool_result', tool_use_id: use.id, content: truncate(outcome.text) };
       if (outcome.failed) block.is_error = true;

@@ -141,3 +141,94 @@ export async function healthcheckCommand(dataDir: string, url: string | undefine
   }
   return 1;
 }
+
+/** "72h", "3d", "90m" or a bare number of hours. */
+export function parseHours(s: string): number {
+  const m = /^(\d+(?:\.\d+)?)\s*([mhd]?)$/.exec(s.trim());
+  if (!m) throw new Error(`--since must look like 72h, 3d or 90m, got ${s}`);
+  const n = Number(m[1]);
+  const hours = m[2] === 'm' ? n / 60 : m[2] === 'd' ? n * 24 : n;
+  if (!(hours > 0) || hours > 24 * 90) throw new Error('--since must be more than 0 and at most 90 days');
+  return hours;
+}
+
+export interface DiagFlags {
+  since?: string;
+  runs?: number;
+  content?: boolean;
+  recordings?: boolean;
+  transcripts?: boolean;
+  out?: string;
+  url?: string;
+  token?: string;
+  offline?: boolean;
+}
+
+async function copyOut(src: string, out: string): Promise<string> {
+  const dest = fs.existsSync(out) && fs.statSync(out).isDirectory() ? path.join(out, path.basename(src)) : out;
+  await fs.promises.copyFile(src, dest);
+  return dest;
+}
+
+/**
+ * `protea diag`: a diagnostics bundle (.tar.gz) to attach to a bug report. The running daemon
+ * builds it (with live status, metrics and effective config); without one it is built offline
+ * from the data directory. Conversation content only with --content / --transcripts / --recordings.
+ */
+export async function diagCommand(dataDir: string, f: DiagFlags): Promise<number> {
+  const { createDiagnostics, diagnosticsDir, SecretStore } = await import('@protea/core');
+  const opts = {
+    ...(f.since !== undefined ? { sinceHours: parseHours(f.since) } : {}),
+    ...(f.runs !== undefined ? { runs: f.runs } : {}),
+    ...(f.content ? { content: true } : {}),
+    ...(f.recordings ? { recordings: true } : {}),
+    ...(f.transcripts ? { transcripts: true } : {}),
+  };
+  let file: string | null = null;
+  let bytes = 0;
+  let files = 0;
+  let live = false;
+  if (!f.offline) {
+    const { api, resolveClient } = await import('./client.js');
+    try {
+      const c = resolveClient({ url: localUrl(dataDir, f.url), ...(f.token !== undefined ? { token: f.token } : {}), dataDir });
+      const r = await api<{ name: string; bytes: number; manifest: { files: unknown[] } }>(c, 'POST', '/api/diagnostics', opts);
+      live = true;
+      bytes = r.bytes;
+      files = r.manifest.files.length;
+      const local = path.join(diagnosticsDir(dataDir), r.name);
+      if (fs.existsSync(local)) file = f.out ? await copyOut(local, f.out) : local;
+      else {
+        // A daemon on another machine: download the archive.
+        const res = await fetch(`${c.url}/api/diagnostics/${r.name}`, { headers: { authorization: `Bearer ${c.token}` } });
+        if (!res.ok || !res.body) throw new Error(`download failed: ${res.status}`);
+        const dest = f.out ? (fs.existsSync(f.out) && fs.statSync(f.out).isDirectory() ? path.join(f.out, r.name) : f.out) : r.name;
+        await fs.promises.writeFile(dest, Buffer.from(await res.arrayBuffer()));
+        file = dest;
+      }
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (!/cannot reach the daemon|no admin token/.test(msg)) throw err;
+      console.log(yellow(`${msg.split('\n')[0]}; building the bundle offline (no live status or metrics)`));
+    }
+  }
+  if (!file) {
+    const secrets = new SecretStore(path.join(dataDir, 'secrets'));
+    const { VERSION } = await import('@protea/daemon');
+    const r = await createDiagnostics({ dataDir, version: VERSION, redact: (t) => secrets.redactJsonText(t), ...opts });
+    file = f.out ? await copyOut(r.path, f.out) : r.path;
+    bytes = r.bytes;
+    files = r.manifest.files.length;
+  }
+  console.log(green(`diagnostics bundle: ${file}`));
+  console.log(dim(`${files} files, ${size(bytes)}${live ? ', with live status and metrics' : ''}; no secrets`));
+  console.log(
+    dim(
+      f.content || f.transcripts || f.recordings
+        ? 'includes conversation content (event text / notes / transcripts / recordings): share it with care'
+        : 'metadata only: event text, notes and transcripts are left out (add --content / --transcripts to include them)',
+    ),
+  );
+  if (process.env['PROTEA_IMAGE'] && file.startsWith('/data/')) console.log(dim(`copy it out of the container: docker cp <container>:${file} .`));
+  return 0;
+}

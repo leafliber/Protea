@@ -189,7 +189,9 @@ describe('M6 static check: where secret values may be read', () => {
     }
     // Every model request goes through the redacting wrapper: the daemon builds no other provider.
     const daemon = read('apps/daemon/src/daemon.ts');
-    expect(daemon).toMatch(/const provider = new RedactingProvider\(recorded, secrets/);
+    // (The tracing wrapper outside it only logs metadata: tokens, timings, stop reasons.)
+    expect(daemon).toMatch(/const redacting = new RedactingProvider\(recorded, secrets/);
+    expect(daemon).toMatch(/const provider = new TracingProvider\(redacting, /);
     expect(daemon.match(/createProvider\(/g)).toHaveLength(1);
     // Daemon tokens go to the control plane only, never into a log call.
     expect(daemon).not.toMatch(/log\.\w+\([^)]*token\.value/);

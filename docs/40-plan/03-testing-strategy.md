@@ -13,6 +13,7 @@
 | 回放回归 | `protea replay`（M6）+ 录制的 `provider.jsonl` | 人格/提示/调度变更的行为回归 | PR 合并前（离线；评测集尚未建立） |
 | 容器冒烟 | `scripts/container-smoke.sh`（M6） | 非 root、健康检查、插件资源上限、回复、stop/start 不丢事件、容器内备份、迁移 | CI 每次推送（full 与 slim） |
 | 真网冒烟 | 真实 Anthropic API | 模型 ID、beta 头、流式、工具搜索 | 每周 + 发布前 |
+| 实际测试 | 真实 API key、网络、账号与长时间使用（[06-real-world-testing.md](06-real-world-testing.md)） | 各里程碑需要真实条件的验收项 | 在实际使用中做，结果附诊断包 |
 | 长稳/压测 | `scripts/soak.mjs`（M6，无依赖）+ echo Provider | 内存、存储增长、延迟 | 每个里程碑末跑加速短程；长时间运行留给实际使用观察 |
 
 ## 2. 不变量测试

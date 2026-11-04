@@ -19,6 +19,7 @@
 | 为什么这样决定 | [20-decisions/README.md](20-decisions/README.md) |
 | 接口与格式的精确定义 | [30-specs/](30-specs/) |
 | 做到哪一步、下一步做什么 | [40-plan/01-roadmap.md](40-plan/01-roadmap.md) |
+| 在真实环境里怎么测、日志怎么导出 | [40-plan/06-real-world-testing.md](40-plan/06-real-world-testing.md) |
 
 ## 目录结构
 
@@ -71,7 +72,8 @@ docs/
     ├── 02-repo-layout.md              代码仓库结构
     ├── 03-testing-strategy.md
     ├── 04-risks-and-open-questions.md
-    └── 05-conventions.md              开发与文档规范
+    ├── 05-conventions.md              开发与文档规范
+    └── 06-real-world-testing.md       实际测试指南：需要真实条件的复核项、日志与诊断包
 ```
 
 ## 文档约定

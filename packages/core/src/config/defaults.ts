@@ -67,7 +67,7 @@ export function defaultConfig(): ProteaConfig {
     },
     memory: { nativeTool: false },
     persona: { dir: 'persona' },
-    observability: { logLevel: 'info', logFormat: 'auto', logEventText: false, keepRuns: 20, requiredPlugins: [], recordProvider: 'off' },
+    observability: { logLevel: 'info', logFormat: 'auto', logEventText: false, keepRuns: 20, logRotateMb: 50, logRotateKeep: 4, requiredPlugins: [], recordProvider: 'off' },
   };
 }
 
@@ -129,6 +129,9 @@ export const STARTER_CONFIG_YAML = `# Protea configuration. Every key is optiona
 
 # observability:
 #   keepRuns: 20              # run directories (log.jsonl, crash reports) kept under /data/runs
+#   logRotateMb: 50           # a run's log.jsonl moves to log.1.jsonl past this size (0 = never)
+#   logRotateKeep: 4          # rotated log files kept per run
+#   logEventText: false       # true: "event stored" log lines carry the event text (clipped to 2000 chars)
 #   requiredPlugins: []       # plugins that must be running for /readyz, e.g. [telegram]
 #   recordProvider: off       # responses | full: record model calls to runs/<id>/provider.jsonl (protea replay)
 `;

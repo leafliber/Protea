@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { LogRecord } from '@protea/protocol';
-import { enc, get, qs, useApi } from '../api';
+import { enc, get, post, qs, useAction, useApi } from '../api';
 import { Badge, Button, Card, Empty, ErrorText, Json, Tabs, dateTime } from '../components/ui';
 import { useLive } from '../live';
-import { go } from '../session';
+import { go, useSession } from '../session';
 
 const NAMES: Record<number, string> = { 10: 'TRACE', 20: 'DEBUG', 30: 'INFO', 40: 'WARN', 50: 'ERROR', 60: 'FATAL' };
 const SKIP = new Set(['level', 'time', 'msg', 'run', 'component', 'pid', 'hostname']);
@@ -201,8 +201,136 @@ function Runs() {
   );
 }
 
+interface DiagArchive {
+  name: string;
+  bytes: number;
+  createdAt: string;
+}
+
+function size(bytes: number): string {
+  return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+/** Diagnostics bundles (protea diag): logs, crash records, event metadata, usage, audit, live status. */
+function Export() {
+  const { canWrite } = useSession();
+  const r = useApi<{ dir: string; archives: DiagArchive[] }>(canWrite ? '/api/diagnostics' : null);
+  const [since, setSince] = useState(72);
+  const [runs, setRuns] = useState(5);
+  const [content, setContent] = useState(false);
+  const [transcripts, setTranscripts] = useState(false);
+  const [recordings, setRecordings] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const act = useAction();
+  if (!canWrite) return <Card title="导出诊断包"><div className="muted">诊断包含日志与事件元数据，只有管理员令牌可以导出。</div></Card>;
+  const download = (name: string): void => {
+    const a = document.createElement('a');
+    a.href = `/api/diagnostics/${enc(name)}`;
+    a.download = name;
+    a.click();
+  };
+  return (
+    <Card title="导出诊断包">
+      <ErrorText error={r.error ?? act.error} />
+      <div className="muted small">
+        一个 .tar.gz：最近几次运行的日志（含轮转文件）、崩溃与关停记录、事件库元数据（事件、批次、用量与缓存命中率、审批、审计）、汇总、当前状态、指标与生效配置。
+        不含 secrets/，所有文件都经过秘密过滤。默认不含对话内容；勾选下面几项才会带上。
+      </div>
+      <div className="row">
+        <label>
+          时间范围{' '}
+          <select value={since} onChange={(e) => setSince(Number(e.target.value))}>
+            <option value={24}>24 小时</option>
+            <option value={72}>3 天</option>
+            <option value={168}>7 天</option>
+            <option value={720}>30 天</option>
+          </select>
+        </label>
+        <label>
+          运行目录{' '}
+          <select value={runs} onChange={(e) => setRuns(Number(e.target.value))}>
+            {[1, 3, 5, 10, 20].map((n) => (
+              <option key={n} value={n}>
+                最近 {n} 个
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className="row">
+        <label className="check">
+          <input type="checkbox" checked={content} onChange={(e) => setContent(e.target.checked)} /> 事件正文与交接笔记
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={transcripts} onChange={(e) => setTranscripts(e.target.checked)} /> 会话转录
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={recordings} onChange={(e) => setRecordings(e.target.checked)} /> 模型调用录制（provider.jsonl）
+        </label>
+      </div>
+      <div className="row">
+        <Button
+          kind="primary"
+          busy={act.busy}
+          onClick={() =>
+            void act.run(async () => {
+              const res = await post<{ name: string; bytes: number; manifest: { files: unknown[] } }>('/api/diagnostics', {
+                sinceHours: since,
+                runs,
+                content,
+                transcripts,
+                recordings,
+              });
+              setNote(`已生成 ${res.name}（${res.manifest.files.length} 个文件，${size(res.bytes)}）`);
+              r.reload();
+              download(res.name);
+            })
+          }
+        >
+          生成并下载
+        </Button>
+        {note && <span className="muted small">{note}</span>}
+      </div>
+      {(content || transcripts || recordings) && <Badge tone="warn">包含对话内容：分享前请确认接收方可信</Badge>}
+      {r.data && (
+        <table className="table">
+          <thead>
+            <tr>
+              <th>名称</th>
+              <th>时间</th>
+              <th>大小</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {r.data.archives.length === 0 && (
+              <tr>
+                <td colSpan={4} className="muted">
+                  {r.data.dir} 里还没有诊断包
+                </td>
+              </tr>
+            )}
+            {r.data.archives.map((d) => (
+              <tr key={d.name}>
+                <td className="mono small">{d.name}</td>
+                <td className="nowrap small">{dateTime(d.createdAt)}</td>
+                <td className="nowrap small">{size(d.bytes)}</td>
+                <td>
+                  <Button small kind="ghost" onClick={() => download(d.name)}>
+                    下载
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Card>
+  );
+}
+
 export function Logs({ params }: { params: URLSearchParams }) {
-  const tab = (params.get('tab') ?? 'tail') as 'tail' | 'search' | 'runs';
+  const tab = (params.get('tab') ?? 'tail') as 'tail' | 'search' | 'runs' | 'export';
   return (
     <div className="page">
       <Tabs
@@ -210,6 +338,7 @@ export function Logs({ params }: { params: URLSearchParams }) {
           ['tail', '实时'],
           ['search', '检索'],
           ['runs', '运行目录'],
+          ['export', '导出诊断包'],
         ]}
         value={tab}
         onChange={(t) => go('logs', { tab: t })}
@@ -217,6 +346,7 @@ export function Logs({ params }: { params: URLSearchParams }) {
       {tab === 'tail' && <Tail />}
       {tab === 'search' && <Search run={params.get('run')} />}
       {tab === 'runs' && <Runs />}
+      {tab === 'export' && <Export />}
     </div>
   );
 }

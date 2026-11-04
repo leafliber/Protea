@@ -16,6 +16,8 @@ import {
   MemoryStore,
   Persona,
   RedactingProvider,
+  TracingProvider,
+  traceBus,
   PluginHost,
   ProviderRecorder,
   KvRepo,
@@ -40,6 +42,9 @@ import {
   approvalTools,
   configSources,
   createBackup,
+  createDiagnostics,
+  diagnosticsDir,
+  listDiagnostics,
   createLogger,
   createMetrics,
   contextLimits,
@@ -193,6 +198,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       level: config.observability.logLevel,
       format: config.observability.logFormat,
       file: path.join(runDir, 'log.jsonl'),
+      fileMaxBytes: Math.round(config.observability.logRotateMb * 1048576),
+      fileKeep: config.observability.logRotateKeep,
       sinks: [logRing],
       base: { run: runId },
       redact: redactLine,
@@ -206,6 +213,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const { db, migration } = openDatabase(path.join(dataDir, 'protea.db'));
   if (migration.applied.length > 0) log.info({ applied: migration.applied }, 'database migrated');
   const bus = new Bus((topic, err) => log.error({ topic, err: errorMessage(err) }, 'bus listener failed'));
+  // Metadata-only trace lines for events, batches and approvals (observability.logEventText adds event text).
+  traceBus(bus, log.child({ component: 'trace' }), { eventText: () => config.observability.logEventText });
   const trail = new BusTrail(bus);
   const store = new EventStore(db, bus, { runId, clock });
   const batches = new BatchRepo(db);
@@ -242,7 +251,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const recordMode = config.observability.recordProvider;
   const recorded = recordMode === 'off' ? baseProvider : new ProviderRecorder(baseProvider, path.join(runDir, 'provider.jsonl'), recordMode);
   if (recordMode !== 'off') log.warn({ mode: recordMode, file: path.join(runDir, 'provider.jsonl') }, 'recording model calls (observability.recordProvider)');
-  const provider = new RedactingProvider(recorded, secrets, (names) => {
+  const redacting = new RedactingProvider(recorded, secrets, (names) => {
     const fresh = names.filter((n) => !redactedNames.has(n));
     if (fresh.length === 0) return;
     for (const n of fresh) redactedNames.add(n);
@@ -254,6 +263,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       text: `The value of secret(s) ${fresh.join(', ')} appeared in text bound for the model and was replaced with [REDACTED:<name>].`,
     });
   });
+  // Outermost: one "model call" log line per request (role, tokens, cache share, time).
+  const provider = new TracingProvider(redacting, log.child({ component: 'model' }));
   const tools = new ToolRegistry();
   const assets = assetsDir(env);
   const loader = devLoader(env);
@@ -826,6 +837,29 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         const r = await gitBackup({ dataDir, url });
         log.info({ commit: r.commit, changed: r.changed }, 'git backup pushed');
         return r;
+      },
+    },
+    diagnostics: {
+      dir: diagnosticsDir(dataDir),
+      list: () => listDiagnostics(diagnosticsDir(dataDir)).map(({ path: _p, ...d }) => d),
+      create: async (o) => {
+        const r = await createDiagnostics({
+          dataDir,
+          version: VERSION,
+          redact: redactLine,
+          ...o,
+          live: {
+            'status.json': status(),
+            'config.effective.json': configOps.get(),
+            'metrics.prom': metrics ? await metrics.render() : null,
+            'plugins.json': plugins.status(),
+            'mcp.json': mcp.status(),
+            'forks.json': forks.list(),
+            'budget.json': budget.status(),
+          },
+        });
+        log.info({ path: r.path, bytes: r.bytes, files: r.manifest.files.length, ...r.manifest.options }, 'diagnostics bundle written');
+        return { name: r.name, bytes: r.bytes, manifest: r.manifest as unknown as Record<string, unknown> };
       },
     },
     persona,

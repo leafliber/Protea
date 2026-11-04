@@ -39,6 +39,8 @@ docker run -d --name protea \
   protea
 ```
 
+- API key 可以不放进环境变量（`docker inspect` 看得到）：`docker exec -i protea protea secrets set ANTHROPIC_API_KEY`，然后 `docker restart protea`（Provider 启动时读取 key）。
+- 本地构建：`pnpm docker:build`（`scripts/docker-build.sh`），标签 `protea:latest`、`protea:<版本>`、`protea:<版本>-<提交>`；slim 用 `pnpm docker:build:slim`。
 - 管理员令牌不设置时自动生成并写入 `/data/secrets/PROTEA_ADMIN_TOKEN`：`docker exec protea cat /data/secrets/PROTEA_ADMIN_TOKEN`。
 - 控制台在 `http://127.0.0.1:7788/`；不在本机时用 SSH 隧道或下面的 Caddy。
 - 其他秘密：`docker exec -i protea protea secrets set TELEGRAM_BOT_TOKEN`（从 stdin 读），或环境变量 `PROTEA_SECRET_<NAME>`。
@@ -186,4 +188,5 @@ docker start protea
 - 容器冒烟测试：`scripts/container-smoke.sh <镜像>`：非 root、健康检查、控制台消息有回复、暂停投递后 `docker stop`/`start` 等待中的事件一个不少并在恢复后送达、有 `shutdown.json`、容器内备份且属主正确、入口脚本做了迁移。CI 对 full 与 slim 都跑。
 - 长稳测试（可选；长时间运行主要靠实际使用中的指标观察）：`node scripts/soak.mjs --url … --token-file … --hours 72 --rate 2`，对使用 echo Provider 的实例持续推送混合等级的事件，按间隔采样 `/metrics`，结束时给出内存增长（%/天）、数据库增长与延迟 P95；超过 `--max-growth`（默认 5 %/天）时退出码为 1。
 - 容器内调试：`docker exec -it protea protea status`、`docker exec -it protea sh`。
+- 诊断包：`docker exec protea protea diag [--since 72h] [--content]`，再 `docker cp protea:/data/exports/<名字> .`；内容见 [15-observability.md](15-observability.md) §8。实际测试的步骤见 [../40-plan/06-real-world-testing.md](../40-plan/06-real-world-testing.md)。
 - 插件开发：`protea dev-plugin ./my-plugin`，或把插件目录放进 `/data/plugins` 后在控制台"重载"。

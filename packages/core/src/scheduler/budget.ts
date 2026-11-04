@@ -208,7 +208,7 @@ export class BudgetTracker {
       reason,
       onStored: (e) => {
         this.addHeld({ cursor: e.cursor, level, trigger: original });
-        this.o.log.info({ cursor: e.cursor, level, from: original, to: trigger, reason }, 'event held by the budget');
+        this.o.log.info({ cursor: e.cursor, eventLevel: level, from: original, to: trigger, reason }, 'event held by the budget');
       },
     };
   }
@@ -328,7 +328,7 @@ export class BudgetTracker {
     if (quiet) return;
     const pct = Math.round(b.usedRatio * 100);
     const spent = `$${b.spentUsd.toFixed(2)} of $${b.limitUsd.toFixed(2)} over the last 24 h`;
-    this.o.log.warn({ level, spentUsd: b.spentUsd, limitUsd: b.limitUsd, pct }, 'budget threshold crossed');
+    this.o.log.warn({ budgetLevel: level, spentUsd: b.spentUsd, limitUsd: b.limitUsd, pct }, 'budget threshold crossed');
     const enforce = this.o.settings.enforce;
     if (state === 'warn' || level <= 1 || !enforce || b.releasedUntil !== undefined) {
       const effect =

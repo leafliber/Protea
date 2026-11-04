@@ -23,14 +23,24 @@ Protea 是一个 **24/7 常驻、事件流驱动、可热插拔** 的云端个�
 
 ## 用 Docker 运行
 
-镜像还没有发布，先在仓库里构建（默认是 full；`--target slim` 是只含 Node 的变体）：
+镜像还没有发布，先在仓库里构建（`protea:latest` 是 full；`pnpm docker:build:slim` 构建只含 Node 的 `protea:slim`）：
 
 ```bash
-docker build -t protea .
+pnpm docker:build
 ```
 
 ```bash
-docker run -d --name protea -v protea-data:/data -p 127.0.0.1:7788:7788 -e ANTHROPIC_API_KEY=sk-ant-... --stop-timeout 40 --restart unless-stopped protea
+docker run -d --name protea -v protea-data:/data -p 127.0.0.1:7788:7788 --stop-timeout 40 --restart unless-stopped protea:latest
+```
+
+API key 存成秘密（从标准输入读取），然后重启一次让 Provider 读到它：
+
+```bash
+docker exec -i protea protea secrets set ANTHROPIC_API_KEY
+```
+
+```bash
+docker restart protea
 ```
 
 控制台在 http://127.0.0.1:7788/ ，管理员令牌：
@@ -39,7 +49,7 @@ docker run -d --name protea -v protea-data:/data -p 127.0.0.1:7788:7788 -e ANTHR
 docker exec protea cat /data/secrets/PROTEA_ADMIN_TOKEN
 ```
 
-容器里的 CLI 直接可用，例如 `docker exec protea protea status`、`docker exec protea protea backup --archive`。带 Caddy 自动证书的 compose 示例、备份与恢复、升级与回滚见 [docs/10-architecture/16-deployment.md](docs/10-architecture/16-deployment.md)。
+容器里的 CLI 直接可用，例如 `docker exec protea protea status`、`docker exec protea protea backup --archive`。出问题时导出诊断包（日志、事件元数据、用量与缓存命中率、实时状态；不含秘密与对话内容）：`docker exec protea protea diag`，再 `docker cp protea:/data/exports/<名字> .`，或在控制台"日志 → 导出诊断包"下载。需要真实条件的测试项见 [docs/40-plan/06-real-world-testing.md](docs/40-plan/06-real-world-testing.md)。带 Caddy 自动证书的 compose 示例、备份与恢复、升级与回滚见 [docs/10-architecture/16-deployment.md](docs/10-architecture/16-deployment.md)。
 
 ## 本地开发运行
 

@@ -16,7 +16,7 @@ import {
   type StatusResponse,
 } from '@protea/protocol';
 import { api, defaultDataDir, resolveClient, stream, type ClientOptions } from './client.js';
-import { backupCommand, dropPrivileges, healthcheckCommand, migrateCommand, replayCommand, restoreCommand } from './admin.js';
+import { backupCommand, diagCommand, dropPrivileges, healthcheckCommand, migrateCommand, replayCommand, restoreCommand } from './admin.js';
 import { devPlugin } from './dev-plugin.js';
 import { opsCommand } from './ops.js';
 import { bold, dim, formatApproval, formatEvent, formatFork, formatMcp, formatMcpTool, formatPlugin, formatSkill, formatStatus, green, red, yellow } from './format.js';
@@ -33,6 +33,9 @@ Usage:
   protea restore <backup-dir|.tar.gz> [--force] put a backup back (daemon stopped; replaced files are moved aside)
   protea replay [--from C] [--to C] [--provider recorded|echo|config] [--run ID] [--out DIR]
                                                 re-run delivered events offline in their original batches (no side effects)
+  protea diag [--since 72h] [--runs 5] [--content] [--transcripts] [--recordings] [--out FILE|DIR] [--offline]
+                                                diagnostics bundle (.tar.gz in <data>/exports): logs, crash records, event
+                                                metadata, usage and cache shares, audit, live status and metrics; no secrets
   protea status [--json]                        show runtime status
   protea events push <text…> [--level N] [--trigger T] [--no-wait] [--timeout SEC]
                                                 send a console message and print the replies
@@ -143,6 +146,11 @@ const { values, positionals } = parseArgs({
     provider: { type: 'string' },
     out: { type: 'string' },
     'hard-cap': { type: 'boolean' },
+    runs: { type: 'string' },
+    content: { type: 'boolean' },
+    recordings: { type: 'boolean' },
+    transcripts: { type: 'boolean' },
+    offline: { type: 'boolean' },
     model: { type: 'string' },
     component: { type: 'string' },
     plugin: { type: 'string' },
@@ -537,6 +545,20 @@ async function main(): Promise<number> {
         ...(values['include-runs'] ? { includeRuns: true } : {}),
         ...(values.archive ? { archive: true } : {}),
       });
+    case 'diag': {
+      const runs = intFlag('runs', values.runs);
+      return diagCommand(values['data-dir'] ?? defaultDataDir(), {
+        ...(values.since !== undefined ? { since: values.since } : {}),
+        ...(runs !== undefined ? { runs } : {}),
+        ...(values.content ? { content: true } : {}),
+        ...(values.recordings ? { recordings: true } : {}),
+        ...(values.transcripts ? { transcripts: true } : {}),
+        ...(values.out !== undefined ? { out: values.out } : {}),
+        ...(values.url !== undefined ? { url: values.url } : {}),
+        ...(values.token !== undefined ? { token: values.token } : {}),
+        ...(values.offline ? { offline: true } : {}),
+      });
+    }
     case 'restore':
       return restoreCommand(values['data-dir'] ?? defaultDataDir(), sub, !!values.force);
     case 'replay': {

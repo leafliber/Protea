@@ -152,6 +152,9 @@ function validate(cfg: ProteaConfig, warnings: string[]): void {
   const obs = cfg.observability;
   if (!['off', 'responses', 'full'].includes(obs.recordProvider)) throw new Error('observability.recordProvider must be off, responses or full');
   if (!Number.isInteger(obs.keepRuns) || obs.keepRuns < 1) throw new Error('observability.keepRuns must be an integer of at least 1');
+  if (typeof obs.logRotateMb !== 'number' || !(obs.logRotateMb >= 0)) throw new Error('observability.logRotateMb must be a number of MB (0 = never rotate)');
+  if (!Number.isInteger(obs.logRotateKeep) || obs.logRotateKeep < 0 || obs.logRotateKeep > 100) throw new Error('observability.logRotateKeep must be an integer from 0 to 100');
+  if (typeof obs.logEventText !== 'boolean') throw new Error('observability.logEventText must be true or false');
   if (!Array.isArray(obs.requiredPlugins) || !obs.requiredPlugins.every((p) => typeof p === 'string')) {
     throw new Error('observability.requiredPlugins must be a list of plugin ids');
   }

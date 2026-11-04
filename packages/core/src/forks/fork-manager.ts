@@ -243,7 +243,7 @@ export class ForkManager {
       ...(cp.parentBatch !== undefined ? { parentId: cp.parentBatch } : {}),
     });
     this.persist(f);
-    this.o.log.info({ fork: id, level: cp.level, model: cp.model, tools: tools.length }, 'fork spawned');
+    this.o.log.info({ fork: id, forkLevel: cp.level, model: cp.model, tools: tools.length }, 'fork spawned');
     this.pump();
     return this.info(f);
   }

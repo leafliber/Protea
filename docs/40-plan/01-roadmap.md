@@ -268,6 +268,16 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 - 镜像没有发布到镜像仓库；CI 只构建与测试。发布与签名留到 M7。
 - 推迟到 M7：`scheduler.retention`、`permissions.conditions` / `egress`、CPU 上限、OpenTelemetry、软告警。
 
+### 实际测试准备（2026-11-04，M6 之后）
+
+所有需要真实条件的复核项（M0 缓存命中率、M3 真实 MCP、M4 交接质量、M5 Prometheus/Grafana、M6 的 CI 与长时间运行、Telegram 与 IMAP 真实账号、真实模型下的重启恢复）改在实际使用场景里做，步骤与通过标准见 [06-real-world-testing.md](06-real-world-testing.md)，结果写回各里程碑的验收项。为此补了：
+- 追踪日志：每次模型调用（所有角色）一行 `model call`，带 token、缓存命中率、耗时与停止原因；事件入库、批开始/扩展、审批变化、工具完成/未执行/被策略扣住各一行。只含元数据，`observability.logEventText` 才带事件正文。
+- 日志轮转：`observability.logRotateMb`（默认 50）与 `logRotateKeep`（默认 4）。
+- 诊断包：`protea diag`、`/api/diagnostics`、控制台"日志 → 导出诊断包"。守护进程不在时离线生成；默认不含对话内容，所有文件经过秘密过滤。
+- 镜像构建脚本 `scripts/docker-build.sh`（`pnpm docker:build`），按版本与提交打标签。
+- `scripts/soak.mjs --rate 0`：只采样不推事件，用来观察实际部署。
+- 修正：几条日志用 `level` 字段表示事件或预算等级，覆盖了 pino 的日志级别（"event held by the budget"、"budget threshold crossed"、"fork spawned"），改为 `eventLevel` / `budgetLevel` / `forkLevel`。
+
 **v1.0 发布点**。
 
 ## M7 · 扩展与生态（4 周，v1.x）

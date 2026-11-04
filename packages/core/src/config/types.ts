@@ -151,6 +151,8 @@ export interface ProteaConfig {
   persona: { dir: string };
   /**
    * `keepRuns`: run directories (logs, crash reports) kept under <data>/runs.
+   * `logRotateMb` / `logRotateKeep`: a run's log.jsonl moves to log.1.jsonl past this size (0 = never); this many rotated files are kept.
+   * `logEventText`: trace lines for stored events carry the (clipped) event text.
    * `requiredPlugins`: plugin ids that must be running for /readyz.
    * `recordProvider`: record model responses (and requests) for replay.
    */
@@ -159,6 +161,8 @@ export interface ProteaConfig {
     logFormat: 'json' | 'pretty' | 'auto';
     logEventText: boolean;
     keepRuns: number;
+    logRotateMb: number;
+    logRotateKeep: number;
     requiredPlugins: string[];
     /**
      * Provider recording (replay and test fixtures): `responses` writes every model response to

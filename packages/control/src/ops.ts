@@ -1,6 +1,7 @@
 import type { Context, Hono } from 'hono';
 import { isLevel, isTrigger, type BatchInfo, type ConfigResponse, type SecretInfo } from '@protea/protocol';
 import {
+  DIAG_NAME_RE,
   fetchSource,
   listRuns,
   isGitTarget,
@@ -18,6 +19,7 @@ import {
   type UsageRepo,
 } from '@protea/core';
 import fs from 'node:fs';
+import { Readable } from 'node:stream';
 import path from 'node:path';
 import { principal } from './auth.js';
 
@@ -63,6 +65,16 @@ export interface OpsDeps {
     git(url: string): Promise<{ commit: string | null; changed: number }>;
   };
   logs?: { ring: LogRing; runsDir: string; runId: string };
+  /** Diagnostics bundles under <data>/exports (admin only; they hold logs and the event store's metadata). */
+  diagnostics?: {
+    dir: string;
+    list(): Array<{ name: string; bytes: number; createdAt: string }>;
+    create(o: { sinceHours?: number; runs?: number; content?: boolean; recordings?: boolean; transcripts?: boolean }): Promise<{
+      name: string;
+      bytes: number;
+      manifest: Record<string, unknown>;
+    }>;
+  };
   persona?: {
     listFiles(): Array<{ path: string; size: number; mtime: string }>;
     readFile(rel: string): string | undefined;
@@ -279,6 +291,46 @@ export function registerOpsRoutes(app: Hono, d: OpsDeps): void {
     } catch (err) {
       return failed(c, 422, 'backup_failed', err);
     }
+  });
+
+  // —— Diagnostics bundles ——
+  app.get('/api/diagnostics', (c) =>
+    d.diagnostics ? c.json({ dir: d.diagnostics.dir, archives: d.diagnostics.list() }) : notFound(c, 'diagnostics are not available'),
+  );
+  app.post('/api/diagnostics', async (c) => {
+    if (!d.diagnostics) return notFound(c, 'diagnostics are not available');
+    const b = (await body(c)) ?? {};
+    const num = (k: string, max: number): number | undefined | null => {
+      const v = b[k];
+      if (v === undefined) return undefined;
+      return typeof v === 'number' && v > 0 && v <= max ? v : null;
+    };
+    const sinceHours = num('sinceHours', 24 * 90);
+    const runs = num('runs', 100);
+    if (sinceHours === null) return bad(c, 'sinceHours must be a number of hours from 0 to 2160');
+    if (runs === null || (runs !== undefined && !Number.isInteger(runs))) return bad(c, 'runs must be an integer from 1 to 100');
+    const flags = Object.fromEntries((['content', 'recordings', 'transcripts'] as const).filter((k) => b[k] === true).map((k) => [k, true]));
+    try {
+      return c.json(await d.diagnostics.create({ ...flags, ...(sinceHours !== undefined ? { sinceHours } : {}), ...(runs !== undefined ? { runs } : {}) }));
+    } catch (err) {
+      return failed(c, 422, 'diagnostics_failed', err);
+    }
+  });
+  app.get('/api/diagnostics/:name', (c) => {
+    if (!d.diagnostics) return notFound(c, 'diagnostics are not available');
+    const name = c.req.param('name');
+    if (!DIAG_NAME_RE.test(name)) return bad(c, 'not a diagnostics archive name');
+    const file = path.join(d.diagnostics.dir, name);
+    if (!fs.existsSync(file)) return notFound(c, `no diagnostics archive ${name}`);
+    const stream = Readable.toWeb(fs.createReadStream(file)) as ReadableStream<Uint8Array>;
+    return new Response(stream, {
+      headers: {
+        'content-type': 'application/gzip',
+        'content-length': String(fs.statSync(file).size),
+        'content-disposition': `attachment; filename="${name}"`,
+        'cache-control': 'no-store',
+      },
+    });
   });
 
   // —— Secrets: names only ——

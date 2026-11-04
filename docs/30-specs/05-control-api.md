@@ -133,6 +133,16 @@
 
 恢复没有 API：要先停掉守护进程，用 `protea restore`（见 [../10-architecture/16-deployment.md](../10-architecture/16-deployment.md) §8）。
 
+## 诊断包
+
+只有管理员令牌（只读令牌 403）。内容见 [../10-architecture/15-observability.md](../10-architecture/15-observability.md) §8。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/diagnostics` | `{ dir, archives: [{ name, bytes, createdAt }] }`：`<data>/exports` 下的诊断包，新的在前 |
+| POST | `/api/diagnostics` | `{ sinceHours?（默认 72，≤ 2160）, runs?（默认 5，≤ 100）, content?, transcripts?, recordings? }` → `{ name, bytes, manifest }`。参数越界 400；失败 422 `diagnostics_failed`。最多保留 10 个 |
+| GET | `/api/diagnostics/:name` | 下载（`application/gzip`，`attachment`）。名字必须是 `protea-diag-<时间>.tar.gz`，否则 400；不存在 404 |
+
 ## 控制台
 
 `GET /`、`/index.html`、`/assets/*`、`/favicon.svg` 返回构建好的控制台（`apps/web/dist`，或 `PROTEA_WEB_DIR`），不需要令牌（页面自己调用 `/api/auth/*`）。响应带 `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; …`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`；`/assets/` 下的文件长期缓存，`index.html` 每次校验。未构建时返回一页说明。
@@ -159,4 +169,5 @@ SSE 与 WS 的消息都按总线记录的因果顺序发出：事件先于为它
 - M3：`/api/mcp/servers*`、`/api/mcp/oauth/callback`、`/api/skills*`（目录安装）。
 - M4：`POST /api/sessions/main/handoff`、`/api/memory/*`；`/api/status` 增加 `context`、`memory`、`persona`。
 - M5：其余全部（本页各表），`/api/status` 增加 `scheduler`；`/ws`、`/metrics`、控制台托管。
+- 实际测试支持（M6 之后）：`/api/diagnostics`。
 - M6：`POST /api/budget/release`、`/api/backups`；`BudgetStatus` 增加硬上限、扣住数与放行；`control.allowCidrs`；`/api/status` 的插件与 MCP 状态增加 `memoryBytes`。

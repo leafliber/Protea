@@ -7,6 +7,10 @@
 //   node scripts/soak.mjs --url http://127.0.0.1:7788 --token-file /path/PROTEA_ADMIN_TOKEN \
 //        --hours 72 --rate 2 --out soak.jsonl
 //
+// Observe a real deployment without adding events (sampling only), e.g. for days:
+//
+//   node scripts/soak.mjs --url … --token-file … --hours 168 --rate 0 --sample 300 --out observe.jsonl
+//
 // Exit code 1 when memory grows by more than --max-growth (default 5) % per day after warm-up.
 import fs from 'node:fs';
 import { parseArgs } from 'node:util';
@@ -29,6 +33,7 @@ if (!token) throw new Error('pass --token or --token-file (the admin token)');
 const base = a.url.replace(/\/$/, '');
 const durationMs = Number(a.hours) * 3_600_000;
 const perMinute = Number(a.rate);
+if (!(perMinute >= 0)) throw new Error('--rate must be 0 (observe only) or more events per minute');
 const sampleMs = Number(a.sample) * 1000;
 const headers = { authorization: `Bearer ${token}` };
 
@@ -120,7 +125,7 @@ const samples = [];
 const outFile = fs.createWriteStream(a.out, { flags: 'a' });
 console.log(`soak: ${a.hours} h at ${perMinute} event(s)/min against ${base}; samples every ${a.sample}s → ${a.out}`);
 
-const pushTimer = setInterval(() => void push(), 60_000 / perMinute);
+const pushTimer = perMinute > 0 ? setInterval(() => void push(), 60_000 / perMinute) : null;
 async function sample() {
   try {
     const m = await metrics();

@@ -58,7 +58,7 @@ export function cookieFrom(header: string | undefined, name: string): string | u
 }
 
 /** Paths the read-only role may not read even with GET (docs/10-architecture/13-control-plane.md §2). */
-const ADMIN_ONLY = [/^\/api\/memory(\/|$)/, /^\/api\/persona(\/|$)/, /^\/api\/secrets(\/|$)/];
+const ADMIN_ONLY = [/^\/api\/memory(\/|$)/, /^\/api\/persona(\/|$)/, /^\/api\/secrets(\/|$)/, /^\/api\/diagnostics(\/|$)/];
 
 function deny(c: Context, status: 401 | 403 | 429, code: string, message: string) {
   return c.json({ error: { code, message } }, status);

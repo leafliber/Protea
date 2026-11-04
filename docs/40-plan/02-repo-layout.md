@@ -15,7 +15,8 @@ Protea/
 ├── scripts/
 │   ├── bundle-plugin.mjs        把进程外插件打包成单文件 dist/main.js（esbuild）
 │   ├── container-smoke.sh       容器冒烟测试（M6）
-│   └── soak.mjs                 长稳测试：模拟来源 + 指标采样 + 增长报告（M6，无依赖）
+│   ├── docker-build.sh          本地构建镜像并按版本与提交打标签（pnpm docker:build[:slim|:all]）
+│   └── soak.mjs                 长稳测试：模拟来源 + 指标采样 + 增长报告（M6，无依赖）；--rate 0 只采样
 ├── tsconfig.base.json           各包共享的编译选项
 ├── tsconfig.json                全仓类型检查（paths 指向各包 src，noEmit）
 ├── vitest.config.ts             测试入口（alias 指向各包 src）
@@ -41,8 +42,9 @@ Protea/
 │   │   │   ├── memory/          记忆存储（memory 工具命令面）、FTS5 索引、memory / memory_search / memory_recent
 │   │   │   ├── config/          默认值、层叠加载、环境变量映射、秘密
 │   │   │   ├── db/              SQLite 打开与内嵌迁移（含迁移前快照）、仓储（batches/usage/kv/sessions/tool_stats）
-│   │   │   ├── observability/   pino 日志（TTY 美化 + 运行目录 JSON）、内存日志缓冲与查询（logs.ts）、Prometheus 指标（metrics.ts）、关停记录与崩溃报告（run-dir.ts）
+│   │   │   ├── observability/   pino 日志（TTY 美化 + 运行目录 JSON）、内存日志缓冲与查询（logs.ts）、Prometheus 指标（metrics.ts）、关停记录与崩溃报告（run-dir.ts）、追踪日志（trace.ts）
 │   │   │   ├── backup.ts        在线备份、Git 备份、恢复（M6）
+│   │   │   ├── diagnostics.ts   诊断包：日志、事件库元数据、用量、实时状态（protea diag）
 │   │   │   └── util/            时间与时区、id、中止、错误、CIDR（cidr.ts）、子进程环境与资源上限（child-process.ts）
 │   │   └── test/                单元、组件、属性测试与测试夹具（含可编排的 MCP 测试服务器与假 OAuth 服务器）
 │   └── control/                 @protea/control：Hono HTTP API（app.ts、ops.ts）、鉴权与会话 cookie（auth.ts）、地址白名单（allow.ts）、SSE/WS 共用的总线投影（stream.ts）、WebSocket（ws.ts）、控制台托管（static.ts）
@@ -80,7 +82,7 @@ Protea/
 - 构建：`pnpm build` 按依赖拓扑顺序构建每个包：库用 `tsc` 输出到 `dist/`，进程外插件用 `scripts/bundle-plugin.mjs` 打包成 `dist/main.js`，控制台用 Vite 输出到 `apps/web/dist/`；`node apps/cli/dist/main.js serve` 即可运行。
 - 控制台开发：`pnpm web`（Vite 开发服务器，把 `/api`、`/ws`、`/metrics` 转给 `PROTEA_URL`）；类型检查 `pnpm typecheck` 同时检查 `apps/web`（它有自己的 tsconfig：DOM、JSX、bundler 解析）。
 - 插件开发：`pnpm protea dev-plugin <dir>`（交互）/ `--check`（一致性检查）。
-- 镜像：`docker build -t protea .`（`--target slim` 为只含 Node 的变体）；`scripts/container-smoke.sh protea` 跑容器冒烟测试（[../10-architecture/16-deployment.md](../10-architecture/16-deployment.md)）。
+- 镜像：`pnpm docker:build`（`scripts/docker-build.sh`，打 `latest`、版本与提交标签；`:slim`、`:all` 构建 slim 或两者），或直接 `docker build -t protea .`（`--target slim` 为只含 Node 的变体）；`scripts/container-smoke.sh protea` 跑容器冒烟测试（[../10-architecture/16-deployment.md](../10-architecture/16-deployment.md)）。
 
 ## 命名
 
