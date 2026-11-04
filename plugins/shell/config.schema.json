@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "timeoutSec": { "type": "integer", "minimum": 1, "maximum": 3600, "default": 120, "description": "Default and maximum time per command; the whole process group is killed after it." },
+    "maxOutputKb": { "type": "integer", "minimum": 1, "maximum": 1024, "default": 64, "description": "Output returned to the model (stdout and stderr together); the middle of longer output is cut." },
+    "shell": { "type": "string", "default": "/bin/sh", "description": "Shell that runs the command with -c (e.g. /bin/bash)." },
+    "maxConcurrent": { "type": "integer", "minimum": 1, "maximum": 8, "default": 2 },
+    "env": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "default": {},
+      "x-hot": true,
+      "description": "Extra environment variables for commands (plain values; secrets are never passed)."
+    }
+  }
+}

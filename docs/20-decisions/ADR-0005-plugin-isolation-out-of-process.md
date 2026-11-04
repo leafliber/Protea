@@ -31,4 +31,4 @@
 
 - 协议按此决定实现：NDJSON 上的 JSON-RPC 2.0，Core 与 TypeScript SDK 共用 `@protea/protocol` 的 `RpcPeer`；Python SDK 是同一协议的独立实现。两者都通过 `protea dev-plugin --check` 的一致性检查。
 - 为了让插件目录能整体复制（安装进数据卷），进程外插件打包成单文件（`scripts/bundle-plugin.mjs`，esbuild）；开发时内置插件用清单的 `runtime.dev` 直接跑源码。
-- 子进程只继承最小环境与清单声明的秘密；资源上限（`ulimit` / cgroup）留到 M6。
+- 子进程只继承最小环境与清单声明的秘密；资源上限在 M6 实现（进程树内存采样 + 启动前 `ulimit -n`，见 [ADR-0009](ADR-0009-single-uid-with-process-limits.md)）。

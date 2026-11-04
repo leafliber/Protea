@@ -3,6 +3,7 @@ import { isLevel, isTrigger, type BatchInfo, type ConfigResponse, type SecretInf
 import {
   fetchSource,
   listRuns,
+  isGitTarget,
   parseSourceSpec,
   queryLogFile,
   type AuditLog,
@@ -47,6 +48,20 @@ export interface OpsDeps {
   };
   permissions?: () => Record<string, unknown>;
   budget?: () => Record<string, unknown>;
+  /** Lift budget enforcement for a while (M6); held events return to their normal delivery. */
+  budgetRelease?: (opts: { levels?: number[]; hardCap?: boolean; hours?: number; by: string }) => {
+    levels: number[];
+    hardCap: boolean;
+    untilMs: number;
+    promoted: number[];
+  };
+  /** Backups under <data>/backups (M6). The API never takes a filesystem path: only the default directory or a Git URL. */
+  backups?: {
+    dir: string;
+    list(): Array<{ name: string; createdAt?: string; bytes?: number; archive: boolean }>;
+    create(o: { archive?: boolean; includeWorkspace?: boolean; includeRuns?: boolean }): Promise<{ path: string; manifest: Record<string, unknown> }>;
+    git(url: string): Promise<{ commit: string | null; changed: number }>;
+  };
   logs?: { ring: LogRing; runsDir: string; runId: string };
   persona?: {
     listFiles(): Array<{ path: string; size: number; mtime: string }>;
@@ -225,6 +240,46 @@ export function registerOpsRoutes(app: Hono, d: OpsDeps): void {
       }
     });
   }
+
+  app.post('/api/budget/release', async (c) => {
+    if (!d.budgetRelease) return notFound(c, 'budget release is not available');
+    const b = (await body(c)) ?? {};
+    const levels = b['levels'];
+    if (levels !== undefined && !(Array.isArray(levels) && levels.every((l) => Number.isInteger(l) && (l as number) >= 2 && (l as number) <= 4))) {
+      return bad(c, 'levels must be a list of 2, 3, 4');
+    }
+    if (b['hardCap'] !== undefined && typeof b['hardCap'] !== 'boolean') return bad(c, 'hardCap must be a boolean');
+    if (b['hours'] !== undefined && typeof b['hours'] !== 'number') return bad(c, 'hours must be a number');
+    try {
+      const r = d.budgetRelease({
+        ...(levels !== undefined ? { levels: levels as number[] } : {}),
+        ...(b['hardCap'] !== undefined ? { hardCap: b['hardCap'] as boolean } : {}),
+        ...(b['hours'] !== undefined ? { hours: b['hours'] as number } : {}),
+        by: principal(c).via === 'cookie' ? 'console:admin' : 'api:admin',
+      });
+      return c.json({ ...r, until: new Date(r.untilMs).toISOString() });
+    } catch (err) {
+      return failed(c, 400, 'bad_request', err);
+    }
+  });
+
+  // —— Backups ——
+  app.get('/api/backups', (c) => (d.backups ? c.json({ dir: d.backups.dir, backups: d.backups.list() }) : notFound(c, 'backups are not available')));
+  app.post('/api/backups', async (c) => {
+    if (!d.backups) return notFound(c, 'backups are not available');
+    const b = (await body(c)) ?? {};
+    const to = b['to'];
+    try {
+      if (to !== undefined) {
+        if (typeof to !== 'string' || !isGitTarget(to)) return bad(c, 'to must be a Git URL (git@…, ssh://…, https://….git); directory backups always go to <data>/backups');
+        return c.json(await d.backups.git(to));
+      }
+      const flags = Object.fromEntries((['archive', 'includeWorkspace', 'includeRuns'] as const).filter((k) => b[k] === true).map((k) => [k, true]));
+      return c.json(await d.backups.create(flags));
+    } catch (err) {
+      return failed(c, 422, 'backup_failed', err);
+    }
+  });
 
   // —— Secrets: names only ——
   app.get('/api/secrets', (c) => c.json({ secrets: d.secrets?.list() ?? [] }));

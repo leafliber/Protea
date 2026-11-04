@@ -16,6 +16,7 @@ import {
   type ApprovalService,
   type AuditLog,
   type Bus,
+  type Cidr,
   type EventStore,
   type ForkManager,
   type HandoffResult,
@@ -28,6 +29,7 @@ import {
   type SkillRegistry,
   type Transcript,
 } from '@protea/core';
+import { addressGate } from './allow.js';
 import { principal, registerAuthRoutes, requireAuth, type AuthSettings } from './auth.js';
 import { installFrom, registerOpsRoutes, type OpsDeps } from './ops.js';
 import { registerConsole } from './static.js';
@@ -63,6 +65,8 @@ export interface ControlDeps extends Omit<OpsDeps, 'store' | 'audit'> {
   /** Deliver an operator message through the console plugin. */
   pushConsole: (req: PushEventRequest, senderKey: string) => PushResult;
   keepAliveMs?: number;
+  /** control.allowCidrs, parsed (empty: any address). */
+  allowCidrs?: () => readonly Cidr[];
   /** Prometheus text exposition at /metrics. */
   metrics?: { render(): Promise<string>; contentType: string };
   /** Serve /metrics without a token (a scraper on a private network). */
@@ -103,6 +107,12 @@ export function createControlApp(d: ControlDeps): Hono {
       return 'unknown';
     }
   };
+
+  const allowed = addressGate(d.allowCidrs ?? (() => []), d.log);
+  app.use('*', async (c, next) => {
+    if (allowed(clientAddress(c), c.req.path)) return next();
+    return c.json({ error: { code: 'forbidden', message: 'this address may not use the control plane (control.allowCidrs)' } }, 403);
+  });
 
   app.get('/healthz', (c) => c.json({ ok: true }));
   app.get('/readyz', (c) => {

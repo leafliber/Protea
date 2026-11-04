@@ -87,6 +87,6 @@ Claude 5 系列可能以 `stop_reason: 'refusal'` 结束（HTTP 200）。处理�
 
 ## 8. 测试
 
-- 录制/回放 Provider 层（`ProviderRecorder`）：把真实响应录成夹具，单元测试不打网络。
+- 录制/回放 Provider 层（M6，`packages/core/src/providers/recorder.ts`）：`ProviderRecorder` 包在真实 Provider 外、`RedactingProvider` 内，把每次调用的响应（`full` 模式还有请求）写到 `runs/<id>/provider.jsonl`；`RecordedProvider` 按角色依次回放这些响应，用于 `protea replay` 与不打网络的测试夹具。
 - 契约测试：对每个 Provider 实现跑同一组用例（流式、工具、取消、错误分类、计数）。
 - 每周一次的"真网"冒烟测试（CI 可选），覆盖新模型 ID 与 beta 头是否仍有效。

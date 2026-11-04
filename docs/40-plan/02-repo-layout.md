@@ -8,7 +8,14 @@ pnpm workspace，TypeScript ESM，Node 22。
 Protea/
 ├── package.json                 workspace 根：build / typecheck / test / dev / protea
 ├── pnpm-workspace.yaml          packages/*、plugins/*、apps/*、examples/plugins/*；allowBuilds（better-sqlite3、esbuild）
-├── scripts/bundle-plugin.mjs    把进程外插件打包成单文件 dist/main.js（esbuild）
+├── Dockerfile                   镜像（M6）：builder → slim → full（默认）
+├── .dockerignore
+├── .github/workflows/ci.yml     CI（M6）：类型检查、测试、构建、pnpm audit；构建 full/slim 镜像、容器冒烟测试、Trivy 扫描
+├── SECURITY.md                  漏洞报告渠道与响应时限（M6）
+├── scripts/
+│   ├── bundle-plugin.mjs        把进程外插件打包成单文件 dist/main.js（esbuild）
+│   ├── container-smoke.sh       容器冒烟测试（M6）
+│   └── soak.mjs                 长稳测试：模拟来源 + 指标采样 + 增长报告（M6，无依赖）
 ├── tsconfig.base.json           各包共享的编译选项
 ├── tsconfig.json                全仓类型检查（paths 指向各包 src，noEmit）
 ├── vitest.config.ts             测试入口（alias 指向各包 src）
@@ -20,12 +27,12 @@ Protea/
 │   ├── core/                    @protea/core：内核
 │   │   ├── src/
 │   │   │   ├── events/          校验（ajv）、门禁、主人映射、事件库、渲染
-│   │   │   ├── scheduler/       批窗口与投递、抢占矩阵（preemption.ts）、风暴防护、老化、预算统计（budget.ts）
+│   │   │   ├── scheduler/       批窗口与投递、抢占矩阵（preemption.ts）、风暴防护、老化、预算统计与强制执行（budget.ts）
 │   │   │   ├── forks/           Fork 管理器（排队、让渡/恢复、检查点、重启恢复）与 fork_* 工具
-│   │   │   ├── session/         主会话循环、转录与修复（含 thinking 截止标记）、启动对账、容量交接（handoff.ts）
+│   │   │   ├── session/         主会话循环、转录与修复（含 thinking 截止标记）、启动对账、容量交接（handoff.ts）、回放的数据读取（replay-source.ts）
 │   │   │   ├── context/         系统分段、运行时说明、环境提示模板、请求装配、工具搜索（tool-search.ts）、前缀指纹（prefix.ts）
-│   │   │   ├── tools/           工具注册表、分发器、内核工具
-│   │   │   ├── providers/       Provider 接口、anthropic、echo、scripted、价格表、秘密扫描包装（redact.ts）
+│   │   │   ├── tools/           工具注册表、分发器、内核工具、外发限速（outbound.ts）
+│   │   │   ├── providers/       Provider 接口、anthropic、echo、scripted、价格表、秘密扫描包装（redact.ts）、录制与回放（recorder.ts）
 │   │   │   ├── plugins/         PluginHost（生命周期、监督、事件网关）、清单与发现、子进程运行时、一致性检查、开发加载器
 │   │   │   ├── permissions/     权限策略、审批、审计、权限守卫、approval_request 工具
 │   │   │   ├── mcp/             MCP 客户端管理器（连接、监督、工具命名与注册、资源与 prompts、OAuth）
@@ -33,11 +40,12 @@ Protea/
 │   │   │   ├── persona/         人格文件加载与热重载、可选钩子（hooks.*）
 │   │   │   ├── memory/          记忆存储（memory 工具命令面）、FTS5 索引、memory / memory_search / memory_recent
 │   │   │   ├── config/          默认值、层叠加载、环境变量映射、秘密
-│   │   │   ├── db/              SQLite 打开与内嵌迁移、仓储（batches/usage/kv/sessions/tool_stats）
+│   │   │   ├── db/              SQLite 打开与内嵌迁移（含迁移前快照）、仓储（batches/usage/kv/sessions/tool_stats）
 │   │   │   ├── observability/   pino 日志（TTY 美化 + 运行目录 JSON）、内存日志缓冲与查询（logs.ts）、Prometheus 指标（metrics.ts）、关停记录与崩溃报告（run-dir.ts）
-│   │   │   └── util/            时间与时区、id、中止、错误
+│   │   │   ├── backup.ts        在线备份、Git 备份、恢复（M6）
+│   │   │   └── util/            时间与时区、id、中止、错误、CIDR（cidr.ts）、子进程环境与资源上限（child-process.ts）
 │   │   └── test/                单元、组件、属性测试与测试夹具（含可编排的 MCP 测试服务器与假 OAuth 服务器）
-│   └── control/                 @protea/control：Hono HTTP API（app.ts、ops.ts）、鉴权与会话 cookie（auth.ts）、SSE/WS 共用的总线投影（stream.ts）、WebSocket（ws.ts）、控制台托管（static.ts）
+│   └── control/                 @protea/control：Hono HTTP API（app.ts、ops.ts）、鉴权与会话 cookie（auth.ts）、地址白名单（allow.ts）、SSE/WS 共用的总线投影（stream.ts）、WebSocket（ws.ts）、控制台托管（static.ts）
 ├── plugins/
 │   ├── console/                 进程内连接器：控制台输入、con_send 输出、审批请求显示
 │   ├── cron/                    进程内来源：日程与 sleep_until
@@ -45,16 +53,20 @@ Protea/
 │   ├── webhook/                 进程外来源：/hooks/<name>
 │   ├── filewatch/               进程外来源：监视 /data/inbox
 │   ├── rss/                     进程外来源：RSS / Atom 订阅
-│   └── imap/                    进程外来源：IMAP 邮箱（imapflow + mailparser；测试用假 IMAP 服务器）
+│   ├── imap/                    进程外来源：IMAP 邮箱（imapflow + mailparser；测试用假 IMAP 服务器）
+│   └── shell/                   进程外工具：sh_run（工作区、超时、输出截断、环境白名单；默认不启用，M6）
 ├── skills/                      内置 Skills（protea-self-ops、daily-brief、memory-hygiene）
 ├── apps/
-│   ├── daemon/                  组装 Core + 控制平面 + 内置插件；单实例锁；崩溃端到端测试
-│   ├── cli/                     `protea` 命令（serve 直接启动守护进程；dev-plugin 本地运行插件；logq 直接读运行目录；其余经 HTTP API / SSE / WebSocket）
+│   ├── daemon/                  组装 Core + 控制平面 + 内置插件；单实例锁；离线回放（replay.ts）；端到端与安全检查清单测试
+│   ├── cli/                     `protea` 命令（serve 直接启动守护进程；dev-plugin 本地运行插件；logq、migrate、healthcheck、backup、restore、replay 直接用数据目录（admin.ts）；其余经 HTTP API / SSE / WebSocket）
 │   └── web/                     @protea/web：Web 控制台（Vite + React；pages/ 每页一个文件，components/ 通用组件与 JSON Schema 表单，live.ts 是唯一的 WebSocket 连接）
 ├── sdks/python/protea_plugin/   Python 插件 SDK（宿主放进 Python 插件的 PYTHONPATH）
 ├── examples/plugins/            py-notes（Python）、ts-notes（TypeScript）示例插件与一致性探针
-├── docker/observability/        Prometheus 抓取配置与 Grafana 示例面板（M5）
-└── (计划) docker/Dockerfile, tests/e2e
+└── docker/
+    ├── entrypoint.sh            容器入口：准备 /data、降权、迁移、exec 守护进程（M6）
+    ├── docker-compose.yml       示例部署，tls 档带 Caddy（M6）
+    ├── Caddyfile
+    └── observability/           Prometheus 抓取配置与 Grafana 示例面板（M5）
 ```
 
 ## 包依赖方向
@@ -68,6 +80,7 @@ Protea/
 - 构建：`pnpm build` 按依赖拓扑顺序构建每个包：库用 `tsc` 输出到 `dist/`，进程外插件用 `scripts/bundle-plugin.mjs` 打包成 `dist/main.js`，控制台用 Vite 输出到 `apps/web/dist/`；`node apps/cli/dist/main.js serve` 即可运行。
 - 控制台开发：`pnpm web`（Vite 开发服务器，把 `/api`、`/ws`、`/metrics` 转给 `PROTEA_URL`）；类型检查 `pnpm typecheck` 同时检查 `apps/web`（它有自己的 tsconfig：DOM、JSX、bundler 解析）。
 - 插件开发：`pnpm protea dev-plugin <dir>`（交互）/ `--check`（一致性检查）。
+- 镜像：`docker build -t protea .`（`--target slim` 为只含 Node 的变体）；`scripts/container-smoke.sh protea` 跑容器冒烟测试（[../10-architecture/16-deployment.md](../10-architecture/16-deployment.md)）。
 
 ## 命名
 

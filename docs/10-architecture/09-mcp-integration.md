@@ -46,7 +46,7 @@ mcp:
 | `streamable-http` | 远程服务器 | 无进程；请求头来自 `headers` 与 `auth`；OAuth 见 §6.1 |
 | `sse`（旧） | 兼容 | 同上 |
 
-镜像内预装 Node 22 与 Python 3.12 + uv，使 `npx` / `uvx` 型服务器开箱可用（[ADR-0007](../20-decisions/ADR-0007-single-image-with-node-and-python.md)）。`npx`/`uvx` 的下载缓存位置由镜像的环境变量决定（M6）。
+默认镜像（full）预装 Node 22 与 Python 3.13 + uv，使 `npx` / `uvx` 型服务器开箱可用（[ADR-0007](../20-decisions/ADR-0007-single-image-with-node-and-python.md)）。入口脚本把 npm、uv、pip 的缓存指向 `/data/cache`，这些变量会传给 stdio 服务器，所以重启后不用重新下载（M6）。每个 stdio 服务器的进程树受 `pluginHost.limits` 约束：内存超限按崩溃处理并重启，启动前设置文件描述符上限（M6）。
 
 ## 4. 能力映射
 

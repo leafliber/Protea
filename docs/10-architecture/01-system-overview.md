@@ -159,7 +159,7 @@ sequenceDiagram
 | 优先级 | 等级 L0–L4 × 投递模式 | [ADR-0004](../20-decisions/ADR-0004-priority-levels-and-delivery-modes.md) |
 | 插件隔离 | 进程外 JSON-RPC/stdio 为默认 | [ADR-0005](../20-decisions/ADR-0005-plugin-isolation-out-of-process.md) |
 | 存储 | SQLite（WAL）+ 文件目录 | [ADR-0006](../20-decisions/ADR-0006-sqlite-single-store.md) |
-| 镜像 | 单镜像含 Node 22 + Python 3.12/uv | [ADR-0007](../20-decisions/ADR-0007-single-image-with-node-and-python.md) |
+| 镜像 | 单镜像含 Node 22 + Python 3.13/uv（full），另有只含 Node 的 slim | [ADR-0007](../20-decisions/ADR-0007-single-image-with-node-and-python.md) |
 | 上下文容量 | 只追加历史 + 交接重置 | [ADR-0008](../20-decisions/ADR-0008-append-only-history-and-handoff.md) |
 
 ## 7. 子系统索引

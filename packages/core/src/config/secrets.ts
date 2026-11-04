@@ -11,6 +11,8 @@ const NAME_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
 export class SecretStore {
   /** Names looked up so far; their values are redacted even when they came from plain env vars. */
   private readonly seen = new Set<string>();
+  /** knownValues() is read for every log line; re-read the directory at most this often. */
+  private cached: { at: number; values: Array<{ name: string; value: string }> } | null = null;
 
   constructor(
     private readonly dir: string,
@@ -21,6 +23,7 @@ export class SecretStore {
 
   get(name: string): string | undefined {
     this.check(name);
+    if (!this.seen.has(name)) this.cached = null;
     this.seen.add(name);
     const fromEnv = this.env[`PROTEA_SECRET_${name}`] ?? this.env[name];
     if (fromEnv) return fromEnv.trim();
@@ -36,6 +39,7 @@ export class SecretStore {
     const tmp = path.join(this.dir, `.tmp-${name}-${process.pid}`);
     fs.writeFileSync(tmp, `${value.trim()}\n`, { mode: 0o600 });
     fs.renameSync(tmp, file);
+    this.cached = null;
   }
 
   /** Remove the stored file. A value from the environment stays in effect (and is reported). */
@@ -44,6 +48,7 @@ export class SecretStore {
     const file = path.join(this.dir, name);
     const removed = fs.existsSync(file);
     if (removed) fs.rmSync(file);
+    this.cached = null;
     return { removed, fromEnv: !!(this.env[`PROTEA_SECRET_${name}`] ?? (this.seen.has(name) ? this.env[name] : undefined)) };
   }
 
@@ -73,6 +78,14 @@ export class SecretStore {
 
   /** Every secret value this store knows about, longest first (for redaction). */
   knownValues(): Array<{ name: string; value: string }> {
+    const now = Date.now();
+    if (this.cached && now - this.cached.at < 2000) return this.cached.values;
+    const values = this.readValues();
+    this.cached = { at: now, values };
+    return values;
+  }
+
+  private readValues(): Array<{ name: string; value: string }> {
     const names = new Set(this.seen);
     for (const k of Object.keys(this.env)) if (k.startsWith('PROTEA_SECRET_')) names.add(k.slice('PROTEA_SECRET_'.length));
     if (fs.existsSync(this.dir)) for (const f of fs.readdirSync(this.dir)) if (NAME_RE.test(f)) names.add(f);
@@ -91,6 +104,21 @@ export class SecretStore {
   redact(text: string): string {
     let out = text;
     for (const { name, value } of this.knownValues()) out = out.split(value).join(`[REDACTED:${name}]`);
+    return out;
+  }
+
+  /**
+   * The same for a serialized JSON line (logs, crash reports): a value with quotes, backslashes
+   * or control characters appears escaped there, so both spellings are replaced.
+   */
+  redactJsonText(text: string): string {
+    let out = text;
+    for (const { name, value } of this.knownValues()) {
+      const mark = `[REDACTED:${name}]`;
+      if (out.includes(value)) out = out.split(value).join(mark);
+      const escaped = JSON.stringify(value).slice(1, -1);
+      if (escaped !== value && out.includes(escaped)) out = out.split(escaped).join(mark);
+    }
     return out;
   }
 

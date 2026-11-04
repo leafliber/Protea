@@ -43,6 +43,8 @@ export interface PluginStatus {
   version?: string;
   tools: string[];
   pid?: number;
+  /** Resident memory of the plugin process and its children at the last sample (out-of-process plugins). */
+  memoryBytes?: number;
   restarts?: number;
   error?: string;
 }
@@ -74,6 +76,8 @@ export interface McpServerStatus {
   prompts: number;
   resources: boolean;
   pid?: number;
+  /** Resident memory of the server process and its children at the last sample (stdio servers). */
+  memoryBytes?: number;
   restarts?: number;
   error?: string;
   /** Pending OAuth authorization: open this URL to grant access. */
@@ -164,12 +168,22 @@ export interface LevelBudget {
   /** null when the pool is unlimited. */
   limitUsd: number | null;
   usedRatio: number | null;
+  /** Events whose delivery the budget changed (L2 → piggyback, L3/L4 → store) and that are still waiting. */
+  held?: number;
+  /** The owner lifted enforcement for this level until then. */
+  releasedUntil?: string;
 }
 
 export interface BudgetStatus {
-  /** Budgets are tracked but not enforced until M6. */
+  /** `budget.enforce`: exhausted pools change how new events are scheduled. */
   enforced: boolean;
   dailyUsd: number | null;
+  /** Global cap over the rolling 24 h (only L0/L1 are delivered past it); null: none. */
+  hardDailyUsd: number | null;
+  /** Total spend over the rolling 24 h. */
+  spentUsd: number;
+  hardCapReached: boolean;
+  hardCapReleasedUntil?: string;
   levels: Record<Level, LevelBudget>;
 }
 

@@ -1,8 +1,8 @@
 ---
 name: protea-self-ops
-description: How to inspect and manage your own runtime in Protea — status, the event log, schedules, forks and approvals. Use when the owner asks what you are doing or have pending, why something did not happen, to change a schedule, or when you need to check on background work.
+description: How to inspect and manage your own runtime in Protea — status, the event log, schedules, forks, approvals and budget limits. Use when the owner asks what you are doing or have pending, why something did not happen, to change a schedule, when you need to check on background work, or when a budget or rate-limit notice arrives.
 metadata:
-  version: 1
+  version: 2
   requires-tools: self_status events_query
 ---
 
@@ -30,3 +30,9 @@ metadata:
 
 ## When something is broken
 - A plugin or MCP server that crashed restarts on its own; one marked `failed` needs the owner. Say which one and what its error says, and carry on with what still works.
+
+## Budget and limits
+- When a level's budget runs out, new L2 events only ride along with other batches, and new L3/L4 events are stored without reaching you; past the global cap only the owner's events (L0/L1) arrive. A `budget.exhausted` or `budget.hard_cap` event tells you when this starts. `self_status` shows how many events are held.
+- Tell the owner once, briefly, if it matters to them; only they can release the budget (console or `protea budget release`). Do not try to work around it, for example by promoting held events one by one.
+- When a `budget.recovered` event lists stored events, promote only the ones that still matter.
+- Sending is rate-limited per channel (by default 20 calls a minute). If a send fails with "outbound calls in the last minute", wait and combine what you have to say into one message.

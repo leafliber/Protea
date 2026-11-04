@@ -16,6 +16,7 @@ import {
   type StatusResponse,
 } from '@protea/protocol';
 import { api, defaultDataDir, resolveClient, stream, type ClientOptions } from './client.js';
+import { backupCommand, dropPrivileges, healthcheckCommand, migrateCommand, replayCommand, restoreCommand } from './admin.js';
 import { devPlugin } from './dev-plugin.js';
 import { opsCommand } from './ops.js';
 import { bold, dim, formatApproval, formatEvent, formatFork, formatMcp, formatMcpTool, formatPlugin, formatSkill, formatStatus, green, red, yellow } from './format.js';
@@ -24,7 +25,15 @@ const HELP = `protea — Protea personal assistant runtime
 
 Usage:
   protea serve [--data-dir DIR]                 run the daemon
-  protea status                                 show runtime status
+  protea migrate                                migrate the database schema (snapshot first; the image's entrypoint runs it)
+  protea healthcheck                            exit 0 when the local daemon answers /healthz (the image's HEALTHCHECK)
+  protea backup [--to DIR | --to GIT_URL] [--archive] [--include-workspace] [--include-runs]
+                                                online backup of the data directory (default <data>/backups; never secrets/ or cache/);
+                                                a Git URL pushes config.yaml, persona/, memory/ and skills/ instead
+  protea restore <backup-dir|.tar.gz> [--force] put a backup back (daemon stopped; replaced files are moved aside)
+  protea replay [--from C] [--to C] [--provider recorded|echo|config] [--run ID] [--out DIR]
+                                                re-run delivered events offline in their original batches (no side effects)
+  protea status [--json]                        show runtime status
   protea events push <text…> [--level N] [--trigger T] [--no-wait] [--timeout SEC]
                                                 send a console message and print the replies
   protea events tail [--since CURSOR] [--level N] [--source ID]
@@ -74,7 +83,9 @@ Usage:
   protea secrets rm <NAME>
   protea scheduler [status] | pause | resume    pause or resume event delivery (events keep being stored)
   protea scheduler discard --levels 3,4         drop pending events at those levels
-  protea budget                                 spend per level (rolling 24 h)
+  protea budget                                 spend per level and the hard cap (rolling 24 h), held events
+  protea budget release [--levels 2,3,4] [--hard-cap] [--hours 24]
+                                                lift enforcement for a while; held events are delivered again
   protea memory [ls] | cat <path> | put <path> | search <query…>
   protea persona [ls] | cat <file> | put <file> SOUL.md, OPERATING.md, USER.md, … (put reads stdin)
   protea logs [--level L] [--component C] [--plugin P] [--q TEXT] [--since 15m] [--run ID] [--follow] [--json]
@@ -122,6 +133,16 @@ const { values, positionals } = parseArgs({
     tarball: { type: 'string' },
     reason: { type: 'string' },
     levels: { type: 'string' },
+    hours: { type: 'string' },
+    to: { type: 'string' },
+    from: { type: 'string' },
+    'include-workspace': { type: 'boolean' },
+    'include-runs': { type: 'boolean' },
+    archive: { type: 'boolean' },
+    force: { type: 'boolean' },
+    provider: { type: 'string' },
+    out: { type: 'string' },
+    'hard-cap': { type: 'boolean' },
     model: { type: 'string' },
     component: { type: 'string' },
     plugin: { type: 'string' },
@@ -161,7 +182,8 @@ async function serve(): Promise<void> {
 }
 
 async function status(): Promise<void> {
-  console.log(formatStatus(await api<StatusResponse>(client(), 'GET', '/api/status')));
+  const s = await api<StatusResponse>(client(), 'GET', '/api/status');
+  console.log(values.json ? JSON.stringify(s, null, 2) : formatStatus(s));
 }
 
 async function push(textParts: string[]): Promise<number> {
@@ -488,6 +510,7 @@ async function approvals(sub: string | undefined, id: string | undefined): Promi
 
 async function main(): Promise<number> {
   const [cmd, sub, ...rest] = positionals;
+  dropPrivileges();
   if (values.version) {
     const { VERSION } = await import('@protea/daemon');
     console.log(VERSION);
@@ -503,6 +526,30 @@ async function main(): Promise<number> {
     case 'serve':
       await serve();
       return -1; // keep running
+    case 'migrate':
+      return migrateCommand(values['data-dir'] ?? defaultDataDir());
+    case 'healthcheck':
+      return healthcheckCommand(values['data-dir'] ?? defaultDataDir(), values.url);
+    case 'backup':
+      return backupCommand(values['data-dir'] ?? defaultDataDir(), {
+        ...(values.to !== undefined ? { to: values.to } : {}),
+        ...(values['include-workspace'] ? { includeWorkspace: true } : {}),
+        ...(values['include-runs'] ? { includeRuns: true } : {}),
+        ...(values.archive ? { archive: true } : {}),
+      });
+    case 'restore':
+      return restoreCommand(values['data-dir'] ?? defaultDataDir(), sub, !!values.force);
+    case 'replay': {
+      const from = intFlag('from', values.from);
+      const to = intFlag('to', values.to);
+      return replayCommand(values['data-dir'] ?? defaultDataDir(), {
+        ...(from !== undefined ? { from } : {}),
+        ...(to !== undefined ? { to } : {}),
+        ...(values.provider !== undefined ? { provider: values.provider } : {}),
+        ...(values.run !== undefined ? { run: values.run } : {}),
+        ...(values.out !== undefined ? { out: values.out } : {}),
+      });
+    }
     case 'status':
       await status();
       return 0;

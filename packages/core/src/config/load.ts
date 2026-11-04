@@ -3,6 +3,7 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { LEVELS, type Level } from '@protea/protocol';
 import { normalizeMcpServer } from '../mcp/settings.js';
+import { parseCidr } from '../util/cidr.js';
 import { isValidTimeZone } from '../util/time.js';
 import { defaultConfig, STARTER_CONFIG_YAML } from './defaults.js';
 import type { ProteaConfig } from './types.js';
@@ -100,6 +101,10 @@ function validate(cfg: ProteaConfig, warnings: string[]): void {
     }
   }
   if (!(budget.warnAt > 0 && budget.warnAt <= 1)) throw new Error('budget.warnAt must be in (0, 1]');
+  if (typeof budget.enforce !== 'boolean') throw new Error('budget.enforce must be a boolean');
+  if (budget.hardDailyUsd !== null && !(typeof budget.hardDailyUsd === 'number' && budget.hardDailyUsd > 0)) {
+    throw new Error('budget.hardDailyUsd must be a positive number or null');
+  }
   const policies = ['allow', 'ask', 'deny'];
   const perm = cfg.permissions;
   if (!policies.includes(perm.default)) throw new Error('permissions.default must be allow, ask or deny');
@@ -113,6 +118,14 @@ function validate(cfg: ProteaConfig, warnings: string[]): void {
     throw new Error('pluginHost.restartBackoffMs must be a non-empty list of delays');
   }
   if (!(ph.maxCrashes >= 1)) throw new Error('pluginHost.maxCrashes must be at least 1');
+  const lim = ph.limits;
+  if (!isPlainObject(lim)) throw new Error('pluginHost.limits must be a mapping');
+  if (lim.memoryMb !== null && !(Number.isInteger(lim.memoryMb) && lim.memoryMb >= 32)) throw new Error('pluginHost.limits.memoryMb must be an integer of at least 32, or null');
+  if (lim.openFiles !== null && !(Number.isInteger(lim.openFiles) && lim.openFiles >= 64)) throw new Error('pluginHost.limits.openFiles must be an integer of at least 64, or null');
+  if (!(Number.isInteger(lim.checkMs) && lim.checkMs >= 1000)) throw new Error('pluginHost.limits.checkMs must be an integer of at least 1000');
+  if (ph.outboundPerMinute !== null && !(Number.isInteger(ph.outboundPerMinute) && ph.outboundPerMinute >= 1)) {
+    throw new Error('pluginHost.outboundPerMinute must be a positive integer or null');
+  }
   const { soft, hard } = cfg.session.rounds;
   if (!(soft > 0 && hard >= soft)) throw new Error('session.rounds requires 0 < soft <= hard');
   if (!Array.isArray(cfg.owner.identities)) throw new Error('owner.identities must be a list');
@@ -128,7 +141,16 @@ function validate(cfg: ProteaConfig, warnings: string[]): void {
   if (typeof cfg.control.readonlyTokenSecret !== 'string' || !/^[A-Z][A-Z0-9_]{0,63}$/.test(cfg.control.readonlyTokenSecret)) {
     throw new Error('control.readonlyTokenSecret must be a secret name (UPPER_CASE)');
   }
+  if (!Array.isArray(cfg.control.allowCidrs)) throw new Error('control.allowCidrs must be a list of CIDRs');
+  for (const c of cfg.control.allowCidrs) {
+    try {
+      parseCidr(String(c));
+    } catch (err) {
+      throw new Error(`control.allowCidrs: ${(err as Error).message}`);
+    }
+  }
   const obs = cfg.observability;
+  if (!['off', 'responses', 'full'].includes(obs.recordProvider)) throw new Error('observability.recordProvider must be off, responses or full');
   if (!Number.isInteger(obs.keepRuns) || obs.keepRuns < 1) throw new Error('observability.keepRuns must be an integer of at least 1');
   if (!Array.isArray(obs.requiredPlugins) || !obs.requiredPlugins.every((p) => typeof p === 'string')) {
     throw new Error('observability.requiredPlugins must be a list of plugin ids');

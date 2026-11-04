@@ -31,6 +31,8 @@ export interface BusTopics {
   'batch.ended': { batchId: string; endReason: BatchEndReason; rounds: number };
   'plugin.output': { plugin: string; channel?: string; text: string; at: string };
   'usage.recorded': UsageRecord;
+  /** A model request is about to be sent (the latency metric measures up to here). */
+  'model.request': { batchId: string; sessionId: string; attempt: number };
   'scheduler.action': SchedulerAction;
   'fork.changed': ForkInfo;
   'plugin.changed': PluginStatus;

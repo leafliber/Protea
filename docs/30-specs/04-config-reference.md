@@ -1,10 +1,10 @@
 # 规范：配置参考
 
-> 状态：Accepted（M0–M5 部分）· 更新：2026-11-04 · 设计：[../10-architecture/16-deployment.md](../10-architecture/16-deployment.md) §4
+> 状态：Accepted（M0–M6）· 更新：2026-11-04 · 设计：[../10-architecture/16-deployment.md](../10-architecture/16-deployment.md) §4
 
 配置文件 `/data/config.yaml`，首次启动时写入一份带注释的模板。所有键都有默认值。层叠顺序（后者覆盖前者）：内置默认 → `config.yaml` → `PROTEA_*` 环境变量。对象逐层合并，数组与标量整体替换。
 
-## 1. 已生效的键（M0–M5）
+## 1. 已生效的键（M0–M6）
 
 ```yaml
 daemon:
@@ -18,6 +18,8 @@ control:
   readonlyTokenSecret: PROTEA_READONLY_TOKEN # 这个秘密存在时，它的值是只读令牌（GET 与 WS 订阅；M5）
   publicUrl: null                      # 浏览器访问控制平面的地址（MCP OAuth 回调）；null 时取实际监听地址
   publicMetrics: false                 # true：/metrics 不需要令牌（只用于私有网络；M5）
+  allowCidrs: []                       # 允许访问控制平面的客户端地址（CIDR 或单个地址）；空 = 不限（M6）。
+                                       # 回环地址总是允许；/hooks/* 不受限（由插件校验签名）；经反向代理时看到的是代理的地址
 
 owner:
   identities:                          # 只有匹配的 (plugin, senderKey) 能产生 L1 事件
@@ -41,10 +43,12 @@ scheduler:
     yieldTimeoutMs: 30000              # L3/L4 Fork 未及时到达边界 → 取消其模型调用（恢复时重发）
     maxTurns: 20                       # Fork 模型回合数的默认值与上限
 
-budget:                                # M1 只统计、不限制（限制在 M6 生效）
+budget:                                # 热更新（M5）；强制执行在 M6
   dailyUsd: null                       # 滚动 24 h 总预算（美元）；null = 不限
   shares: { 0: null, 1: 0.6, 2: 0.2, 3: 0.15, 4: 0.05 }   # 各等级份额；null = 该等级不限
-  warnAt: 0.9                          # 越过该比例与 100% 时各记一次 budget.threshold 事件
+  warnAt: 0.9                          # 越过该比例记一次 L4 budget.threshold 事件
+  enforce: true                        # 池用尽后：新 L2 事件改为 piggyback，新 L3/L4 事件只入库；L1 不受影响（M6）
+  hardDailyUsd: null                   # 全局硬上限（滚动 24 h 全部花费）；到达后只投递 L0/L1，L2–L4 入库，拒绝新的 L2–L4 Fork（M6）
 
 session:
   rounds: { soft: 12, hard: 30 }       # 每批模型回合数：软上限发提醒事件，硬上限结束批
@@ -69,7 +73,8 @@ providers:
     maxRetries: 2                      # SDK 内部重试次数
     pricing: {}                        # 覆盖内置价格表：{ <model>: { input, output, cacheRead } }，美元/百万 token
   echo:
-    delayMs: 0                         # 每次回复前的延迟（用于崩溃测试）
+    delayMs: 0                         # 每次回复前的延迟（用于崩溃测试与长稳测试）
+                                       # 用量按请求与回复的长度估算（M6），所以离线时上下文交接也会照常发生
 
 plugins:                             # 每个插件一组：enabled（未列出的插件默认 false）+ config（按插件的 configSchema 校验）
   console: { enabled: true, config: {} }
@@ -97,6 +102,12 @@ pluginHost:                            # 进程外插件的监督
   drainTimeoutMs: 30000                # 停止前等待进行中的工具调用
   initializeTimeoutMs: 20000
   stopTimeoutMs: 5000                  # stop 之后多久发 SIGTERM（再 5 s 后 SIGKILL）
+  limits:                              # 每个插件与 stdio MCP 服务器的进程树（M6；冷配置，重启生效）
+    memoryMb: 512                      # 常驻内存（含子进程）超过它 → 按崩溃处理并重启；null = 不限；≥ 32
+    openFiles: 1024                    # 启动前设置的文件描述符软上限（ulimit -n）；null = 继承；≥ 64
+    checkMs: 15000                     # 内存采样间隔
+  outboundPerMinute: 20                # 每个 connector 插件（console、telegram…）每分钟的工具调用上限，主会话与 Fork 共用；
+                                       # null = 不限（M6）。只读工具不计
 
 permissions:
   default: allow                       # 其他规则都不覆盖时的策略
@@ -152,17 +163,32 @@ observability:
   logEventText: false
   keepRuns: 20                         # /data/runs 下保留的运行目录数（M5）
   requiredPlugins: []                  # 这些插件不在 running 时 /readyz 不就绪（M5）
+  recordProvider: off                  # off | responses | full：把模型调用录到 runs/<id>/provider.jsonl（回放与测试夹具；M6）。
+                                       # full 还录请求（已脱敏，但每条都含整个上下文，体积大）
+```
+
+内置插件 `shell`（M6，默认不启用）的配置：
+
+```yaml
+plugins:
+  shell:
+    enabled: true
+    config:
+      timeoutSec: 120                  # 每条命令的默认与最长时间，超时杀掉整个进程组
+      maxOutputKb: 64                  # 返回给模型的输出（stdout+stderr），过长时截掉中间
+      shell: /bin/sh                   # 用 -c 执行命令的 shell，例如 /bin/bash
+      maxConcurrent: 2
+      env: {}                          # 额外的环境变量（明文值；名字像秘密的会被丢弃）
 ```
 
 ## 2. 计划中的键（后续里程碑）
 
 | 键 | 里程碑 |
 |---|---|
-| `scheduler.retention`（已结束 Fork 转录与事件的保留期） | M6 |
-| `budget.enforce`（耗尽时降级/存储） | M6 |
-| `permissions.conditions`（按批等级/参数/时间窗）、`permissions.egress` | M6 |
-| `pluginHost.resources`（插件内存/CPU 上限） | M6 |
-| `control.allowCidrs`、`observability.otlp` | M6 |
+| `scheduler.retention`（已结束 Fork 转录与事件的保留期） | M7（M6 的长稳测试：事件库每个事件约 1 KB，转录 1.5 h 写了 13 MB，见路线图） |
+| `permissions.conditions`（按批等级/参数/时间窗）、`permissions.egress` | M7 |
+| `pluginHost.limits.cpu`（CPU 上限；内存与文件描述符在 M6 已有） | M7 |
+| `observability.otlp` | M7 |
 
 ## 3. 环境变量映射
 

@@ -1,0 +1,64 @@
+# Protea with Docker Compose (docs/10-architecture/16-deployment.md §2).
+#
+#   cd docker && docker compose up -d                 # the daemon on http://127.0.0.1:7788
+#   PROTEA_DOMAIN=protea.example.com docker compose --profile tls up -d
+#                                                     # + Caddy with an automatic certificate on :443
+#
+# Secrets: put them in ./secrets.env (ANTHROPIC_API_KEY=…, PROTEA_ADMIN_TOKEN=…, TELEGRAM_BOT_TOKEN=…)
+# or write them later with `docker compose exec protea protea secrets set NAME`.
+name: protea
+
+services:
+  protea:
+    image: ${PROTEA_IMAGE:-protea:latest}
+    build:
+      context: ..
+      target: ${PROTEA_TARGET:-full}
+    restart: unless-stopped
+    # Longer than daemon.shutdown.graceMs (25 s) so the running batch can finish.
+    stop_grace_period: 40s
+    environment:
+      TZ: ${TZ:-UTC}
+    env_file:
+      - path: ./secrets.env
+        required: false
+    volumes:
+      - protea-data:/data
+    # Without the tls profile the console is reachable on this machine only; use an SSH tunnel
+    # from elsewhere (ssh -L 7788:127.0.0.1:7788 host).
+    ports:
+      - "127.0.0.1:7788:7788"
+    # 1 vCPU / 1 GB is the supported minimum (docs/00-overview/01-vision-and-scope.md).
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 512
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    # The entrypoint hands /data to the protea user and drops root: these are all it needs.
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID]
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
+  caddy:
+    profiles: [tls]
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [protea]
+    environment:
+      PROTEA_DOMAIN: ${PROTEA_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  protea-data:
+  caddy-data:
+  caddy-config:

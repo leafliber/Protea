@@ -223,6 +223,15 @@ importers:
         specifier: ^5.11.2
         version: 5.11.2
 
+  plugins/shell:
+    dependencies:
+      '@protea/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      '@protea/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+
   plugins/telegram:
     dependencies:
       '@protea/plugin-sdk':

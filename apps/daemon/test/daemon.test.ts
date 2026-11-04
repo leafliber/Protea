@@ -75,6 +75,7 @@ describe('daemon', () => {
       'filewatch:loaded',
       'imap:loaded',
       'rss:loaded',
+      'shell:loaded',
       'telegram:loaded',
       'webhook:loaded',
     ]);
@@ -95,7 +96,7 @@ describe('daemon', () => {
     expect(status).toMatchObject({ mcp: [], skills: { listed: 3, rejected: 0 }, tools: { total: 18, deferred: 0 }, memory: { files: 1 } });
     // The scripted provider reports no context window: 200k − 64k output − 10k margin.
     expect(status['context']).toMatchObject({ transcript: 'main.0001.jsonl', handoffs: 0, softTokens: 126_000, hardTokens: 126_000 });
-    expect((status['budget'] as { enforced: boolean }).enforced).toBe(false);
+    expect((status['budget'] as { enforced: boolean }).enforced).toBe(true);
   });
 
   it('runs a fork and serves it over the control API', async () => {

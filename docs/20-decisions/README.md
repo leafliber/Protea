@@ -12,6 +12,7 @@
 | [ADR-0006](ADR-0006-sqlite-single-store.md) | SQLite 单文件存储 + 文件目录 | Accepted |
 | [ADR-0007](ADR-0007-single-image-with-node-and-python.md) | 单镜像内置 Node 与 Python/uv | Accepted |
 | [ADR-0008](ADR-0008-append-only-history-and-handoff.md) | 历史只追加，容量以交接处理 | Accepted |
+| [ADR-0009](ADR-0009-single-uid-with-process-limits.md) | 插件与守护进程同用一个用户，靠资源上限与工作区约束 | Accepted |
 
 新增 ADR：复制 `ADR-0000-template.md`（见下），编号递增，提交 PR 时在此表登记。
 

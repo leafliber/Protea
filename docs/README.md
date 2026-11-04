@@ -1,6 +1,6 @@
 # Protea 设计文档
 
-> 状态：Draft v0.6（M0–M5 已实现，相关文档已与代码同步）· 更新：2026-11-04 · 语言：中文（代码标识符与文件名为英文）
+> 状态：Draft v0.7（M0–M6 已实现，相关文档已与代码同步）· 更新：2026-11-04 · 语言：中文（代码标识符与文件名为英文）
 
 本目录是 Protea 的完整设计与实施计划。文档按"从愿景到落地"的顺序编号，建议首次阅读按下面的顺序。
 
@@ -56,7 +56,8 @@ docs/
 │   ├── ADR-0005-plugin-isolation-out-of-process.md
 │   ├── ADR-0006-sqlite-single-store.md
 │   ├── ADR-0007-single-image-with-node-and-python.md
-│   └── ADR-0008-append-only-history-and-handoff.md
+│   ├── ADR-0008-append-only-history-and-handoff.md
+│   └── ADR-0009-single-uid-with-process-limits.md
 ├── 30-specs/                          精确规范（Schema、协议、配置、API）
 │   ├── 01-event-envelope-schema.md
 │   ├── 02-plugin-manifest.md

@@ -2,6 +2,7 @@ import path from 'node:path';
 import WebSocket from 'ws';
 import type {
   BatchInfo,
+  BudgetStatus,
   ConfigResponse,
   EventEnvelope,
   ForkInfo,
@@ -290,10 +291,31 @@ export async function opsCommand(cmd: string, sub: string | undefined, args: str
       return null;
     }
     case 'budget': {
-      const r = await api<{ settings: Record<string, unknown>; status: { enforced: boolean; dailyUsd: number | null; levels: Record<string, { spentUsd: number; limitUsd: number | null; usedRatio: number | null }> } }>(client(), 'GET', '/api/budget');
-      console.log(`daily ${r.status.dailyUsd === null ? 'unlimited' : `$${r.status.dailyUsd}`}${r.status.enforced ? '' : dim(' (tracked, not enforced)')}`);
-      for (const [l, b] of Object.entries(r.status.levels)) {
-        console.log(`L${l} $${b.spentUsd.toFixed(4)}${b.limitUsd === null ? dim(' unlimited') : ` / $${b.limitUsd.toFixed(2)} (${((b.usedRatio ?? 0) * 100).toFixed(0)}%)`}`);
+      if (sub === 'release') {
+        const levels = str(f, 'levels')?.split(',').map((x) => intArg(x.trim(), '--levels'));
+        const hours = str(f, 'hours') !== undefined ? Number(str(f, 'hours')) : undefined;
+        const r = await api<{ levels: number[]; hardCap: boolean; until: string; promoted: number[] }>(client(), 'POST', '/api/budget/release', {
+          ...(levels ? { levels } : {}),
+          ...(f['hard-cap'] === true ? { hardCap: true } : {}),
+          ...(hours !== undefined ? { hours } : {}),
+        });
+        const what = [...r.levels.map((l) => `L${l}`), ...(r.hardCap ? ['the hard cap'] : [])].join(', ');
+        console.log(green(`released ${what} until ${r.until}; ${r.promoted.length} held event(s) returned to delivery`));
+        return 0;
+      }
+      if (sub !== undefined) return null;
+      const r = await api<{ settings: Record<string, unknown>; status: BudgetStatus }>(client(), 'GET', '/api/budget');
+      const s = r.status;
+      const cap =
+        s.hardDailyUsd === null
+          ? ''
+          : ` · hard cap $${s.hardDailyUsd}${s.hardCapReached ? red(' REACHED') : ''}${s.hardCapReleasedUntil ? yellow(` (released until ${s.hardCapReleasedUntil})`) : ''}`;
+      console.log(`daily ${s.dailyUsd === null ? 'unlimited' : `$${s.dailyUsd}`} · spent $${s.spentUsd.toFixed(4)} in 24 h${cap}${s.enforced ? '' : dim(' (tracked, not enforced)')}`);
+      for (const [l, b] of Object.entries(s.levels)) {
+        const pct = (b.usedRatio ?? 0) * 100;
+        const used = b.limitUsd === null ? dim(' unlimited') : ` / $${b.limitUsd.toFixed(2)} (${pct >= 100 ? red(`${pct.toFixed(0)}%`) : `${pct.toFixed(0)}%`})`;
+        const extra = (b.held ? yellow(` · ${b.held} held`) : '') + (b.releasedUntil ? yellow(` · released until ${b.releasedUntil}`) : '');
+        console.log(`L${l} $${b.spentUsd.toFixed(4)}${used}${extra}`);
       }
       return 0;
     }

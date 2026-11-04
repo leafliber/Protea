@@ -1,43 +1,91 @@
 # 部署
 
-> 状态：Draft · 更新：2026-11-03 · 决策：[ADR-0007](../20-decisions/ADR-0007-single-image-with-node-and-python.md)
+> 状态：Accepted（M6）· 更新：2026-11-04 · 决策：[ADR-0007](../20-decisions/ADR-0007-single-image-with-node-and-python.md)、[ADR-0009](../20-decisions/ADR-0009-single-uid-with-process-limits.md)
+
+> **实现状态（M6）**：`Dockerfile`（仓库根目录，full 与 slim 两个目标）、`docker/entrypoint.sh`、`docker/docker-compose.yml` 与 `docker/Caddyfile`；CLI 的 `migrate`、`healthcheck`、`backup`、`restore`、`replay`；`scripts/container-smoke.sh`（容器冒烟测试）与 `scripts/soak.mjs`（长稳测试）；`.github/workflows/ci.yml` 构建两种镜像、跑冒烟测试并用 Trivy 扫描。镜像还没有发布到镜像仓库，需要自己构建。
 
 ## 1. 单镜像
 
 一个镜像包含：守护进程、内置插件、默认人格与 Skills、控制台静态文件、CLI，以及运行社区 MCP 服务器所需的运行时。
 
-```
-ghcr.io/<org>/protea:<version>        ← 默认（full）：Node 22 + Python 3.12 + uv + git + rg + jq + curl
-ghcr.io/<org>/protea:<version>-slim   ← 仅 Node（无法运行 uvx 型 MCP 服务器）
+| 目标 | 内容 | 磁盘占用 | 压缩后（下载量） |
+|---|---|---|---|
+| `full`（默认） | Node 22、npm/npx、Python 3.13、uv/uvx、git、ripgrep、jq、curl、openssh-client、tini | 约 550 MB | 约 170 MB |
+| `slim` | Node 22、npm/npx、tini（不能跑 `uvx` 型 MCP 服务器与 Python 插件） | 约 345 MB | 约 95 MB |
+
+```bash
+docker build -t protea .                       # full
+docker build -t protea:slim --target slim .    # slim
 ```
 
-多阶段构建：`builder`（pnpm install + build + 控制台打包）→ `runtime`（`node:22-bookworm-slim` + apt 安装 python3/uv/tini/git 等 + 复制 `dist/`）。镜像体积目标：full ≤ 450 MB，slim ≤ 200 MB。
+多阶段构建（`Dockerfile`）：
+
+1. `builder`（`node:22-trixie-slim` + 编译工具）：`pnpm fetch`（只依赖锁文件，代码变化时复用这一层）→ `pnpm install --offline` → `pnpm build`（含插件打包与控制台）→ `pnpm --filter @protea/cli deploy --prod` 得到只含生产依赖的 `/app`；删掉 TypeScript 源文件、source map、其他平台的原生二进制与 better-sqlite3 的 SQLite 源码。
+2. `assets`：内置的进程外插件（每个插件只保留清单、`dist/`、`config.schema.json`、`ENV_PROMPT.md`、`skills/`）、默认人格、内置 Skills、Python 插件 SDK、控制台构建产物，放在 `/app/assets`（`PROTEA_ASSETS_DIR`）。
+3. `slim`：`node:22-trixie-slim` + tini；npm 升级到较新的版本（基础镜像自带的 npm 依赖里有已知漏洞），删除不用的 corepack 与 yarn。
+4. `full`：在 `slim` 上加 apt 包与 uv 的官方镜像里的 `uv`、`uvx`。
+
+测得的体积比原目标（full ≤ 450 MB、slim ≤ 200 MB）大：Node 22 的 Debian 基础镜像本身就有约 270 MB，Python 与 git（连带 perl）约 160 MB，uv 约 45 MB，应用本身约 47 MB。体积按镜像各层未压缩大小相加（`docker history`）；Docker Desktop 的 containerd 存储在 `docker images` 里显示的数字更大，因为它同时算了压缩的层与解开的快照。原目标按压缩后的下载量看是满足的。
 
 ## 2. 运行
 
 ```bash
 docker run -d --name protea \
   -v protea-data:/data \
-  -p 7788:7788 \
-  -e PROTEA_ADMIN_TOKEN=... \
+  -p 127.0.0.1:7788:7788 \
   -e ANTHROPIC_API_KEY=... \
   --stop-timeout 40 \
   --restart unless-stopped \
-  ghcr.io/<org>/protea:0.1.0
+  protea
 ```
 
-`docker-compose.yml` 示例随仓库提供（含可选的 Caddy 反向代理与 TLS）。
+- 管理员令牌不设置时自动生成并写入 `/data/secrets/PROTEA_ADMIN_TOKEN`：`docker exec protea cat /data/secrets/PROTEA_ADMIN_TOKEN`。
+- 控制台在 `http://127.0.0.1:7788/`；不在本机时用 SSH 隧道或下面的 Caddy。
+- 其他秘密：`docker exec -i protea protea secrets set TELEGRAM_BOT_TOKEN`（从 stdin 读），或环境变量 `PROTEA_SECRET_<NAME>`。
+
+`docker/docker-compose.yml`：
+
+```bash
+cd docker && docker compose up -d                                   # 只监听 127.0.0.1:7788
+PROTEA_DOMAIN=protea.example.com docker compose --profile tls up -d   # 加 Caddy，自动证书，443
+```
+
+示例里给出了推荐的容器限制：`mem_limit: 1g`、`cpus: 1`、`pids_limit: 512`、`cap_drop: [ALL]`（只加回入口脚本需要的 `CHOWN`、`DAC_OVERRIDE`、`FOWNER`、`SETUID`、`SETGID`）、`no-new-privileges`、`stop_grace_period: 40s`、日志轮转。秘密放在同目录的 `secrets.env`（可选）。
 
 ### 2.1 进程树与信号
 
-- `tini` 为 PID 1，转发 SIGTERM，回收僵尸。
-- 守护进程收到 SIGTERM 后进入排空（[04-scheduling-and-preemption.md](04-scheduling-and-preemption.md) §8），最长 `shutdown.graceMs`（默认 25 s）；`--stop-timeout` 必须大于它。
-- 子进程（插件、MCP）由守护进程停止；守护进程退出时 `tini` 清理残留。
+```
+tini (PID 1, root)
+ └─ protea-entrypoint (sh)            ← root：准备 /data；然后 setpriv 降为 uid 1000 重新执行自己
+     └─ node protea serve (uid 1000)  ← exec，tini 的 SIGTERM 直接到这里
+         ├─ 插件进程（node / python）
+         └─ stdio MCP 服务器（npx / uvx …）
+```
+
+- 守护进程收到 SIGTERM 后进入排空（[04-scheduling-and-preemption.md](04-scheduling-and-preemption.md) §8），最长 `daemon.shutdown.graceMs`（默认 25 s），然后停 MCP 服务器与插件、写 `shutdown.json`。`--stop-timeout`（compose 的 `stop_grace_period`）必须大于它，示例用 40 s。空闲时 `docker stop` 不到 1 s 完成。
+- 子进程由守护进程停止；守护进程退出后 tini 回收残留的进程。
 
 ### 2.2 用户与权限
 
-- 镜像内用户 `protea`（uid 1000）运行守护进程；`plugin`（uid 1001）运行插件与 `shell` 工具（可通过 `PROTEA_SINGLE_USER=1` 关闭以简化权限问题）。
-- `/data` 由入口脚本在启动时 `chown`（仅首次或权限不符时）。
+- 守护进程、插件、MCP 服务器与 `shell` 工具都以用户 `protea`（uid/gid 1000，`PROTEA_RUN_AS=1000:1000`）运行，不再单独设插件用户（[ADR-0009](../20-decisions/ADR-0009-single-uid-with-process-limits.md)）。
+- 入口脚本以 root 启动时：`/data` 的属主不是 1000 才 `chown -R`，然后 `setpriv --reuid --regid --init-groups` 降权。以 `--user 1000:1000` 启动时跳过这一步，此时 `/data` 必须已经可写，否则直接报错退出。`PROTEA_ALLOW_ROOT=1` 关闭降权（不建议）。
+- `docker exec protea protea …` 默认以 root 进来，CLI 会按 `PROTEA_RUN_AS` 自己降权，所以 `protea backup` 写出的文件仍属于 `protea`。
+- 插件与 MCP 服务器的进程树受 `pluginHost.limits`（内存、文件描述符）约束（[14-security-and-permissions.md](14-security-and-permissions.md) §6）。
+
+### 2.3 健康检查
+
+镜像的 `HEALTHCHECK` 每 30 s 运行一次 `protea healthcheck`（启动宽限 40 s，超时 5 s，连续 3 次失败为 unhealthy）：它按 `control.listen`（或 `PROTEA_URL`）请求本机的 `/healthz`。`/readyz`（Provider、插件、MCP、SQLite 写锁、投递未暂停）供编排层判断是否就绪，见 [15-observability.md](15-observability.md) §5。
+
+### 2.4 镜像里的环境变量
+
+| 变量 | 值 | 作用 |
+|---|---|---|
+| `PROTEA_DATA_DIR` | `/data` | 数据目录 |
+| `PROTEA_ASSETS_DIR` | `/app/assets` | 内置插件、人格、Skills、控制台 |
+| `PROTEA_RUN_AS` | `1000:1000` | 入口脚本与 CLI 降权的目标 |
+| `PROTEA_IMAGE` | `full` / `slim` | 镜像变体（只用于诊断） |
+| `TZ` | `UTC` | 默认时区（`daemon.timezone` 未设时用它） |
+| `npm_config_cache`、`UV_CACHE_DIR`、`UV_TOOL_DIR`、`UV_PYTHON_INSTALL_DIR`、`PIP_CACHE_DIR` | `/data/cache/...` | 入口脚本设置；插件、MCP 服务器与 `shell` 工具会继承（这些变量不是秘密） |
 
 ## 3. 数据卷布局
 
@@ -45,77 +93,97 @@ docker run -d --name protea \
 /data
 ├── config.yaml              ← 主配置（首次启动写入带注释的模板；控制台写入时保持注释与顺序）
 ├── protea.lock              ← 单实例锁（pid 文件；进程已死则自动接管）
-├── secrets/                 ← 秘密文件（0600）
+├── secrets/                 ← 秘密文件（0600）；mcp-oauth/ 存 MCP OAuth 令牌
 ├── protea.db (+ -wal, -shm) ← SQLite
-├── sessions/                ← 转录与检查点
+├── sessions/                ← 主会话转录（main.NNNN.jsonl）、交接笔记、forks/
 ├── memory/                  ← 记忆
 ├── persona/                 ← 人格
 ├── plugins/                 ← 用户插件
-├── plugin-data/<id>/        ← 插件私有数据
+├── plugin-data/<id>/        ← 插件私有数据；plugin-data/mcp/<id>/ 是 stdio MCP 服务器的工作目录
 ├── skills/                  ← 用户 Skills
 ├── workspace/               ← shell 工具与 MCP roots 的工作区
 ├── blobs/                   ← 附件
-├── cache/                   ← npx/uvx/pip 缓存（可清理）
+├── cache/                   ← npm/uv/pip 缓存、backup-git/（Git 备份的工作副本）；可以清空
 ├── overrides/               ← 环境提示等覆盖
-└── runs/<runId>/            ← 日志与诊断
+├── backups/                 ← protea backup 的默认位置；迁移前的快照；restore 移开的旧文件
+├── replays/                 ← protea replay 的离线目录
+└── runs/<runId>/            ← 日志、关停记录、崩溃报告、provider.jsonl（录制模式）
 ```
 
-只有 `/data` 需要持久化；备份 = 停止写入（或用 SQLite 在线备份 API）后复制整个目录。
+只有 `/data` 需要持久化。
 
 ## 4. 配置层叠
 
 优先级从低到高：
 
-1. 镜像默认（`/app/config.default.yaml`）
+1. 内置默认（代码里的 `defaultConfig()`）
 2. `/data/config.yaml`
 3. 环境变量 `PROTEA_*`（`PROTEA_SCHEDULER__LEVELS__1__DEBOUNCE_MS=500` 这类双下划线路径）
-4. 控制台/CLI 的运行时覆盖（写回 `/data/config.yaml`，带来源标记）
+4. 控制台/CLI 的修改（写回 `/data/config.yaml`）
 
-热更新：配置文件被监视；热项立即生效，非热项触发相关组件重建或提示重启。详见 [../30-specs/04-config-reference.md](../30-specs/04-config-reference.md)。
+热更新：配置文件被监视；热项立即生效，非热项提示重启。详见 [../30-specs/04-config-reference.md](../30-specs/04-config-reference.md)。
 
 ## 5. 启动顺序
 
 ```
-entrypoint.sh
- ├─ 准备 /data 目录与权限
- ├─ 迁移：SQLite schema 版本检查与升级（向前兼容；不自动降级）
- └─ exec tini -- node apps/daemon
-      ├─ 加载配置（层叠）与秘密
+tini → protea-entrypoint
+ ├─ （root）准备 /data 与权限 → setpriv 降为 protea
+ ├─ 创建 cache/、workspace/；设置缓存环境变量
+ ├─ protea migrate：数据库比镜像新 → 退出；有待执行的迁移 → 先用 SQLite 在线备份
+ │    快照到 /data/backups/protea-v<旧版本>-<时间>.db，再在事务里迁移（失败回滚，文件不变）
+ └─ exec protea serve
+      ├─ 加载配置（层叠）与秘密；日志的秘密过滤从这里开始
       ├─ 打开 Event Store；转录修复
-      ├─ 启动控制平面（此时 /healthz 可用；/readyz 未就绪）
-      ├─ 加载人格与 Skills 注册表
-      ├─ 启动 Provider
-      ├─ 启动插件（并行；失败不阻塞其他）与 MCP 服务器
-      ├─ 恢复被暂停的 Fork
-      ├─ 调度器开始投递（pending 事件按游标继续）
-      └─ 记录 L4 piggyback 事件 `daemon.started`（随下一批送达模型，不单独唤醒）
+      ├─ 启动插件（并行；失败不阻塞其他）与 MCP 服务器（后台）
+      ├─ 启动控制平面（此时 /healthz 可用）
+      ├─ 记录 L4 piggyback 事件 `daemon.started`
+      ├─ 调度器开始投递（pending 事件按游标继续；被中断的批先续跑）
+      └─ 恢复被暂停的 Fork
 ```
 
 ## 6. 云端注意事项
 
 - **出站为主**：Telegram 长轮询、IMAP、RSS、Anthropic API 都只需出站；没有 Webhook 时可以不暴露任何入站端口，控制台通过 SSH 隧道访问。
-- **控制台**：守护进程在同一端口的 `/` 托管构建好的控制台（镜像里的 `apps/web/dist`，`PROTEA_WEB_DIR` 可改），用管理员令牌登录。
-- **监控**：Prometheus 抓 `/metrics`，用只读令牌（秘密 `PROTEA_READONLY_TOKEN`）作 Bearer；示例抓取配置与 Grafana 面板在仓库的 `docker/observability/`。
-- **TLS**：需要公网访问控制台或 Webhook 时，用 Caddy/Traefik 做反向代理与自动证书；Protea 自身不终止 TLS。
-- **资源**：最小 1 vCPU / 1 GB；MCP 服务器多时建议 2 GB。SQLite 与转录增长缓慢（每天几十 MB 量级，视事件量）。
+- **TLS**：需要公网访问控制台或 Webhook 时，用 Caddy/Traefik 做反向代理与自动证书（compose 的 `tls` 档）；Protea 自身不终止 TLS。
+- **地址白名单**：`control.allowCidrs` 限制能访问控制平面的地址（回环总是允许，`/hooks/*` 不受限）。经反向代理时守护进程看到的是代理的地址，白名单应设在代理上。
+- **监控**：Prometheus 抓 `/metrics`，用只读令牌（秘密 `PROTEA_READONLY_TOKEN`）作 Bearer；示例抓取配置与 Grafana 面板在 `docker/observability/`。
+- **资源**：最小 1 vCPU / 1 GB；MCP 服务器多时建议 2 GB。守护进程常驻内存约 130 MB，其中约 60 MB 是 Node 程序文件的映射，V8 堆约 35 MB（M6 长稳测试的负载下，见 [../40-plan/01-roadmap.md](../40-plan/01-roadmap.md) M6）；每个 Node 插件进程约 50 MB。
 - **时区**：`TZ` 环境变量；事件 `ts` 一律带时区偏移。
 - **时钟**：VPS 时钟漂移会影响 cron 与 `sleep_until`；建议开启 NTP。
 
 ## 7. 升级
 
-1. 拉新镜像，`docker compose up -d`（或 `docker stop` → `run`）。
-2. 启动时自动做数据库迁移；迁移失败则进程退出并保留原文件，日志给出回滚指引。
-3. 插件契约版本（`api`）提升时，不兼容的插件进入 `invalid`，控制台提示升级；上一版本契约通过 shim 兼容一个大版本。
-4. 回滚：换回旧镜像；若数据库已被新版本迁移且不向后兼容，从备份恢复（发布说明会明确标注"不可回滚的迁移"）。
+1. 构建或拉取新镜像，`docker compose up -d`（或 `docker stop` → `docker rm` → `docker run`）。
+2. 入口脚本的 `protea migrate` 在启动前迁移数据库，迁移前先快照；迁移失败时容器退出，日志给出回滚方法，原文件不变。
+3. 插件契约版本（`api`）提升时，不兼容的插件进入 `invalid`，控制台提示升级。
+4. 回滚：换回旧镜像。旧镜像看到更新的数据库会拒绝启动；此时用迁移前的快照或备份恢复（`protea restore`，或把快照复制回 `/data/protea.db`）。
 
 ## 8. 备份与恢复
 
-- `protea backup --to <dir|git-url>`：SQLite 在线备份 + `sessions/ memory/ persona/ skills/ plugins/ config.yaml`（不含 `secrets/`、`cache/`）。
-- 恢复：把备份放回 `/data`，重设秘密，启动。
-- 建议：每日备份到对象存储 + `persona/` `memory/` 推送到私有 Git（可审阅记忆变化）。
+```bash
+docker exec protea protea backup --archive          # → /data/backups/protea-backup-<时间>.tar.gz
+docker cp protea:/data/backups/protea-backup-….tar.gz .
+docker exec protea protea backup --to git@github.com:me/protea-memory.git   # 只推 config.yaml、persona/、memory/、skills/
+```
 
-## 9. 开发环境
+- 目录备份是在线的（守护进程运行时也安全）：SQLite 在线备份 API 的快照，加上 `config.yaml`、`sessions/`、`memory/`、`persona/`、`skills/`、`plugins/`、`plugin-data/`、`blobs/`、`overrides/`，以及记录版本、schema、文件数和数据库校验和的 `manifest.json`。**不含** `secrets/`、`cache/`、`backups/`、`replays/`；`workspace/` 与 `runs/` 要显式加 `--include-workspace`、`--include-runs`。
+- 注意：转录与事件本身可能含有出现过的秘密值（它们只在发给模型和写日志时被过滤），备份文件要按含敏感数据对待。
+- Git 备份用守护进程环境里的 SSH 密钥或 Git 凭据，每次有变化就提交一次（作者 `Protea <protea@localhost>`），便于审阅记忆的变化；数据库不进 Git。
+- 恢复（守护进程必须停止）：
 
-- 本地：`pnpm dev` 以热重载启动守护进程，`/data` 指向 `./.dev-data`；控制台先 `pnpm build` 一次，或用 `pnpm web` 起 Vite 开发服务器（把 `/api` 与 `/ws` 转给 `PROTEA_URL`，默认 `http://127.0.0.1:7788`）。
-- 容器内调试：`docker exec -it protea protea status`。
-- 插件开发：`protea dev-plugin ./my-plugin`，或在控制台把插件目录挂到 `/data/plugins` 后使用"重载"。
+```bash
+docker stop protea
+docker run --rm -v protea-data:/data -v "$PWD":/restore protea restore /restore/protea-backup-….tar.gz --force
+docker start protea
+```
+
+  `restore` 校验 manifest 的格式、schema 版本与数据库校验和；目标目录已有数据时必须加 `--force`，旧文件移到 `/data/backups/pre-restore-<时间>/`，不会删除。`secrets/` 保持原样；换了机器要重新设置秘密。
+- 建议：每天一次目录备份复制到对象存储，`persona/` 与 `memory/` 推到私有 Git。
+
+## 9. 开发与测试
+
+- 本地：`pnpm dev` 以热重载启动守护进程，数据目录 `./.dev-data`；控制台先 `pnpm build` 一次，或 `pnpm web` 起 Vite 开发服务器。
+- 容器冒烟测试：`scripts/container-smoke.sh <镜像>`：非 root、健康检查、控制台消息有回复、暂停投递后 `docker stop`/`start` 等待中的事件一个不少并在恢复后送达、有 `shutdown.json`、容器内备份且属主正确、入口脚本做了迁移。CI 对 full 与 slim 都跑。
+- 长稳测试（可选；长时间运行主要靠实际使用中的指标观察）：`node scripts/soak.mjs --url … --token-file … --hours 72 --rate 2`，对使用 echo Provider 的实例持续推送混合等级的事件，按间隔采样 `/metrics`，结束时给出内存增长（%/天）、数据库增长与延迟 P95；超过 `--max-growth`（默认 5 %/天）时退出码为 1。
+- 容器内调试：`docker exec -it protea protea status`、`docker exec -it protea sh`。
+- 插件开发：`protea dev-plugin ./my-plugin`，或把插件目录放进 `/data/plugins` 后在控制台"重载"。

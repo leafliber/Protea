@@ -2,7 +2,8 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { WS_TOPICS, type ControlRole, type WsClientMessage, type WsServerMessage, type WsTopic } from '@protea/protocol';
-import { logMatcher, type Bus, type EventStore, type LogEntry, type LogRing, type Logger } from '@protea/core';
+import { logMatcher, type Bus, type Cidr, type EventStore, type LogEntry, type LogRing, type Logger } from '@protea/core';
+import { addressGate } from './allow.js';
 import { SESSION_COOKIE, cookieFrom, principalOf, type AuthSettings } from './auth.js';
 import { subscribeStream } from './stream.js';
 
@@ -17,6 +18,8 @@ export interface WsDeps {
   heartbeatMs?: number;
   /** Drop a client whose unsent data exceeds this (it is not keeping up). */
   maxBufferedBytes?: number;
+  /** control.allowCidrs, parsed (empty: any address). */
+  allowCidrs?: () => readonly Cidr[];
 }
 
 const TOPIC_OF = new Map<string, WsTopic>(
@@ -34,6 +37,7 @@ export function createWebSocketEndpoint(d: WsDeps): {
   close: () => void;
 } {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
+  const allowed = addressGate(d.allowCidrs ?? (() => []), d.log);
   const heartbeatMs = d.heartbeatMs ?? 30_000;
   const maxBuffered = d.maxBufferedBytes ?? 8 * 1024 * 1024;
   const alive = new WeakMap<WebSocket, boolean>();
@@ -135,6 +139,11 @@ export function createWebSocketEndpoint(d: WsDeps): {
     handleUpgrade(req, socket, head) {
       const url = new URL(req.url ?? '/', 'http://localhost');
       if (url.pathname !== '/ws') return false;
+      if (!allowed(req.socket.remoteAddress ?? '', url.pathname)) {
+        socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+        socket.destroy();
+        return true;
+      }
       const p = principalOf(d.auth(), req.headers.authorization, cookieFrom(req.headers.cookie, SESSION_COOKIE));
       // A browser always sends Origin; the cookie alone must not let another site connect.
       const origin = req.headers.origin;

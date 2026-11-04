@@ -1,6 +1,6 @@
 # 测试策略
 
-> 状态：Draft · 更新：2026-11-03
+> 状态：Draft（M6 起与实现对齐的部分见各节注）· 更新：2026-11-04
 
 ## 1. 金字塔
 
@@ -10,9 +10,10 @@
 | 组件 | Vitest + 真实 SQLite（临时文件）+ `ProviderRecorder` 夹具 | Event Store、Session loop、Context Assembler、Plugin Host（用 FakeHost / 真子进程） | 每次提交 |
 | 协议一致性 | 共享用例集，对 TS 与 Python SDK 各跑一遍 | 插件协议 | 每次提交 |
 | 端到端 | 真实守护进程 + 桩 Provider（可切真网）+ 模拟连接器 | 路线图中的验收场景 | PR 合并前 |
-| 回放回归 | 回放评测集 | 人格/提示/调度变更的行为回归 | PR 合并前（离线） |
+| 回放回归 | `protea replay`（M6）+ 录制的 `provider.jsonl` | 人格/提示/调度变更的行为回归 | PR 合并前（离线；评测集尚未建立） |
+| 容器冒烟 | `scripts/container-smoke.sh`（M6） | 非 root、健康检查、插件资源上限、回复、stop/start 不丢事件、容器内备份、迁移 | CI 每次推送（full 与 slim） |
 | 真网冒烟 | 真实 Anthropic API | 模型 ID、beta 头、流式、工具搜索 | 每周 + 发布前 |
-| 长稳/压测 | k6 风格脚本 + 模拟来源 | 内存、存储增长、延迟 | 每个里程碑末 |
+| 长稳/压测 | `scripts/soak.mjs`（M6，无依赖）+ echo Provider | 内存、存储增长、延迟 | 每个里程碑末跑加速短程；长时间运行留给实际使用观察 |
 
 ## 2. 不变量测试
 
@@ -32,9 +33,9 @@
 
 ## 5. 安全测试
 
-渗透用例固化为测试：伪造 owner、越权等级、注入指令的外部内容触发副作用、秘密出现在各出口（请求体、日志、工具回执）。
+渗透用例固化为测试：伪造 owner、越权等级、注入指令的外部内容触发副作用、秘密出现在各出口（请求体、日志、工具回执）。M6 的实现在 `apps/daemon/test/m6-security.test.ts`，同一文件还有默认策略审查与"哪些代码能读秘密值"的静态检查（[../10-architecture/14-security-and-permissions.md](../10-architecture/14-security-and-permissions.md) §9）。
 
 ## 6. 覆盖率与门禁
 
 - `packages/core` 行覆盖 ≥ 85%，分支 ≥ 75%；调度器与转录修复 100% 分支。
-- CI 阻断：lint、typecheck、单元/组件/协议测试、Docker 构建、镜像扫描高危。
+- CI 阻断：lint、typecheck、单元/组件/协议测试、Docker 构建、镜像扫描高危。M6 的 `.github/workflows/ci.yml` 已有 typecheck、构建、全部测试、`pnpm audit --prod --audit-level high`、两种镜像的构建与容器冒烟测试、Trivy（HIGH/CRITICAL、有修复的）；lint 与覆盖率门槛尚未加入。

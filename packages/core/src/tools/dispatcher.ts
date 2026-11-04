@@ -42,9 +42,13 @@ function truncate(text: string): string {
  * across a `barrierAfter` tool; every call yields exactly one tool_result, in
  * the order of the calls, so they can go back in a single user message.
  */
+/** A reason not to run this call now (outbound rate limit), or null. Checked before the permission guard. */
+export type ToolLimiter = (def: NonNullable<ReturnType<ToolRegistry['get']>>, use: ToolUseBlock) => string | null;
+
 export class ToolDispatcher {
   private guard: ToolGuard | null = null;
   private observer: ToolCallObserver | null = null;
+  private limiter: ToolLimiter | null = null;
 
   constructor(
     private readonly registry: ToolRegistry,
@@ -59,6 +63,11 @@ export class ToolDispatcher {
 
   observe(observer: ToolCallObserver | null): void {
     this.observer = observer;
+  }
+
+  /** Outbound rate limits (docs/10-architecture/14-security-and-permissions.md §7). */
+  setLimiter(limiter: ToolLimiter | null): void {
+    this.limiter = limiter;
   }
 
   async runAll(uses: readonly ToolUseBlock[], ctx: DispatchContext): Promise<DispatchResult> {
@@ -91,6 +100,8 @@ export class ToolDispatcher {
     if (!valid.ok) return fail(`invalid input for ${use.name}: ${valid.errors.join('; ')}`);
     if (ctx.signal.aborted) return fail('not run: the turn was cancelled');
     if (interrupt?.aborted) return fail('not run: the turn was interrupted');
+    const limited = this.limiter?.(def, use);
+    if (limited) return fail(`not run: ${limited}`);
 
     let decision: GuardDecision | null = null;
     if (this.guard) {

@@ -63,7 +63,12 @@ Core 自身事件的 `source` 固定为 `core`，`type` 以子系统为前缀（
 | `scheduler.storm_cooldown` | L4 piggyback | 某来源触发抢占风暴，进入冷却 |
 | `scheduler.paused` / `scheduler.resumed` | L4 store / piggyback | 运营者暂停或恢复了事件投递（M5，控制 API） |
 | `scheduler.discarded` | L4 store | 运营者清空了某些等级的 pending 事件（M5） |
-| `budget.threshold` | L4 piggyback | 某等级 24 h 花费越过 `warnAt` 或 100%（M1 只统计、不限制） |
+| `budget.threshold` | L4 piggyback | 某等级 24 h 花费越过 `warnAt`；L1 或未强制执行时也用于 100% |
+| `budget.exhausted` | L0 flush | L2–L4 某等级的池用尽，新事件开始被扣（M6） |
+| `budget.hard_cap` | L0 flush | 24 h 总花费到达 `budget.hardDailyUsd`，只投递 L0/L1（M6） |
+| `budget.released` | L4 piggyback | 主人临时放行了某些等级或硬上限，扣住的事件已恢复投递（M6） |
+| `budget.recovered` | L4 piggyback | 池随窗口恢复；列出仍在库里的被扣 L3/L4 事件（M6） |
+| `outbound.rate_limited` | L4 store | 某 connector 插件一分钟内的调用到达 `pluginHost.outboundPerMinute`，之后的调用被拒（每波一条，M6） |
 | `plugin.crashed` | L4 store | 插件进程意外退出，正在退避重启（只记录） |
 | `plugin.failed` | L2 flush | 插件连续崩溃达到上限，已停止；其工具不可用 |
 | `approval.decided` | L1 flush | 主人批准或拒绝了审批 `aN`；获批时提示用相同输入重新调用 |

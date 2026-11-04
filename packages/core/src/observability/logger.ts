@@ -36,6 +36,8 @@ export interface LoggerOptions {
   /** Extra destinations that get every line at debug level and above (the in-memory LogRing). */
   sinks?: Array<{ write(s: string): void }>;
   base?: Record<string, unknown>;
+  /** Applied to every serialized line before any destination sees it (secret values). */
+  redact?: (line: string) => string;
 }
 
 export function createLogger(opts: LoggerOptions = {}): Logger {
@@ -49,7 +51,28 @@ export function createLogger(opts: LoggerOptions = {}): Logger {
   }
   for (const sink of opts.sinks ?? []) streams.push({ stream: sink, level: 'debug' });
   if (streams.length === 0) return pino({ level: 'silent' });
-  return pino({ level: 'debug', base: opts.base ?? {}, timestamp: pino.stdTimeFunctions.epochTime }, pino.multistream(streams));
+  const redact = opts.redact;
+  return pino(
+    {
+      level: 'debug',
+      base: opts.base ?? {},
+      timestamp: pino.stdTimeFunctions.epochTime,
+      ...(redact
+        ? {
+            hooks: {
+              streamWrite: (line: string) => {
+                try {
+                  return redact(line);
+                } catch {
+                  return line;
+                }
+              },
+            },
+          }
+        : {}),
+    },
+    pino.multistream(streams),
+  );
 }
 
 export function silentLogger(): Logger {

@@ -35,14 +35,21 @@ export class BusTrail {
  * Write <runDir>/crash/<time>.json: the error and the recent bus records. Synchronous, so it
  * works from an uncaughtException handler. Returns the file, or null if it could not be written.
  */
-export function writeCrashReport(runDir: string, err: unknown, trail: BusTrail | null, extra: Record<string, unknown> = {}): string | null {
+export function writeCrashReport(
+  runDir: string,
+  err: unknown,
+  trail: BusTrail | null,
+  extra: Record<string, unknown> = {},
+  /** Secret values out of the serialized report. */
+  redact: (text: string) => string = (t) => t,
+): string | null {
   try {
     const dir = path.join(runDir, 'crash');
     fs.mkdirSync(dir, { recursive: true });
     const at = new Date();
     const file = path.join(dir, `${at.toISOString().replace(/[:.]/g, '-')}.json`);
     const e = err instanceof Error ? { name: err.name, message: err.message, stack: err.stack } : { message: String(err) };
-    fs.writeFileSync(file, `${JSON.stringify({ at: at.toISOString(), error: e, ...extra, recentBus: trail?.recent() ?? [] }, null, 2)}\n`);
+    fs.writeFileSync(file, `${redact(JSON.stringify({ at: at.toISOString(), error: e, ...extra, recentBus: trail?.recent() ?? [] }, null, 2))}\n`);
     return file;
   } catch {
     return null;
@@ -50,8 +57,8 @@ export function writeCrashReport(runDir: string, err: unknown, trail: BusTrail |
 }
 
 /** Write <runDir>/shutdown.json atomically. */
-export function writeShutdownReport(runDir: string, report: Record<string, unknown>): void {
+export function writeShutdownReport(runDir: string, report: Record<string, unknown>, redact: (text: string) => string = (t) => t): void {
   const file = path.join(runDir, 'shutdown.json');
-  fs.writeFileSync(`${file}.tmp`, `${JSON.stringify(report, null, 2)}\n`);
+  fs.writeFileSync(`${file}.tmp`, `${redact(JSON.stringify(report, null, 2))}\n`);
   fs.renameSync(`${file}.tmp`, file);
 }

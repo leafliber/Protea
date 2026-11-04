@@ -11,7 +11,7 @@
 
 调度器只看 `level`、`trigger`、`cursor`、时间与会话状态；不看事件内容（P1）。
 
-> **实现状态（M1）**：批窗口、flush、piggyback、store、空闲与回合边界投递、门禁降级（M0）；抢占矩阵、`preempt` / `interrupt`、抢占风暴防护、老化、预算统计与 Fork 调度（M1）。代码：`packages/core/src/scheduler/`（`preemption.ts` 是纯函数矩阵，`scheduler.ts`，`budget.ts`）、`packages/core/src/forks/`。预算只统计不限制，限制在 M6 生效。
+> **实现状态（M1）**：批窗口、flush、piggyback、store、空闲与回合边界投递、门禁降级（M0）；抢占矩阵、`preempt` / `interrupt`、抢占风暴防护、老化、预算统计与 Fork 调度（M1）；预算强制执行、硬上限与放行（M6）。代码：`packages/core/src/scheduler/`（`preemption.ts` 是纯函数矩阵，`scheduler.ts`，`budget.ts`）、`packages/core/src/forks/`。
 
 ## 2. 批窗口（debounce）
 
@@ -109,7 +109,17 @@ tryDeliver(trigger, level):
 - Fork 的预算记在其派生时的等级。
 - 预算耗尽是 L0 `internal` 事件：模型会被告知，可以主动向主人汇报。
 
-**M1 实现（只统计）**：`budget.dailyUsd`（默认 `null` = 不限）乘以 `budget.shares.<level>` 得到各等级的池；用量按 `usage.level`（批等级或 Fork 等级）在滚动 24 h 内汇总。越过 `warnAt`（默认 90%）与 100% 时各记一次 L4 piggyback 的 `budget.threshold` 事件；不改变任何调度。余量出现在 `self_status`、`/api/status` 的 `budget` 字段，以及（设置了 `dailyUsd` 时）`<status>` 块的 `budget_lN="82%"` 属性。上表"耗尽时行为"在 M6 生效。
+**实现**：`budget.dailyUsd`（默认 `null` = 不限）乘以 `budget.shares.<level>` 得到各等级的池；用量按 `usage.level`（批等级或 Fork 等级）在滚动 24 h 内汇总（M1）。余量出现在 `self_status`、`/api/status` 的 `budget` 字段，以及（设置了 `dailyUsd` 时）`<status>` 块的 `budget_lN="82%"` 属性。
+
+M6 起上表生效（`budget.enforce`，默认开）：
+
+- 判断发生在插件宿主的事件入口，门禁之后、入库之前，所以只影响**新**事件；Core 自己的内部事件与 L0/L1 从不被扣。
+- L2 池用尽：新 L2 事件改为 `piggyback`，只随别的批送达，并且不参与老化（否则 30 s 后又会被提升为 flush）。L3/L4 池用尽：新事件改为 `store`（入库、不投递）。被改过的事件记为"扣住"，在状态里按等级计数。
+- 越过 `warnAt` 记 L4 piggyback 的 `budget.threshold`；L2–L4 用尽时记 **L0 flush** 的 `budget.exhausted`，告诉模型发生了什么、可以向主人汇报；L1 用尽只记 `budget.threshold`（主人的事件照常投递）。
+- 全局硬上限 `budget.hardDailyUsd`：24 h 总花费到达后，L2–L4 的新事件都入库，并记一条 L0 flush 的 `budget.hard_cap`。
+- Fork：派生时按 Fork 的等级检查——硬上限生效时拒绝 L2–L4 Fork，L3/L4 池用尽时拒绝该等级的 Fork；错误信息返回给调用的模型或 API。
+- 放行：`POST /api/budget/release`（控制台的"预算"页、`protea budget release`）在给定的小时数内对这些等级（与硬上限）不强制执行，并把扣住的事件恢复成原来的投递方式；记 L4 事件 `budget.released`。放行与扣住名单存在 kv 里，重启后仍然有效。
+- 池随窗口滚动恢复时：扣住的 L2 事件自动恢复原来的投递方式；扣住的 L3/L4 事件保持入库，并记一条 L4 事件 `budget.recovered` 列出它们的游标，模型可以用 `events_promote` 取回仍然重要的。恢复每 5 分钟检查一次，有模型调用时立即检查。
 
 ## 7. Fork 调度
 

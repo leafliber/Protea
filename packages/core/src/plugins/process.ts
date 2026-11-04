@@ -220,6 +220,11 @@ export class ProcessPlugin {
   }
 
   /** Kill immediately (failed start, health failure, shutdown deadline passed). */
+  /** Kill the process as if it had crashed (memory limit): the exit goes through onUnexpectedExit. */
+  crash(): void {
+    if (this.child && this.child.exitCode === null && this.child.signalCode === null) this.child.kill('SIGKILL');
+  }
+
   async kill(): Promise<void> {
     if (!this.child || !this.exited) return;
     this.stopping = true;

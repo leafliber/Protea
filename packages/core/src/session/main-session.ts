@@ -420,12 +420,16 @@ export class MainSession {
             text: `This batch has used ${rounds} of ${o.rounds.hard} model rounds.`,
           });
         }
-        // Turn boundary: due events join the tool results in the same user message.
-        this.appendWithBoundaryEvents(batch, dispatched.results);
         if (dispatched.endsTurn) {
+          // The model ended its turn (idle, sleep): due events stay pending and start the next
+          // batch at once. Joining them here would put them in the transcript with no model call
+          // left to answer them.
+          this.transcript.appendMessage({ role: 'user', content: dispatched.results, batch: batch.id });
           endReason = 'ends_turn';
           break;
         }
+        // Turn boundary: due events join the tool results in the same user message.
+        this.appendWithBoundaryEvents(batch, dispatched.results);
         if (signal.aborted) {
           endReason = 'aborted';
           break;
@@ -617,6 +621,7 @@ export class MainSession {
       cur.externalOutput = false;
       const signal = AbortSignal.any([hard, cur.turn.signal, call.signal]);
       const tap = o.outputTap;
+      o.bus.emit('model.request', { batchId: batch.id, sessionId: SESSION_ID, attempt });
       try {
         return await o.provider.generate(req, {
           signal,

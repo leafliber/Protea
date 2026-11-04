@@ -6,6 +6,7 @@ import {
   RpcError,
   type ApprovalDecideParams,
   type ApprovalInfo,
+  type EventEnvelope,
   type EventInput,
   type EventState,
   type HttpRequestParams,
@@ -19,12 +20,13 @@ import {
   type SettledParams,
   type TerminalOutcome,
   type ToolDecl,
+  type Trigger,
 } from '@protea/protocol';
 import type { Bus } from '../bus.js';
 import type { PluginSettings } from '../config/types.js';
 import type { SecretStore } from '../config/secrets.js';
 import { kvNamespace, type KvRepo } from '../db/repos.js';
-import { gateEvent, type SourceCaps } from '../events/gate.js';
+import { gateEvent, type GatedEvent, type SourceCaps } from '../events/gate.js';
 import type { OwnerRegistry } from '../events/owner.js';
 import type { EventStore } from '../events/store.js';
 import type { Logger } from '../observability/logger.js';
@@ -37,6 +39,7 @@ import type { Clock } from '../util/time.js';
 import type { InprocPlugin, PluginContext, PushResult } from './inproc.js';
 import { allowedTriggers, discoverPlugins, loadManifest, type LoadedManifest, type PluginOrigin } from './manifest.js';
 import { ProcessPlugin } from './process.js';
+import { DEFAULT_PROCESS_LIMITS, MemoryWatchdog, passthroughEnv, withLimits, type ProcessLimits } from '../util/child-process.js';
 
 export const CORE_SOURCE = 'core';
 
@@ -52,6 +55,10 @@ export interface PluginHostSettings {
   initializeTimeoutMs: number;
   /** After `stop`, how long before SIGTERM. */
   stopTimeoutMs: number;
+  /** Memory and file-descriptor limits of plugin and MCP processes; over the memory limit they restart. */
+  limits: ProcessLimits;
+  /** Outbound rate limit: tool calls per connector plugin per minute (null: unlimited). */
+  outboundPerMinute: number | null;
 }
 
 export const DEFAULT_PLUGIN_HOST_SETTINGS: PluginHostSettings = {
@@ -61,6 +68,8 @@ export const DEFAULT_PLUGIN_HOST_SETTINGS: PluginHostSettings = {
   drainTimeoutMs: 30_000,
   initializeTimeoutMs: 20_000,
   stopTimeoutMs: 5_000,
+  limits: { ...DEFAULT_PROCESS_LIMITS },
+  outboundPerMinute: 20,
 };
 
 export interface PluginHostOptions {
@@ -81,6 +90,8 @@ export interface PluginHostOptions {
   roots?: Array<{ dir: string; origin: LoadedManifest['origin'] }>;
   /** Development mode: run sources (`runtime.dev`) and load TypeScript through this Node loader. */
   dev?: { loader: string };
+  /** Scheduling change for a new event after gating (budget enforcement); null keeps it. */
+  admit?: (ev: GatedEvent) => { trigger: Trigger; onStored(e: EventEnvelope): void } | null;
   /** Prepended to PYTHONPATH of Python plugins (the bundled `protea_plugin` SDK). */
   pythonPath?: string;
   /** Operator intent changed through the host (enable/disable/install): persist it. */
@@ -109,6 +120,10 @@ interface Entry {
   pendingSettled: SettledParams['events'];
   /** Lifecycle operations on one plugin run one at a time. */
   op: Promise<void>;
+  /** Why the host killed the running process (memory limit); reported as the crash reason. */
+  killReason?: string | null;
+  /** Resident memory of the process tree at the last sample. */
+  rssBytes?: number;
 }
 
 /** Where a plugin's environment prompt comes from (consumed by SystemSegments). */
@@ -141,9 +156,28 @@ export class PluginHost {
   private approvals: ApprovalService | null = null;
   private started = false;
   private stopping = false;
+  private readonly watchdog: MemoryWatchdog;
 
   constructor(private readonly o: PluginHostOptions) {
     this.settings = { ...DEFAULT_PLUGIN_HOST_SETTINGS, ...o.settings };
+    this.watchdog = new MemoryWatchdog({
+      limits: () => this.settings.limits,
+      targets: () =>
+        [...this.entries.values()].flatMap((e) => (e.state === 'running' && e.proc?.pid !== undefined ? [{ id: e.id, pid: e.proc.pid }] : [])),
+      onSample: (samples) => {
+        for (const [id, bytes] of samples) {
+          const e = this.entries.get(id);
+          if (e) e.rssBytes = bytes;
+        }
+      },
+      onExceeded: (id, bytes, limit) => {
+        const e = this.entries.get(id);
+        if (!e?.proc || e.state !== 'running' || e.killReason) return;
+        e.killReason = `memory limit exceeded (${Math.round(bytes / 1048576)} MB > ${Math.round(limit / 1048576)} MB)`;
+        this.o.log.error({ plugin: id, rssMb: Math.round(bytes / 1048576), limitMb: Math.round(limit / 1048576) }, 'plugin over its memory limit; restarting it');
+        e.proc.crash();
+      },
+    });
     o.bus.on('event.settled', (s) => {
       const bySource = new Map<string, Array<{ cursor: number }>>();
       for (const e of s.events) bySource.set(e.source, [...(bySource.get(e.source) ?? []), { cursor: e.cursor }]);
@@ -302,6 +336,7 @@ export class PluginHost {
       tools: this.o.tools.namesOf(e.id),
       ...(version !== undefined ? { version } : {}),
       ...(pid !== undefined ? { pid } : {}),
+      ...(pid !== undefined && e.rssBytes !== undefined ? { memoryBytes: e.rssBytes } : {}),
       ...(e.restarts > 0 ? { restarts: e.restarts } : {}),
       ...(e.error !== undefined ? { error: e.error } : {}),
     };
@@ -363,6 +398,7 @@ export class PluginHost {
   /** Start every enabled plugin. A failing plugin is marked failed; the others still start. */
   async startAll(): Promise<void> {
     this.started = true;
+    this.watchdog.start();
     const ids = [...this.entries.values()]
       .filter((e) => e.enabled && (e.state === 'loaded' || e.state === 'stopped'))
       .sort((a, b) => a.id.localeCompare(b.id))
@@ -533,6 +569,7 @@ export class PluginHost {
 
   async stopAll(): Promise<void> {
     this.stopping = true;
+    this.watchdog.stop();
     await Promise.all([...this.entries.values()].map((e) => this.serialize(e, () => this.stopEntry(e, 'shutdown'))));
   }
 
@@ -609,8 +646,8 @@ export class PluginHost {
       exec = process.execPath;
       if (this.o.dev) args = ['--conditions=source', '--import', this.o.dev.loader, ...args];
     }
-    const env: Record<string, string> = {};
-    for (const k of ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'SYSTEMROOT']) {
+    const env: Record<string, string> = passthroughEnv();
+    for (const k of ['PATH', 'HOME']) {
       const v = process.env[k];
       if (v !== undefined) env[k] = v;
     }
@@ -626,10 +663,12 @@ export class PluginHost {
     Object.assign(env, secrets);
 
     const log = this.o.log.child({ plugin: e.id });
+    const limited = withLimits(exec, args.map(subst), this.settings.limits);
+    e.killReason = null;
     const proc = new ProcessPlugin({
       id: e.id,
-      exec,
-      args: args.map(subst),
+      exec: limited.command,
+      args: limited.args,
       cwd: runtime.cwd ? path.resolve(loaded.dir, runtime.cwd) : loaded.dir,
       env,
       log,
@@ -639,7 +678,7 @@ export class PluginHost {
       onUnexpectedExit: (reason) => {
         if (e.proc !== proc) return;
         void this.serialize(e, async () => {
-          if (e.proc === proc && (e.state === 'running' || e.state === 'starting')) this.onCrash(e, reason);
+          if (e.proc === proc && (e.state === 'running' || e.state === 'starting')) this.onCrash(e, e.killReason ?? reason);
         });
       },
     });
@@ -972,7 +1011,11 @@ export class PluginHost {
       this.o.log.warn({ source: caps.source, errors: gated.errors }, 'event rejected');
       return { ok: false, warnings: [], errors: gated.errors };
     }
+    // Budget enforcement changes the delivery mode of new events (not a downgrade notice per event).
+    const admission = this.o.admit?.(gated.event) ?? null;
+    if (admission) gated.event.effTrigger = admission.trigger;
     const { envelope, deduped } = this.o.store.append(gated.event);
+    if (admission && !deduped) admission.onStored(envelope);
     if (gated.warnings.length > 0 && !deduped) {
       this.o.log.warn({ source: caps.source, cursor: envelope.cursor, warnings: gated.warnings }, 'event downgraded');
       if (caps.source !== CORE_SOURCE) {

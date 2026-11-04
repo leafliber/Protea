@@ -43,7 +43,7 @@ stateDiagram-v2
 - **回合上限**：人格声明 `rounds()` → `{ soft, hard }`。达到 soft 时注入 `internal` 事件提示"请收尾"；达到 hard 时结束批（不再调用模型），并记 `internal` 事件。
 - **结束回合的方式**：
   1. 模型返回 `end_turn` 且无 `tool_use`；
-  2. 调用了标记 `endsTurn` 的工具（如 `idle`、`sleep_until`）；
+  2. 调用了标记 `endsTurn` 的工具（如 `idle`、`sleep_until`）。这时已经到期的事件**不**并入工具结果，而是留在 pending 里，批结束后立即成为下一批（M6 修正：之前它们会被写进转录却没有模型调用来回答，要等下一个事件才被看到）；
   3. 被 `interrupt`（批以 `interrupted` 结束；打断事件和 `session.turn_cancelled` 通知组成下一批，见 [04-scheduling-and-preemption.md](04-scheduling-and-preemption.md) §4）；
   4. hard 回合上限。
 

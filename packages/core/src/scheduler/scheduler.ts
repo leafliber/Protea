@@ -19,6 +19,8 @@ export interface SchedulerOptions {
   clock: Clock;
   /** Push an internal (Core) event; every scheduling intervention is recorded as one. */
   pushInternal: (input: Omit<EventInput, 'ts' | 'origin'> & { ts?: string }) => void;
+  /** Events that must not age (the budget turned them into piggyback on purpose). */
+  agingExempt?: (cursor: number) => boolean;
 }
 
 /** Core's own events are never throttled. */
@@ -253,6 +255,7 @@ export class Scheduler implements BatchFeed {
   /** When a pending event should be promoted to flush, or null if it never ages. */
   private agingDeadline(e: EventEnvelope): number | null {
     if (e.effTrigger !== 'debounce' && e.effTrigger !== 'piggyback') return null;
+    if (this.o.agingExempt?.(e.cursor)) return null;
     const wait = this.o.levels[e.effLevel].maxWaitMs;
     if (!wait) return null;
     return Date.parse(e.receivedAt) + wait;

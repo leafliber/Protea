@@ -98,8 +98,15 @@ export function kernelTools(deps: KernelToolDeps): ToolSpec<never>[] {
         `plugins: ${s.plugins.map((p) => `${p.id}(${p.state})`).join(', ') || 'none'}`,
         `usage 24h: ${u.calls} calls, ${u.inputTokens} in / ${u.outputTokens} out tokens, cache read ${u.cacheReadTokens}, ~$${u.costUsd.toFixed(4)}`,
         `budget 24h${s.budget.enforced ? '' : ' (tracked, not enforced)'}: ${Object.entries(s.budget.levels)
-          .map(([l, b]) => `L${l} $${b.spentUsd.toFixed(4)}${b.limitUsd === null ? '' : ` of $${b.limitUsd.toFixed(2)}`}`)
-          .join(', ')}`,
+          .map(
+            ([l, b]) =>
+              `L${l} $${b.spentUsd.toFixed(4)}${b.limitUsd === null ? '' : ` of $${b.limitUsd.toFixed(2)}`}${b.held ? ` (${b.held} held)` : ''}${b.releasedUntil ? ` (released until ${b.releasedUntil})` : ''}`,
+          )
+          .join(', ')}${
+          s.budget.hardDailyUsd === null
+            ? ''
+            : `; hard cap $${s.budget.hardDailyUsd}${s.budget.hardCapReached && !s.budget.hardCapReleasedUntil ? ' REACHED: only L0/L1 events are delivered' : ''}`
+        }`,
         `forks: ${s.forks.filter((f) => !['completed', 'cancelled', 'failed'].includes(f.state)).map((f) => `${f.id}(${f.state}, L${f.level})`).join(', ') || 'none active'}`,
       ].join('\n');
     },

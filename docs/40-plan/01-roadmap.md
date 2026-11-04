@@ -86,7 +86,7 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 - Fork 让渡条件简化为"主会话正在运行等级 ≤ `scheduler.forks.yieldLevel`（默认 L1）的批"，不依赖 Provider 并发/速率池（尚不存在）；按池满让渡留待并发池实现。
 - 抢占风暴只计**实际执行**的取消；冷却同时作用于 `preempt` 与 `interrupt`；Core 自身事件不受限制。
 - `phase=backoff` 视同"模型调用、无外部输出"，可被 `preempt`。
-- 预算只统计：不改变调度，`budget.enforce` 留到 M6。
+- 预算只统计：不改变调度，`budget.enforce` 留到 M6（已在 M6 实现）。
 - Fork 的 `seed`、`stopWhen.maxTokens|deadline`、`wrapUpHint`、经 API 派生与暂停/恢复尚未实现；已结束 Fork 的转录暂不清理（`scheduler.retention` 留到 M5）。
 - Fork 端点放在 `/api/sessions/forks` 下（与控制 API 规范一致）。
 
@@ -111,7 +111,7 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 - 安装来源只支持本地目录；Git URL 与 tarball 留到 M5（控制台）。
 - 数据卷插件必须自包含（打包或自带 `node_modules`）；内置插件用 `scripts/bundle-plugin.mjs`（esbuild）打包。开发模式下内置插件按清单 `runtime.dev` 直接跑源码。
 - 目录监视用 Node 自带的 `fs.watch`，不用 chokidar。
-- 资源上限（`ulimit` / cgroup）、`events/pushDeferred`、`events/pushCandidate`、`blob/*`、`usage/report`、`plugin_state` 表尚未实现（M6 / 按需）。
+- 资源上限在 M6 实现（进程树内存采样 + 文件描述符上限，见 M6）；`events/pushDeferred`、`events/pushCandidate`、`blob/*`、`usage/report`、`plugin_state` 表尚未实现（按需）。
 - 审批请求发给所有声明了 `approvals` 能力的运行中渠道（控制台 + Telegram），而不是只发"主人最近使用的渠道"。
 - 权限的附加条件（按批等级、按参数、按时间窗）与外发白名单尚未实现。
 - Python SDK 尚未发布到 PyPI；宿主把仓库（或镜像）里的 `sdks/python` 放进 Python 插件的 `PYTHONPATH`。
@@ -207,21 +207,66 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 - 新增（原设计没有）：Fork 的运营暂停/恢复（`pauseReason: operator`，重启后保留）；调度暂停持久化（重启后仍暂停）；清空 pending 只允许 L2–L4；审计 `control_write`；`/api/audit`、`/api/runs`、`/api/persona/*`、`/api/auth/*`；预算设置改为热更新。
 - 从 Git / tarball 安装时不做构建：来源里必须有可直接运行的入口（与 M2 的目录安装一致）；`.git` 不复制；指向来源之外的符号链接直接拒绝。
 
-## M6 · 单镜像与加固（2 周）
+## M6 · 单镜像与加固（2 周）· 状态：已实现（2026-11-04），长时间运行留给实际使用，CI 首次运行待复核
 
 **目标**：`docker run` 即用，连续运行 30 天。
 
-- Dockerfile（full/slim）、entrypoint、迁移、健康检查、非 root、`stop-timeout` 文档。
-- 预算限制生效、外发速率限制、沙箱化 `shell`、秘密扫描覆盖日志。
-- 备份/恢复命令。
-- 从 M5 推迟：离线回放 `protea replay`（与 Provider 录制模式一起）、`POST /api/budget/release`（随预算强制执行）。
-- 安全检查清单；依赖与镜像扫描进 CI。
-- 长稳测试：模拟来源持续 72 h。
+- [x] 镜像（`Dockerfile`，[16-deployment.md](../10-architecture/16-deployment.md)）：
+  - 多阶段构建；`full`（默认）带 Node 22、Python 3.13、uv、git、ripgrep、jq、curl，`slim` 只有 Node。
+  - 入口脚本 `docker/entrypoint.sh`：tini 是 PID 1；以 root 准备 `/data` 后降为 uid 1000；启动前 `protea migrate`（有待执行的迁移时先快照，数据库比镜像新时拒绝启动）。
+  - `HEALTHCHECK` 跑 `protea healthcheck`；`--stop-timeout 40` 写进文档与 compose 示例。
+  - `docker/docker-compose.yml` 示例带 Caddy（TLS）、容器限制、`cap_drop`。
+- [x] 加固：
+  - 预算强制执行（`budget.enforce`）：L2 用尽改为 piggyback 且不老化，L3/L4 用尽改为入库；用尽与全局硬上限 `budget.hardDailyUsd` 各记一条 L0 事件；Fork 按等级拒绝。
+  - `POST /api/budget/release`、`protea budget release`、控制台"预算"页的放行按钮；池恢复时扣住的 L2 事件自动恢复。
+  - 外发限速 `pluginHost.outboundPerMinute`：每个 connector 每分钟，主会话与 Fork 共用。
+  - 内置工具插件 `shell`（`sh_run`）：工作区、进程组超时、输出截断、环境白名单；默认不启用，启用后默认 `ask`。
+  - 插件与 stdio MCP 服务器的资源上限 `pluginHost.limits`：进程树内存采样，超限按崩溃重启；启动前设文件描述符上限。
+  - 子进程继承缓存与代理变量（npx/uvx 缓存留在 `/data/cache`）。
+  - 日志、崩溃报告与 `shutdown.json` 的秘密过滤。
+  - 控制平面地址白名单 `control.allowCidrs`（HTTP 与 WS）。
+- [x] 备份与恢复（`packages/core/src/backup.ts`）：
+  - `protea backup`：SQLite 在线备份 + 数据目录，`--archive`；`--to <git-url>` 推送 config、人格、记忆与 Skills。
+  - `protea restore`：校验 manifest 与校验和，旧文件移开不删。
+  - `/api/backups` 与控制台"备份"页。
+- [x] 从 M5 推迟的两项：
+  - Provider 录制模式（`observability.recordProvider`，录在脱敏之后）。
+  - `protea replay`：按原批次边界投给离线主会话；工具结果来自录下的转录，Core 只读工具在副本上运行，其余是桩。
+- [x] 安全检查清单（`apps/daemon/test/m6-security.test.ts`）：渗透用例、默认策略审查、秘密读取点的静态检查；`SECURITY.md`。
+- [x] CI（`.github/workflows/ci.yml`）：typecheck、构建、测试、`pnpm audit`；full/slim 镜像构建、容器冒烟测试（`scripts/container-smoke.sh`）、Trivy。
+- [x] 指标：`protea_event_to_request_seconds`（入库 → 带着它的模型请求发出）、`protea_db_size_bytes`。
+- [~] 长稳测试：`scripts/soak.mjs`。本机 Docker 里跑了两次加速短程（1 h 与 1.5 h）；长时间运行不再单独压测，留给实际使用观察。
 
 **验收**：
-- [ ] 成功标准（[01-vision-and-scope.md](../00-overview/01-vision-and-scope.md)）中的部署与延迟指标达成。
-- [ ] 72 h 压测内存无持续增长（< 5%/天），SQLite 大小符合预期。
-- [ ] 渗透用例全部按预期被拒。
+- [x] 成功标准里的部署与延迟指标（在本机 Docker 里验证）：
+  - `docker run` 即用：两种镜像都能启动、健康检查通过、控制台消息有回复、以 uid 1000 运行。
+  - 任意时刻 stop/start 不丢事件：容器冒烟测试先暂停投递、放入 3 个事件、`docker stop` 再 `docker start`，3 个事件仍在，恢复投递后全部送达，且写了 `shutdown.json`。此外 M0 起已有 kill -9 恢复与"不重复副作用"的测试。
+  - 延迟：在 1 CPU / 1 GB 的容器里、每分钟 30 和 60 个事件下，L1 事件入库 → 模型请求发出的 P95 ≤ 0.05 s（直方图最低一档，L2 相同；echo Provider，不含模型自身时间；目标 ≤ 2 s）。
+  - "1 vCPU / 1 GB 上 30 天无人工干预"只能由长期运行证明，见下一条。
+- [~] 内存无持续增长、SQLite 大小符合预期。已做的是本机 Docker 里的两次加速短程，都在 1 CPU / 1 GB 的容器里，用 echo Provider（每次回复延迟 300 ms），事件是 L1–L4 混合：
+  - **第一次**：每分钟 30 个事件，1 小时。V8 堆的低点从 26 MB 稳步升到 33 MB。原因是 echo Provider 报告固定的 10 个输入 token，交接从不触发，整段对话（6792 条记录）一直留在内存里；内存日志缓冲也还没填满。这是测试设置的问题，真实模型会报告真实用量。修正：echo 改为按请求长度估算用量。
+  - **第二次**：每分钟 60 个事件（约为一个忙碌主人的 30 倍），90 分钟，`softTokens` 调到 30k，让交接频繁发生；增长只拟合后半段（缓冲已满之后）。共投 5394 个事件，0 失败，结束时 pending ≤ 2（在途）；发生 74 次交接（约 73 s 一次）。V8 堆不再增长：每 15 分钟的中位数 31.9 → 33.4 MB，后半段拟合 −10%/天。RSS 仍在缓慢上升：中位数 126 → 142 MB，后半段拟合约 +9 MB/h，中途有一次回落 13 MB。结束时 143 MB 里 60 MB 是文件映射（Node 与动态库），83 MB 是匿名内存，其中 V8 堆 40 MB、external 4 MB，其余是 SQLite 与 malloc 等原生内存。1.5 h 不足以判断它会不会封顶，留给实际使用观察；若仍上升，先试 `MALLOC_ARENA_MAX` 与 SQLite 的 `cache_size`。转录 1.5 h 写了 13 MB（75 段），清理随 `scheduler.retention` 留到 M7。
+  - 数据库每个事件约 1 KB：第二次 1.5 h 后 6.8 MB（约 6700 个事件，含内部事件），按这个事件量约 107 MB/天；每天 3000 个事件约 3 MB/天。WAL 在 4 MB 封顶。
+  - **留给实际使用**：长时间运行（数天到 30 天）在实际部署里观察 `process_resident_memory_bytes`、`nodejs_heap_size_used_bytes` 与 `protea_db_size_bytes`；需要时仍可单独跑 `node scripts/soak.mjs --url … --token-file … --hours 72 --rate 2`。
+- [x] 渗透用例全部按预期被拒：伪造主人、低等级来源申请打断、伪造 internal 来源、事件正文伪造标签、秘密出现在工具输出，见 [14-security-and-permissions.md](../10-architecture/14-security-and-permissions.md) §9。
+
+**M6 与原设计的差异**（已同步进各文档）：
+- 插件不再用独立的 uid 1001：守护进程不是 root，无法切换用户。改为同一用户，加环境白名单、资源上限与默认 `ask`（[ADR-0009](../20-decisions/ADR-0009-single-uid-with-process-limits.md)）。
+- 基础镜像是 Debian 13（trixie），Python 是 3.13（原写 3.12）。
+- 体积：full 约 550 MB、slim 约 345 MB（压缩后约 170 / 95 MB），超过原目标 450 / 200 MB。原因是 Node 的 Debian 基础镜像本身约 270 MB。
+- 基础镜像自带的 npm 依赖里有高危漏洞：镜像里升级到 npm 12.2.1，并把它捆绑的 undici 换成 6.29.1；corepack 与 yarn 删除。
+- 资源上限：内存是每 15 s 采样一次进程树，不是 cgroup 硬限制；CPU 与进程数交给容器。文件描述符同时降低软、硬上限，因为 Node 启动时会把软上限提到硬上限。
+- "所有副作用工具默认不是 allow"收窄为：对第三方或系统的副作用默认 `ask`；发给主人本人的 `con_send`、`tg_send`、`tg_react` 默认 `allow`，测试固定了这份名单。
+- 预算细节（原设计没有）：
+  - L2 被改成 piggyback 的事件不参与老化；
+  - 池恢复时扣住的 L2 事件自动恢复，L3/L4 保持入库并列出游标；
+  - 放行按小时计，默认 24 h，存在 kv 里，重启后仍有效。
+- 回放的工具结果按 tool_use id 或"工具名 + 输入"从生产转录里取，Core 的只读工具在离线副本上运行。这需要生产转录还在；评测集尚未建立。
+- 备份不含 `secrets/`、`cache/`、`workspace/`、`runs/`（后两者可选）。Git 备份不含数据库。恢复不提供 API，必须先停守护进程。
+- 修正了 M1 起就有的一个问题：模型调用 `idle` 等结束回合的工具时，回合边界上到期的事件被并进工具结果，但已没有模型调用来回答它们，要等下一个事件到来才会被看到。现在这些事件留在 pending，批结束后立即成为下一批。
+- echo Provider 改为按请求与回复长度估算用量（原来固定 10 个 token，长稳测试里交接从不触发）。
+- 镜像没有发布到镜像仓库；CI 只构建与测试。发布与签名留到 M7。
+- 推迟到 M7：`scheduler.retention`、`permissions.conditions` / `egress`、CPU 上限、OpenTelemetry、软告警。
 
 **v1.0 发布点**。
 
@@ -234,6 +279,7 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 - 更多连接器（Slack、Discord、CalDAV）。
 - Cortico World 适配器（探索）。
 - 控制台打磨与多语言。
+- 从 M6 推迟：镜像发布到镜像仓库与签名；`scheduler.retention`（事件与已结束 Fork 的保留期）；`permissions.conditions` 与外发白名单 `permissions.egress`；插件 CPU 上限；OpenTelemetry；软告警（[15-observability.md](../10-architecture/15-observability.md) §6）；真实 Prometheus 抓取。长时间运行（30 天成功标准）不再单独压测，在实际使用中观察。
 
 ## 跨里程碑的持续工作
 

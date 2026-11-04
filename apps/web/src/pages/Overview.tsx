@@ -146,7 +146,7 @@ export function Overview({ status, reload }: { status: StatusResponse | undefine
             </span>
           </div>
         ))}
-        <div className="muted small">{status.budget.enforced ? '预算已强制执行' : '预算只统计、不限制（M6 起强制）'}</div>
+        <div className="muted small">{status.budget.enforced ? `预算已强制执行${status.budget.hardCapReached ? '；已到全局硬上限，只处理 L0/L1' : ''}` : '预算只统计、不限制（budget.enforce: false）'}</div>
       </Card>
 
       <Card title="Fork" actions={<a href="#/sessions?tab=forks">全部</a>}>

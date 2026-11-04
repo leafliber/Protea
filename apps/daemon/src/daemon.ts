@@ -17,9 +17,11 @@ import {
   Persona,
   RedactingProvider,
   PluginHost,
+  ProviderRecorder,
   KvRepo,
   LogRing,
   MainSession,
+  OutboundLimiter,
   OwnerRegistry,
   PermissionGuard,
   McpManager,
@@ -37,6 +39,7 @@ import {
   UsageRepo,
   approvalTools,
   configSources,
+  createBackup,
   createLogger,
   createMetrics,
   contextLimits,
@@ -46,15 +49,18 @@ import {
   ensurePersona,
   errorMessage,
   forkTools,
+  gitBackup,
   isoInZone,
   kernelTools,
   kvNamespace,
+  listBackups,
   loadConfig,
   mainTranscriptPath,
   memoryTools,
   newId,
   normalizeMcpServer,
   openDatabase,
+  parseCidr,
   patchConfigFile,
   pruneRuns,
   reconcileDeliveries,
@@ -75,6 +81,7 @@ import {
   type PluginSettings,
   type ProteaConfig,
   type Provider,
+  type ToolGuard,
 } from '@protea/core';
 import { createControlApp, createWebSocketEndpoint, startControlServer, type ControlServer } from '@protea/control';
 import { ConsolePlugin } from '@protea/plugin-console';
@@ -92,6 +99,8 @@ export interface DaemonOptions {
   /** Override control.listen, e.g. "127.0.0.1:0" (tests). */
   listen?: string;
   logger?: Logger;
+  /** Replaces the permission guard (offline replay answers every tool call from the recording). */
+  toolGuard?: ToolGuard;
   /** Node.js process metrics on /metrics (default on; tests that start many daemons turn it off). */
   processMetrics?: boolean;
   clock?: Clock;
@@ -131,6 +140,8 @@ export interface Daemon {
   /** The last bus records (crash reports). */
   trail: BusTrail;
   log: Logger;
+  /** Secret values out of text bound for disk (crash reports). */
+  redact(text: string): string;
   status(): StatusResponse;
   /** Re-read config.yaml now (the file watcher also does this on change). */
   reloadConfig(): Promise<void>;
@@ -173,6 +184,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const { sources, warnings } = loadedConfig;
   let config = loadedConfig.config;
   const logRing = new LogRing();
+  const secrets = new SecretStore(path.join(dataDir, 'secrets'), env);
+  // Secret values never reach a log destination (terminal, log.jsonl, the in-memory ring).
+  const redactLine = (line: string): string => secrets.redactJsonText(line);
   const log =
     opts.logger ??
     createLogger({
@@ -181,6 +195,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       file: path.join(runDir, 'log.jsonl'),
       sinks: [logRing],
       base: { run: runId },
+      redact: redactLine,
     });
   for (const w of warnings) log.warn(w);
   const prunedRuns = pruneRuns(path.join(dataDir, 'runs'), config.observability.keepRuns, runId);
@@ -219,11 +234,15 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   // Capabilities.
   const owner = new OwnerRegistry(config.owner.identities);
   if (!owner.hasAny()) log.warn('owner.identities is empty: no event can reach level 1');
-  const secrets = new SecretStore(path.join(dataDir, 'secrets'), env);
   // Invariant I-7: no request carries a secret value, whatever path it took into the context.
   const redactedNames = new Set<string>();
   let pushInternalLater: ((input: Parameters<PluginHost['pushInternal']>[0]) => void) | null = null;
-  const provider = new RedactingProvider(opts.provider ?? createProvider(config, secrets), secrets, (names) => {
+  const baseProvider = opts.provider ?? createProvider(config, secrets);
+  // Recording sits inside the redaction, so provider.jsonl never holds a secret value.
+  const recordMode = config.observability.recordProvider;
+  const recorded = recordMode === 'off' ? baseProvider : new ProviderRecorder(baseProvider, path.join(runDir, 'provider.jsonl'), recordMode);
+  if (recordMode !== 'off') log.warn({ mode: recordMode, file: path.join(runDir, 'provider.jsonl') }, 'recording model calls (observability.recordProvider)');
+  const provider = new RedactingProvider(recorded, secrets, (names) => {
     const fresh = names.filter((n) => !redactedNames.has(n));
     if (fresh.length === 0) return;
     for (const n of fresh) redactedNames.add(n);
@@ -246,9 +265,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       log.error({ key: keyPath.join('.'), err: errorMessage(err) }, 'could not write config.yaml');
     }
   };
+  // Budget enforcement (set once the tracker exists, below) decides the delivery mode of new events.
+  let budgetRef: BudgetTracker | null = null;
   const plugins = new PluginHost({
     store,
     bus,
+    admit: (ev) => budgetRef?.admit(ev) ?? null,
     owner,
     kv,
     tools,
@@ -363,7 +385,17 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     onChanged: (names) => bus.emit('skills.changed', { names }),
   });
 
-  const budget = new BudgetTracker({ usage, settings: config.budget, bus, log: log.child({ component: 'budget' }), clock, pushInternal });
+  const budget = new BudgetTracker({
+    usage,
+    settings: config.budget,
+    bus,
+    log: log.child({ component: 'budget' }),
+    clock,
+    pushInternal,
+    kv: kvNamespace(kv, 'budget'),
+    store,
+  });
+  budgetRef = budget;
   const segments = new SystemSegments({
     persona: () => persona.current,
     hooks: () => persona.hooks,
@@ -388,7 +420,15 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   bus.on('skills.changed', () => segments.refresh());
   refreshSegments = () => segments.refresh();
   const dispatcher = new ToolDispatcher(tools, log.child({ component: 'tools' }));
-  dispatcher.setGuard(new PermissionGuard(policy, approvals, audit));
+  dispatcher.setGuard(opts.toolGuard ?? new PermissionGuard(policy, approvals, audit));
+  const outbound = new OutboundLimiter({
+    perMinute: () => config.pluginHost.outboundPerMinute,
+    isConnector: (owner) => plugins.get(owner)?.kind === 'connector',
+    clock,
+    log: log.child({ component: 'tools' }),
+    pushInternal: (input) => plugins.pushInternal(input),
+  });
+  dispatcher.setLimiter((def, use) => outbound.check(def, use));
   const toolStats = new ToolStatsRepo(db);
   let metrics: Metrics | null = null;
   dispatcher.observe((name, ms, failed) => {
@@ -421,6 +461,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     system: () => segments.forkSegments(),
     prefixSalt: () => secretsEpoch(secrets),
     pushInternal,
+    spawnGate: (level) => budget.forkRefusal(level),
   });
 
   const startedAt = clock.now();
@@ -573,6 +614,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     log: log.child({ component: 'scheduler' }),
     clock,
     pushInternal,
+    agingExempt: (cursor) => budget.isHeld(cursor),
   });
   // An operator pause outlives restarts (it is shown in the status and the console).
   const schedulerKv = kvNamespace(kv, 'scheduler');
@@ -612,10 +654,13 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     cacheHitRatio: (role) => usage.totalsSince(clock.now() - 86_400_000, { role }).cacheHitRatio,
     contextTokens,
     processMetrics: opts.processMetrics !== false,
+    dbFile: path.join(dataDir, 'protea.db'),
   });
 
   // Control plane.
   const startControl = { ...config.control };
+  const allowCidrs = startControl.allowCidrs.map((c) => parseCidr(c));
+  if (allowCidrs.length > 0) log.info({ allowCidrs: startControl.allowCidrs }, 'the control plane only answers these addresses (and loopback)');
   const token = secrets.ensure(config.control.adminTokenSecret);
   if (token.generated) log.warn({ file: token.file }, 'generated an admin token for the control API');
   const ready = (): { ready: boolean; reasons: string[] } => {
@@ -740,6 +785,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     auth: () => ({ adminToken: token.value, readonlyToken: secrets.get(startControl.readonlyTokenSecret) ?? null }),
     runId: () => runId,
     logs: logRing,
+    allowCidrs: () => allowCidrs,
   });
   const app = createControlApp({
     adminToken: token.value,
@@ -748,6 +794,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     metrics,
     // control is a cold section: these keep their start-up values until a restart.
     publicMetrics: () => startControl.publicMetrics,
+    allowCidrs: () => allowCidrs,
     webDir: () => webDir(env, assets),
     batches,
     usage,
@@ -759,7 +806,28 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       tools: tools.list().map((t) => ({ name: t.name, owner: t.owner, ...policy.decide(t) })),
     }),
     budget: () => ({ settings: config.budget, status: budget.status() }),
+    budgetRelease: (o) =>
+      budget.release({
+        by: o.by,
+        ...(o.levels !== undefined ? { levels: o.levels as Level[] } : {}),
+        ...(o.hardCap !== undefined ? { hardCap: o.hardCap } : {}),
+        ...(o.hours !== undefined ? { hours: o.hours } : {}),
+      }),
     logs: { ring: logRing, runsDir: path.join(dataDir, 'runs'), runId },
+    backups: {
+      dir: path.join(dataDir, 'backups'),
+      list: () => listBackups(dataDir).map(({ path: _p, ...b }) => b),
+      create: async (o) => {
+        const r = await createBackup({ dataDir, version: VERSION, ...o });
+        log.info({ path: r.path, files: r.manifest.files, bytes: r.manifest.bytes }, 'backup written');
+        return { path: r.path, manifest: r.manifest as unknown as Record<string, unknown> };
+      },
+      git: async (url) => {
+        const r = await gitBackup({ dataDir, url });
+        log.info({ commit: r.commit, changed: r.changed }, 'git backup pushed');
+        return r;
+      },
+    },
     persona,
     onPersonaWrite: () => void reloadPersona(),
     bus,
@@ -891,11 +959,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
           plugins: plugins.status().map((p) => ({ id: p.id, state: p.state, ...(p.error ? { error: p.error } : {}) })),
           mcp: mcp.status().map((m) => ({ id: m.id, state: m.state })),
           forks: forks.list().filter((f) => f.state === 'paused' || f.state === 'queued').map((f) => ({ id: f.id, state: f.state })),
-        });
+        }, redactLine);
       } catch (err) {
         log.warn({ err: errorMessage(err) }, 'could not write shutdown.json');
       }
       metrics.close();
+      budget.close();
       trail.close();
       main.currentTranscript.close();
       db.close();
@@ -938,6 +1007,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     logs: logRing,
     trail,
     log,
+    redact: redactLine,
     status,
     reloadConfig,
     stop,
@@ -951,12 +1021,12 @@ export async function runDaemon(opts: DaemonOptions): Promise<void> {
   // exception ends the process (the next start resumes the interrupted batch); a stray rejected
   // promise is reported and the daemon keeps running.
   process.on('uncaughtException', (err) => {
-    const file = writeCrashReport(daemon.runDir, err, daemon.trail, { kind: 'uncaughtException' });
+    const file = writeCrashReport(daemon.runDir, err, daemon.trail, { kind: 'uncaughtException' }, daemon.redact);
     daemon.log.fatal({ err: errorMessage(err), report: file }, 'uncaught exception; exiting');
     setTimeout(() => process.exit(1), 100).unref();
   });
   process.on('unhandledRejection', (reason) => {
-    const file = writeCrashReport(daemon.runDir, reason, daemon.trail, { kind: 'unhandledRejection' });
+    const file = writeCrashReport(daemon.runDir, reason, daemon.trail, { kind: 'unhandledRejection' }, daemon.redact);
     daemon.log.error({ err: errorMessage(reason), report: file }, 'unhandled promise rejection');
   });
   let signals = 0;

@@ -10,7 +10,7 @@
 |---|---|---|---|
 | `source` | 事件（入站） | `cron`、`webhook`、`imap`、`rss`、`filewatch` | 进程外（默认）/ 进程内（内核自带） |
 | `connector` | 事件 + 出口工具（入站 + 出站） | `telegram`、`slack`、`discord`、`console` | 进程外 |
-| `tool` | 纯工具（无事件） | `shell`、`http`、`calendar` | 进程外 |
+| `tool` | 纯工具（无事件） | `shell`（内置，M6）、`http`、`calendar` | 进程外 |
 | `mcp` | 一个 MCP 服务器的声明（Core 作为 MCP 客户端） | `mcp-server-fetch`、`filesystem` | MCP stdio / HTTP |
 | `skill` | 一个 Skill 目录 | `pdf`、`weekly-report` | 不运行；按需读取 |
 | `provider` | 模型提供方 | `anthropic`（内核自带）、`openai-compat` | 进程内（需审计） |

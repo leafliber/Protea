@@ -8,7 +8,14 @@ import type { ProteaConfig } from './types.js';
 export function defaultConfig(): ProteaConfig {
   return {
     daemon: { timezone: defaultTimeZone(), language: 'zh', shutdown: { graceMs: 25_000 } },
-    control: { listen: '0.0.0.0:7788', adminTokenSecret: 'PROTEA_ADMIN_TOKEN', readonlyTokenSecret: 'PROTEA_READONLY_TOKEN', publicUrl: null, publicMetrics: false },
+    control: {
+      listen: '0.0.0.0:7788',
+      adminTokenSecret: 'PROTEA_ADMIN_TOKEN',
+      readonlyTokenSecret: 'PROTEA_READONLY_TOKEN',
+      publicUrl: null,
+      publicMetrics: false,
+      allowCidrs: [],
+    },
     owner: { identities: [{ plugin: 'console', senderKey: '*' }] },
     scheduler: {
       levels: {
@@ -21,7 +28,7 @@ export function defaultConfig(): ProteaConfig {
       preemptStorm: { count: 3, windowMs: 10_000, cooldownMs: 60_000 },
       forks: { maxConcurrent: 2, maxQueued: 8, yieldLevel: 1, yieldTimeoutMs: 30_000, maxTurns: 20 },
     },
-    budget: { dailyUsd: null, shares: { 0: null, 1: 0.6, 2: 0.2, 3: 0.15, 4: 0.05 }, warnAt: 0.9 },
+    budget: { dailyUsd: null, shares: { 0: null, 1: 0.6, 2: 0.2, 3: 0.15, 4: 0.05 }, warnAt: 0.9, enforce: true, hardDailyUsd: null },
     session: { rounds: { soft: 12, hard: 30 }, backoffMs: [5_000, 15_000, 45_000] },
     providers: {
       default: 'anthropic',
@@ -45,7 +52,11 @@ export function defaultConfig(): ProteaConfig {
       console: { enabled: true, config: {} },
       cron: { enabled: true, config: {} },
     },
-    pluginHost: { ...DEFAULT_PLUGIN_HOST_SETTINGS, restartBackoffMs: [...DEFAULT_PLUGIN_HOST_SETTINGS.restartBackoffMs] },
+    pluginHost: {
+      ...DEFAULT_PLUGIN_HOST_SETTINGS,
+      restartBackoffMs: [...DEFAULT_PLUGIN_HOST_SETTINGS.restartBackoffMs],
+      limits: { ...DEFAULT_PLUGIN_HOST_SETTINGS.limits },
+    },
     permissions: { default: 'allow', tools: {}, approvalTtlMs: 86_400_000 },
     mcp: { ...DEFAULT_MCP_SETTINGS, servers: {} },
     skills: { disabled: [], mcpPrompts: true },
@@ -56,7 +67,7 @@ export function defaultConfig(): ProteaConfig {
     },
     memory: { nativeTool: false },
     persona: { dir: 'persona' },
-    observability: { logLevel: 'info', logFormat: 'auto', logEventText: false, keepRuns: 20, requiredPlugins: [] },
+    observability: { logLevel: 'info', logFormat: 'auto', logEventText: false, keepRuns: 20, requiredPlugins: [], recordProvider: 'off' },
   };
 }
 
@@ -72,7 +83,9 @@ export const STARTER_CONFIG_YAML = `# Protea configuration. Every key is optiona
 #     - { plugin: console, senderKey: "*" }
 
 # budget:
-#   dailyUsd: 5              # tracked per level (L1 60 %, L2 20 %, L3 15 %, L4 5 %); not enforced yet
+#   dailyUsd: 5              # pools per level (L1 60 %, L2 20 %, L3 15 %, L4 5 %) over the rolling 24 h;
+#                            # an exhausted L2 pool turns new L2 events into piggyback, L3/L4 into store
+#   hardDailyUsd: 10         # global cap: once reached only L0/L1 events are delivered
 
 # providers:
 #   default: anthropic        # or "echo" for offline development
@@ -108,8 +121,14 @@ export const STARTER_CONFIG_YAML = `# Protea configuration. Every key is optiona
 #   listen: 0.0.0.0:7788      # the web console is at http://<host>:7788/ (sign in with the admin token)
 #   publicMetrics: false      # true serves /metrics without a token (private networks only)
 #                             # a secret PROTEA_READONLY_TOKEN enables a read-only token for dashboards
+#   allowCidrs: []            # e.g. [10.0.0.0/8, 192.168.0.0/16]; empty allows any address (loopback always)
+
+# pluginHost:
+#   limits: { memoryMb: 512, openFiles: 1024 }   # per plugin / MCP server process tree; over memory → restart
+#   outboundPerMinute: 20     # tool calls per connector plugin (e.g. telegram) per minute
 
 # observability:
 #   keepRuns: 20              # run directories (log.jsonl, crash reports) kept under /data/runs
 #   requiredPlugins: []       # plugins that must be running for /readyz, e.g. [telegram]
+#   recordProvider: off       # responses | full: record model calls to runs/<id>/provider.jsonl (protea replay)
 `;

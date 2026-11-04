@@ -1,6 +1,6 @@
 # 规范：控制 API
 
-> 状态：Accepted（M5）· 更新：2026-11-04 · 设计：[../10-architecture/13-control-plane.md](../10-architecture/13-control-plane.md)
+> 状态：Accepted（M6）· 更新：2026-11-04 · 设计：[../10-architecture/13-control-plane.md](../10-architecture/13-control-plane.md)
 
 基址 `http://host:7788`。JSON；错误形态 `{ error: { code, message, details? } }`。鉴权 `Authorization: Bearer <token>` 或控制台会话 cookie（见"鉴权"）。分页：事件用 `?cursor=&limit=`（返回 `nextCursor`），批用 `?before=&limit=`。类型定义在 `@protea/protocol`（`control.ts`）。
 
@@ -15,6 +15,7 @@
 - `admin`：全部操作。`readonly`（秘密 `PROTEA_READONLY_TOKEN` 存在时）：只有 GET 与 WS 订阅，且 `/api/memory*`、`/api/persona*`、`/api/secrets*` 返回 403。
 - 用 cookie 鉴权的非 GET 请求必须带 `x-protea-csrf: 1`，否则 403 `csrf`。
 - 所有非 GET 请求（鉴权通过之后）记审计 `control_write`：`summary` 为 `METHOD /path`，`owner` 为 `api:<role>` 或 `console:<role>`，`outcome` 为状态码。
+- `control.allowCidrs` 非空时（M6），客户端地址不在其中且不是回环地址的请求一律 403 `forbidden`（在鉴权之前，`/healthz` 也一样）；`/hooks/*` 不受限。WebSocket 升级同样检查，被拒时直接回 `403`。
 
 ## 状态
 
@@ -84,9 +85,9 @@
 | PATCH | `/api/permissions` | `permissions` 分节的 Merge Patch（如 `{ tools: { con_send: ask } }`，`null` 删除规则），经 `PATCH /api/config` → 合并后的结果 |
 | GET | `/api/approvals?state=pending` | `{ approvals: ApprovalInfo[] }`（state：pending、approved、denied、expired、used） |
 | POST | `/api/approvals/:id/decide` | `{ decision: approve\|deny, note? }`；决定者记为 `console:admin`；已决定或已过期 → 409 |
-| GET | `/api/budget` | `{ settings, status: BudgetStatus }` |
+| GET | `/api/budget` | `{ settings, status: BudgetStatus }`。`status`：`enforced`、`dailyUsd`、`hardDailyUsd`、`spentUsd`（24 h 合计）、`hardCapReached`、`hardCapReleasedUntil?`，`levels.<L>`：`spentUsd`、`tokens`、`limitUsd`、`usedRatio`、`held?`（被预算改了投递方式且仍在等的事件数）、`releasedUntil?` |
 | PATCH | `/api/budget` | `budget` 分节的 Merge Patch（热更新） |
-| POST | `/api/budget/release` | `{ level, untilTs }` 临时放行（M6，随预算强制执行） |
+| POST | `/api/budget/release` | `{ levels?: [2,3,4], hardCap?: boolean, hours?: number }`（默认 L2–L4、设置了硬上限时连同硬上限、24 h；`hours` ≤ 168）：在这段时间内不对这些等级强制执行，被扣住的事件恢复原来的投递方式 → `{ levels, hardCap, untilMs, until, promoted: number[] }`；记 L4 事件 `budget.released`。放行记在 kv，重启后仍有效（M6） |
 | GET | `/api/audit?kind=&tool=&limit=` | `{ audit: AuditRow[] }`，新的在前；kind：`tool_call`、`tool_blocked`、`approval_requested`、`approval_decided`、`approval_expired`、`memory_write`、`control_write` |
 
 ## Webhook
@@ -123,6 +124,15 @@
 | GET | `/api/runs` | `{ current, runs: [{ id, startedAt, logBytes, crashes, hasShutdown }] }`，新的在前 |
 | GET | `/api/runs/:id` | `{ id, info, shutdown, crashes: [{ file, report }] }` |
 
+## 备份（M6）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/backups` | `{ dir, backups: [{ name, createdAt?, bytes?, archive }] }`：`<data>/backups` 下的备份，新的在前 |
+| POST | `/api/backups` | `{ archive?, includeWorkspace?, includeRuns? }` → `{ path, manifest }`：在线备份到 `<data>/backups`（API 不接受文件系统路径）；`{ to: <Git 地址> }` → `{ commit, changed }`：把 `config.yaml`、`persona/`、`memory/`、`skills/` 推到该仓库（凭据用守护进程所在环境的 SSH 密钥 / Git 凭据）。`to` 不是 Git 地址 400；失败 422 `backup_failed` |
+
+恢复没有 API：要先停掉守护进程，用 `protea restore`（见 [../10-architecture/16-deployment.md](../10-architecture/16-deployment.md) §8）。
+
 ## 控制台
 
 `GET /`、`/index.html`、`/assets/*`、`/favicon.svg` 返回构建好的控制台（`apps/web/dist`，或 `PROTEA_WEB_DIR`），不需要令牌（页面自己调用 `/api/auth/*`）。响应带 `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; …`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`；`/assets/` 下的文件长期缓存，`index.html` 每次校验。未构建时返回一页说明。
@@ -149,4 +159,4 @@ SSE 与 WS 的消息都按总线记录的因果顺序发出：事件先于为它
 - M3：`/api/mcp/servers*`、`/api/mcp/oauth/callback`、`/api/skills*`（目录安装）。
 - M4：`POST /api/sessions/main/handoff`、`/api/memory/*`；`/api/status` 增加 `context`、`memory`、`persona`。
 - M5：其余全部（本页各表），`/api/status` 增加 `scheduler`；`/ws`、`/metrics`、控制台托管。
-- M6：`POST /api/budget/release`。
+- M6：`POST /api/budget/release`、`/api/backups`；`BudgetStatus` 增加硬上限、扣住数与放行；`control.allowCidrs`；`/api/status` 的插件与 MCP 状态增加 `memoryBytes`。

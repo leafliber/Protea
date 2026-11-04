@@ -1,0 +1,16 @@
+# TLS in front of Protea (docker compose --profile tls). Caddy obtains and renews the
+# certificate for $PROTEA_DOMAIN; Protea itself never terminates TLS.
+{$PROTEA_DOMAIN} {
+	encode zstd gzip
+
+	# Webhooks are verified by the webhook plugin (signature or token), not by the admin token.
+	reverse_proxy protea:7788 {
+		# WebSocket (/ws) and SSE (/api/stream) stay open.
+		flush_interval -1
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+}

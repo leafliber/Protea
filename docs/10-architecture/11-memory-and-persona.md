@@ -86,4 +86,4 @@ M4 实现了其中的 `systemSegments({ defaults })`、`onHandoff(snapshot, { ha
 
 - `USER.md` 可能包含敏感信息；它进入系统前缀，因此也会进入 Provider 请求。主人应知晓并可选择把敏感部分放进 `notes/` 由模型按需读取。
 - 记忆目录不被任何插件访问（I-7 的推广）；控制台的记忆浏览需要管理员令牌。
-- 备份建议：`/data/persona` 与 `/data/memory` 定期推送到私有 Git 仓库（`protea backup` 子命令，M6）。
+- 备份建议：`/data/persona` 与 `/data/memory` 定期推送到私有 Git 仓库：`protea backup --to <git-url>`（M6；同时推送 `config.yaml` 与 `skills/`，便于审阅记忆的变化），数据库与转录用目录备份（[16-deployment.md](16-deployment.md) §8）。

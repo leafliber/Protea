@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
 import {
   FORK_STATES,
@@ -32,6 +33,8 @@ export interface MetricsOptions {
   contextTokens: () => number;
   /** Node.js process metrics (memory, CPU, event loop); off in tests that create many registries. */
   processMetrics?: boolean;
+  /** protea.db, for its size (and the -wal file's) at scrape time. */
+  dbFile?: string;
 }
 
 export interface Metrics {
@@ -73,6 +76,36 @@ export function createMetrics(o: MetricsOptions): Metrics {
     buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 900, 3600, 14400],
     ...reg,
   });
+  // The success criterion (docs/00-overview/01-vision-and-scope.md): stored → the first model request
+  // that carries the event, including debounce, queueing behind a running batch and context assembly.
+  const toRequest = new Histogram({
+    name: 'protea_event_to_request_seconds',
+    help: 'Time from an event being stored to the first model request that carries it (main session)',
+    labelNames: ['level'],
+    buckets: [0.05, 0.1, 0.25, 0.5, 1, 1.5, 2, 3, 5, 10, 30, 60, 300, 900, 3600],
+    ...reg,
+  });
+  if (o.dbFile) {
+    const dbFile = o.dbFile;
+    new Gauge({
+      name: 'protea_db_size_bytes',
+      help: 'Size of the SQLite database and its write-ahead log',
+      labelNames: ['file'],
+      ...reg,
+      collect() {
+        for (const [label, f] of [
+          ['db', dbFile],
+          ['wal', `${dbFile}-wal`],
+        ] as const) {
+          try {
+            this.set({ file: label }, fs.statSync(f).size);
+          } catch {
+            this.set({ file: label }, 0);
+          }
+        }
+      },
+    });
+  }
   const preemptions = new Counter({ name: 'protea_preemptions_total', help: 'Preemptions and interrupts', labelNames: ['source', 'kind'], ...reg });
   const aging = new Counter({ name: 'protea_aging_promotions_total', help: 'Events promoted to flush by aging', labelNames: ['level'], ...reg });
   const turns = new Counter({ name: 'protea_turns_total', help: 'Finished batches (main) and forks', labelNames: ['session_kind', 'end_reason'], ...reg });
@@ -163,13 +196,27 @@ export function createMetrics(o: MetricsOptions): Metrics {
   });
 
   // —— Counters that follow the bus ——
+  // Levels of events not settled yet; bounded, since store-only events may never settle.
   const levelOf = new Map<number, Level>();
+  const MAX_TRACKED = 10_000;
   const batchStart = new Map<string, number>();
+  /** Events delivered into a batch and not yet carried by a model request, by batch. */
+  const awaitingRequest = new Map<string, Array<{ cursor: number; level: Level; receivedAt: number }>>();
+  const awaitRequest = (batchId: string, cursors: readonly number[]): void => {
+    const list = awaitingRequest.get(batchId) ?? [];
+    for (const c of cursors) {
+      const e = o.store.get(c);
+      if (e) list.push({ cursor: c, level: e.effLevel, receivedAt: Date.parse(e.receivedAt) });
+    }
+    awaitingRequest.set(batchId, list);
+  };
   const restartsSeen = new Map<string, number>();
   const forkEnded = new Set<string>();
   const unsubs = [
     o.bus.on('event.stored', (e) => {
+      if (e.state !== 'pending') return;
       levelOf.set(e.cursor, e.effLevel);
+      if (levelOf.size > MAX_TRACKED) levelOf.delete(levelOf.keys().next().value as number);
     }),
     o.bus.on('event.settled', (s) => {
       for (const ev of s.events) {
@@ -181,6 +228,7 @@ export function createMetrics(o: MetricsOptions): Metrics {
     o.bus.on('batch.started', (b) => {
       const now = o.clock.now();
       batchStart.set(b.batchId, now);
+      awaitRequest(b.batchId, b.cursors);
       for (const c of b.cursors) {
         const e = o.store.get(c);
         if (e) wait.observe({ level: String(e.effLevel) }, Math.max(0, (now - Date.parse(e.receivedAt)) / 1000));
@@ -188,12 +236,21 @@ export function createMetrics(o: MetricsOptions): Metrics {
     }),
     o.bus.on('batch.extended', (b) => {
       const now = o.clock.now();
+      awaitRequest(b.batchId, b.cursors);
       for (const c of b.cursors) {
         const e = o.store.get(c);
         if (e) wait.observe({ level: String(e.effLevel) }, Math.max(0, (now - Date.parse(e.receivedAt)) / 1000));
       }
     }),
+    o.bus.on('model.request', (r) => {
+      const list = awaitingRequest.get(r.batchId);
+      if (!list || list.length === 0) return;
+      const now = o.clock.now();
+      for (const e of list) toRequest.observe({ level: String(e.level) }, Math.max(0, (now - e.receivedAt) / 1000));
+      awaitingRequest.set(r.batchId, []);
+    }),
     o.bus.on('batch.ended', (b) => {
+      awaitingRequest.delete(b.batchId);
       turns.inc({ session_kind: 'main', end_reason: b.endReason });
       const t0 = batchStart.get(b.batchId);
       batchStart.delete(b.batchId);

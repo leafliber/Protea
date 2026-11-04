@@ -39,6 +39,13 @@ export interface BudgetSettings {
   shares: Record<Level, number | null>;
   /** Usage ratio at which an internal notice is recorded (and again at 100 %). */
   warnAt: number;
+  /**
+   * Exhausted pools change how new events are scheduled (docs/10-architecture/04-scheduling-and-preemption.md §6).
+   * false only tracks and reports, as before M6.
+   */
+  enforce: boolean;
+  /** Global cap over the rolling 24 h; once reached only L0/L1 events are delivered. null: none. */
+  hardDailyUsd: number | null;
 }
 
 export interface OwnerIdentity {
@@ -115,7 +122,15 @@ export interface ProteaConfig {
    * `readonlyTokenSecret`: a secret that, when set, is a token for GET and WebSocket only.
    * `publicMetrics`: serve /metrics without a token (a scraper on a private network).
    */
-  control: { listen: string; adminTokenSecret: string; readonlyTokenSecret: string; publicUrl: string | null; publicMetrics: boolean };
+  control: {
+    listen: string;
+    adminTokenSecret: string;
+    readonlyTokenSecret: string;
+    publicUrl: string | null;
+    publicMetrics: boolean;
+    /** Client addresses allowed to reach the control plane (CIDRs); empty allows any. Loopback and /hooks/* are always allowed. */
+    allowCidrs: string[];
+  };
   owner: { identities: OwnerIdentity[] };
   scheduler: { levels: Record<Level, LevelSettings>; preemptStorm: PreemptStormSettings; forks: ForkSchedulerSettings };
   budget: BudgetSettings;
@@ -137,6 +152,18 @@ export interface ProteaConfig {
   /**
    * `keepRuns`: run directories (logs, crash reports) kept under <data>/runs.
    * `requiredPlugins`: plugin ids that must be running for /readyz.
+   * `recordProvider`: record model responses (and requests) for replay.
    */
-  observability: { logLevel: string; logFormat: 'json' | 'pretty' | 'auto'; logEventText: boolean; keepRuns: number; requiredPlugins: string[] };
+  observability: {
+    logLevel: string;
+    logFormat: 'json' | 'pretty' | 'auto';
+    logEventText: boolean;
+    keepRuns: number;
+    requiredPlugins: string[];
+    /**
+     * Provider recording (replay and test fixtures): `responses` writes every model response to
+     * <run>/provider.jsonl, `full` the (redacted) requests too. `off` by default.
+     */
+    recordProvider: 'off' | 'responses' | 'full';
+  };
 }

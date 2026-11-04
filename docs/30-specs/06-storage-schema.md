@@ -1,6 +1,6 @@
 # 规范：存储 Schema
 
-> 状态：Accepted（M0–M5）· 更新：2026-11-04 · 设计：[../10-architecture/03-event-store-and-bus.md](../10-architecture/03-event-store-and-bus.md)
+> 状态：Accepted（M0–M6）· 更新：2026-11-04 · 设计：[../10-architecture/03-event-store-and-bus.md](../10-architecture/03-event-store-and-bus.md)
 
 ## 1. SQLite（/data/protea.db）
 
@@ -101,7 +101,7 @@ CREATE TABLE audit (                                    -- 只追加（I-8）
 );
 ```
 
-`input_hash` = sha256(工具名 + 换行 + 键排序后的 JSON 输入)。`summary` 与 `reason` 写入前经过秘密扫描。`control_write`（M5）是控制 API 的写请求：`summary` 为 `METHOD /path`，`owner` 为 `api:<role>` 或 `console:<role>`，`outcome` 为 HTTP 状态码。调度的运营暂停在 `kv` 的 `scheduler` / `paused`（值为暂停者），重启后保持。插件的 kv 状态（例如 Telegram 的偏移量、filewatch 的快照）在 `kv` 表的 `plugin:<id>` 命名空间。
+`input_hash` = sha256(工具名 + 换行 + 键排序后的 JSON 输入)。`summary` 与 `reason` 写入前经过秘密扫描。`control_write`（M5）是控制 API 的写请求：`summary` 为 `METHOD /path`，`owner` 为 `api:<role>` 或 `console:<role>`，`outcome` 为 HTTP 状态码。调度的运营暂停在 `kv` 的 `scheduler` / `paused`（值为暂停者），重启后保持。预算的放行与扣住名单在 `kv` 的 `budget` / `state`：`{ released: { <level>|hard: untilMs }, held: [{ cursor, level, trigger }] }`（最多 2000 条，M6）。插件的 kv 状态（例如 Telegram 的偏移量、filewatch 的快照）在 `kv` 表的 `plugin:<id>` 命名空间。
 
 ### 1.3 迁移 3：`tool-stats`（M3）
 
@@ -144,12 +144,18 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(path UNINDEXED, body, tokenize = 'tri
 | `plugin-data/<id>/` | 目录 | 插件的可写数据目录（初始化参数 `dataDir`） |
 | `plugin-data/mcp/<id>/` | 目录 | stdio MCP 服务器的默认工作目录 |
 | `skills/<name>/` | 目录 | 用户 Skills（`SKILL.md` + 附带文件）；`.install-*` 是安装中的临时目录 |
-| `workspace/` | 目录 | 向 MCP 服务器声明的根目录（roots） |
+| `workspace/` | 目录 | 向 MCP 服务器声明的根目录（roots）；`shell` 工具的工作目录（M6） |
 | `inbox/` | 目录 | `filewatch` 默认监视的目录 |
 | `runs/<runId>/log.jsonl` | NDJSON | 本次运行的结构化日志（debug 及以上） |
 | `runs/<runId>/transcript.jsonl` | NDJSON | 启动修复时移出的内容（`truncated-tail`、`orphan-result-drop`） |
 | `runs/<runId>/shutdown.json` | JSON | 正常关停的记录（M5，字段见 [15-observability.md](../10-architecture/15-observability.md) §4）；只保留最近 `observability.keepRuns` 个运行目录 |
-| `runs/<runId>/crash/<time>.json` | JSON | 未捕获异常 / 未处理拒绝的报告：错误、堆栈、最近 200 条总线记录（M5） |
+| `runs/<runId>/crash/<time>.json` | JSON | 未捕获异常 / 未处理拒绝的报告：错误、堆栈、最近 200 条总线记录（M5）；写盘前过滤秘密值（M6） |
+| `runs/<runId>/provider.jsonl` | NDJSON | 录制模式下每次模型调用一行：`seq, at, role, model, ms, response?, error?, request?`（M6） |
+| `backups/protea-backup-<time>[/｜.tar.gz]` | 目录或 tar.gz | `protea backup` 的输出：`protea.db`（在线备份）、复制的数据目录与 `manifest.json`（`format, createdAt, protea, schema, items, files, bytes, dbSha256, excluded`）（M6） |
+| `backups/protea-v<N>-<time>.db` | SQLite | 迁移前的快照（入口脚本的 `protea migrate`，M6） |
+| `backups/pre-restore-<time>/` | 目录 | `protea restore --force` 移开的旧文件（M6） |
+| `replays/<time>/` | 目录 | `protea replay` 的离线数据目录（`data/`）与日志（M6） |
+| `cache/` | 目录 | npm/uv/pip 缓存与 `backup-git/<hash>/`（Git 备份的工作副本）；可以清空（M6） |
 | `secrets/<NAME>` | 文本，0600 | 秘密 |
 | `secrets/mcp-oauth/<id>.json` | JSON，0600 | MCP 服务器的 OAuth 客户端注册、令牌与 PKCE verifier |
 | `persona/*.md` | Markdown | 人格文件，首次启动从默认人格复制；`persona/hooks.{ts,mts,mjs,js}` 为可选钩子（M4） |

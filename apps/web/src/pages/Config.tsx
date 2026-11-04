@@ -255,17 +255,42 @@ function Permissions() {
 
 function Budget() {
   const { canWrite } = useSession();
-  const r = useApi<{ settings: { dailyUsd: number | null; shares: Record<string, number | null>; warnAt: number }; status: BudgetStatus }>('/api/budget');
+  const r = useApi<{ settings: { dailyUsd: number | null; hardDailyUsd: number | null; shares: Record<string, number | null>; warnAt: number }; status: BudgetStatus }>('/api/budget', {
+    refreshMs: 15000,
+  });
   const [daily, setDaily] = useState('');
+  const [hard, setHard] = useState('');
+  const [hours, setHours] = useState('4');
   const [result, setResult] = useState<PatchResult | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const act = useAction();
   const s = r.data;
+  const num = (v: string): number | null => (v.trim() === '' ? null : Number(v));
+  const release = (body: Record<string, unknown>) =>
+    void act.run(async () => {
+      const res = await post<{ promoted: number[]; until: string }>('/api/budget/release', { ...body, hours: Number(hours) || 4 });
+      setNote(`已放行到 ${new Date(res.until).toLocaleString()}，${res.promoted.length} 个被扣住的事件恢复投递`);
+      r.reload();
+    });
+  const held = s ? Object.values(s.status.levels).reduce((n, b) => n + (b.held ?? 0), 0) : 0;
   return (
     <Card title="预算">
       <ErrorText error={r.error ?? act.error} />
       {s && (
         <>
-          <div className="muted small">滚动 24 小时。{s.status.enforced ? '已强制执行。' : '目前只统计和提醒，不限制调度（M6 起强制执行）。'}</div>
+          <div className="muted small">
+            滚动 24 小时，共花费 {usd(s.status.spentUsd, 4)}。
+            {s.status.enforced
+              ? '已强制执行：L2 用尽后新事件只随其他批次捎带，L3/L4 用尽后新事件只入库不投递；L1 不受影响。'
+              : '强制执行已关闭（budget.enforce: false），只统计和提醒。'}
+          </div>
+          {s.status.hardDailyUsd !== null && (
+            <div className="row">
+              全局硬上限 {usd(s.status.hardDailyUsd)}：
+              {s.status.hardCapReached ? <Badge tone="bad">已到达，只投递 L0/L1</Badge> : <Badge tone="good">未到达</Badge>}
+              {s.status.hardCapReleasedUntil && <Badge tone="warn">放行到 {new Date(s.status.hardCapReleasedUntil).toLocaleString()}</Badge>}
+            </div>
+          )}
           {Object.entries(s.status.levels).map(([l, b]) => (
             <div key={l} className="budget-row">
               <LevelBadge level={Number(l)} />
@@ -273,22 +298,50 @@ function Budget() {
               <span className="small">
                 {usd(b.spentUsd, 4)}
                 {b.limitUsd !== null ? ` / ${usd(b.limitUsd)}` : ' · 不限'} · 份额 {s.settings.shares[l] === null ? '不限' : `${Math.round((s.settings.shares[l] ?? 0) * 100)}%`}
+                {b.held ? <> · <Badge tone="warn">扣住 {b.held} 个</Badge></> : null}
+                {b.releasedUntil ? <> · <Badge tone="info">放行到 {new Date(b.releasedUntil).toLocaleString()}</Badge></> : null}
               </span>
             </div>
           ))}
+          {canWrite && (
+            <div className="row">
+              临时放行
+              <input type="number" min="1" max="168" value={hours} onChange={(e) => setHours(e.target.value)} style={{ width: '5em' }} /> 小时：
+              {[2, 3, 4].map((l) => (
+                <Button key={l} small onClick={() => release({ levels: [l], hardCap: false })}>
+                  L{l}
+                </Button>
+              ))}
+              {s.status.hardDailyUsd !== null && (
+                <Button small onClick={() => release({ levels: [], hardCap: true })}>
+                  硬上限
+                </Button>
+              )}
+              <Button small kind="primary" disabled={held === 0 && !s.status.hardCapReached} onClick={() => release({})}>
+                全部
+              </Button>
+              {note && <span className="muted small">{note}</span>}
+            </div>
+          )}
           {canWrite && (
             <form
               className="row"
               onSubmit={(e) => {
                 e.preventDefault();
                 void act.run(async () => {
-                  setResult(await api<PatchResult>('PATCH', '/api/budget', { dailyUsd: daily.trim() === '' ? null : Number(daily) }));
+                  const patch: Record<string, unknown> = {};
+                  if (daily.trim() !== '') patch['dailyUsd'] = num(daily) === 0 ? null : num(daily);
+                  if (hard.trim() !== '') patch['hardDailyUsd'] = num(hard) === 0 ? null : num(hard);
+                  setResult(await api<PatchResult>('PATCH', '/api/budget', patch));
                   r.reload();
                 });
               }}
             >
-              <Field label="每日上限（美元，留空为不限）">
+              <Field label="每日预算（美元，0 为不限）">
                 <input type="number" step="0.5" min="0" value={daily} onChange={(e) => setDaily(e.target.value)} placeholder={s.settings.dailyUsd === null ? '不限' : String(s.settings.dailyUsd)} />
+              </Field>
+              <Field label="全局硬上限（美元，0 为不设）">
+                <input type="number" step="0.5" min="0" value={hard} onChange={(e) => setHard(e.target.value)} placeholder={s.settings.hardDailyUsd === null ? '不设' : String(s.settings.hardDailyUsd)} />
               </Field>
               <Button kind="primary" type="submit" busy={act.busy}>
                 保存
@@ -297,6 +350,97 @@ function Budget() {
             </form>
           )}
         </>
+      )}
+    </Card>
+  );
+}
+
+interface BackupEntry {
+  name: string;
+  createdAt?: string;
+  bytes?: number;
+  archive: boolean;
+}
+
+function Backups() {
+  const { canWrite } = useSession();
+  const r = useApi<{ backups: BackupEntry[]; dir: string }>('/api/backups');
+  const [archive, setArchive] = useState(true);
+  const [git, setGit] = useState('');
+  const [note, setNote] = useState<string | null>(null);
+  const act = useAction();
+  return (
+    <Card title="备份">
+      <ErrorText error={r.error ?? act.error} />
+      <div className="muted small">
+        在线备份（守护进程运行中也可以）：SQLite 快照加 config.yaml、sessions、memory、persona、skills、plugins、plugin-data 等；不含 secrets/ 与 cache/。恢复要先停掉守护进程，再运行 protea restore。
+      </div>
+      {canWrite && (
+        <div className="row">
+          <label className="check">
+            <input type="checkbox" checked={archive} onChange={(e) => setArchive(e.target.checked)} /> 打包成 .tar.gz
+          </label>
+          <Button
+            kind="primary"
+            busy={act.busy}
+            onClick={() =>
+              void act.run(async () => {
+                const res = await post<{ path: string; manifest: { files: number; bytes: number } }>('/api/backups', { archive });
+                setNote(`已写入 ${res.path}（${res.manifest.files} 个文件）`);
+                r.reload();
+              })
+            }
+          >
+            立即备份
+          </Button>
+          {note && <span className="muted small">{note}</span>}
+        </div>
+      )}
+      {canWrite && (
+        <form
+          className="row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void act.run(async () => {
+              const res = await post<{ commit: string | null; changed: number }>('/api/backups', { to: git.trim() });
+              setNote(res.commit ? `推送了 ${res.changed} 处变化（${res.commit.slice(0, 10)}）` : '与上次推送相比没有变化');
+            });
+          }}
+        >
+          <Field label="推送人格与记忆到 Git（私有仓库地址）" hint="只推送 config.yaml、persona/、memory/、skills/；数据库用上面的目录备份。">
+            <input value={git} onChange={(e) => setGit(e.target.value)} placeholder="git@github.com:me/protea-memory.git" />
+          </Field>
+          <Button type="submit" disabled={git.trim() === ''} busy={act.busy}>
+            推送
+          </Button>
+        </form>
+      )}
+      {r.data && (
+        <table className="table">
+          <thead>
+            <tr>
+              <th>名称</th>
+              <th>时间</th>
+              <th>大小</th>
+            </tr>
+          </thead>
+          <tbody>
+            {r.data.backups.length === 0 && (
+              <tr>
+                <td colSpan={3} className="muted">
+                  {r.data.dir} 里还没有备份
+                </td>
+              </tr>
+            )}
+            {r.data.backups.map((b) => (
+              <tr key={b.name}>
+                <td className="mono small">{b.name}</td>
+                <td className="nowrap small">{b.createdAt ? new Date(b.createdAt).toLocaleString() : '—'}</td>
+                <td className="nowrap small">{b.bytes === undefined ? '—' : b.bytes >= 1048576 ? `${(b.bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b.bytes / 1024))} KB`}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
     </Card>
   );
@@ -369,7 +513,7 @@ function Scheduler() {
 
 export function Config() {
   const params = new URLSearchParams(location.hash.split('?')[1] ?? '');
-  const tab = (params.get('tab') ?? 'config') as 'config' | 'secrets' | 'permissions' | 'budget' | 'scheduler';
+  const tab = (params.get('tab') ?? 'config') as 'config' | 'secrets' | 'permissions' | 'budget' | 'scheduler' | 'backups';
   const { canWrite } = useSession();
   // Secrets are managed only over TLS or from this machine (docs/10-architecture/14-security-and-permissions.md §8).
   const secure = location.protocol === 'https:' || ['localhost', '127.0.0.1', '[::1]', '::1'].includes(location.hostname);
@@ -379,6 +523,7 @@ export function Config() {
     ['permissions', '权限'],
     ['budget', '预算'],
     ['scheduler', '调度'],
+    ['backups', '备份'],
   ];
   return (
     <div className="page">
@@ -388,6 +533,7 @@ export function Config() {
       {tab === 'permissions' && <Permissions />}
       {tab === 'budget' && <Budget />}
       {tab === 'scheduler' && <Scheduler />}
+      {tab === 'backups' && <Backups />}
     </div>
   );
 }

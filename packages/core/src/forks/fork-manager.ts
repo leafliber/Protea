@@ -88,6 +88,8 @@ interface Fork {
 export interface ForkManagerOptions {
   /** Directory for fork transcripts and checkpoints (`<data>/sessions/forks`). */
   dir: string;
+  /** A reason to refuse a new fork at this level (budget enforcement), or null. */
+  spawnGate?: (level: Level) => string | null;
   /** Paths stored in the sessions table are relative to this. */
   dataDir: string;
   sessions: SessionRepo;
@@ -199,6 +201,8 @@ export class ForkManager {
   /** Create a fork. Throws with a model-readable message when it is refused. */
   spawn(req: ForkRequest): ForkInfo {
     if (this.stopping) throw new Error('the daemon is stopping; no new forks');
+    const refused = this.o.spawnGate?.(req.level);
+    if (refused) throw new Error(`fork refused: ${refused}`);
     const { settings } = this.o;
     const queued = [...this.forks.values()].filter((f) => f.cp.state === 'queued').length;
     const active = [...this.forks.values()].filter((f) => f.cp.state === 'running' || f.cp.state === 'paused').length;

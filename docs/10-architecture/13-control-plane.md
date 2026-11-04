@@ -1,8 +1,8 @@
 # 控制平面
 
-> 状态：Accepted（M5）· 更新：2026-11-04 · 规范：[../30-specs/05-control-api.md](../30-specs/05-control-api.md)
+> 状态：Accepted（M6）· 更新：2026-11-04 · 规范：[../30-specs/05-control-api.md](../30-specs/05-control-api.md)
 
-> **实现状态（M5）**：HTTP API 与鉴权在 `packages/control/src/`（`app.ts`、`ops.ts`、`auth.ts`），WebSocket 在 `ws.ts`，SSE/WS 共用的总线投影在 `stream.ts`，控制台托管在 `static.ts`；Web 控制台是 `apps/web`；CLI 在 `apps/cli/src/`（`main.ts`、`ops.ts`）。未实现：`protea replay`、`POST /api/budget/release`（M6），`protea backup`（M6），`/mcp` 服务端（M7）。
+> **实现状态（M6）**：HTTP API 与鉴权在 `packages/control/src/`（`app.ts`、`ops.ts`、`auth.ts`），地址白名单在 `allow.ts`，WebSocket 在 `ws.ts`，SSE/WS 共用的总线投影在 `stream.ts`，控制台托管在 `static.ts`；Web 控制台是 `apps/web`；CLI 在 `apps/cli/src/`（`main.ts`、`ops.ts`，以及在数据目录上直接工作的 `admin.ts`：migrate、healthcheck、backup、restore、replay）。M6 新增预算放行、备份 API 与 `control.allowCidrs`。未实现：`/mcp` 服务端（M7）。
 
 ## 1. 组成
 
@@ -25,6 +25,7 @@
 - **控制台会话**：`POST /api/auth/login {token}` 校验后设置 cookie `protea_session`（HttpOnly、SameSite=Strict、Path=/，经 HTTPS 访问时加 Secure，30 天）。cookie 的值是 `v1.<role>.` 加上令牌对固定串的 HMAC：服务端不存会话，重启不掉登录，换令牌即全部失效，cookie 里也没有令牌本身。
 - **CSRF**：用 cookie 鉴权的写请求必须带 `x-protea-csrf: 1`（跨站表单设不了自定义头，跨站脚本又过不了同源策略）；WS 用 cookie 连接时 `Origin` 必须与 `Host` 一致。
 - **限流**：同一地址 1 分钟内失败登录 10 次后返回 429。
+- **地址白名单**（M6）：`control.allowCidrs` 非空时，只有其中的地址与回环地址能访问 HTTP 与 WS（在鉴权之前判断）；`/hooks/*` 不受限。反向代理后面看到的是代理的地址，此时应在代理上做白名单。
 - **审计**：每个写请求（非 GET）记一条 `control_write`（`METHOD /path`、主体 `api|console:<role>`、状态码），记忆写入另记 `memory_write`。
 - **Webhook** 与 MCP OAuth 回调不用令牌：前者由插件校验签名，后者靠 `state` 匹配。
 - 反向代理与 TLS 由部署层负责（[16-deployment.md](16-deployment.md) §6）；控制平面默认监听 `0.0.0.0:7788`。控制台在明文 HTTP 且非本机地址上访问时持续显示风险提示。
@@ -48,7 +49,8 @@
 | `/api/audit` | 审计记录 |
 | `/api/memory` | 浏览、读写、检索记忆文件（管理员） |
 | `/api/persona` | 列出与读写人格 Markdown 文件（管理员） |
-| `/api/budget` | 预算配置与余量；临时放行在 M6 |
+| `/api/budget` | 预算配置、余量、被扣住的事件；临时放行（M6） |
+| `/api/backups` | 列出与在线创建备份、推送人格与记忆到 Git（M6） |
 | `/api/scheduler` | 暂停/恢复投递、清空 L2–L4 的 pending |
 | `/api/logs` `/api/runs` | 日志检索（本次运行的内存缓冲或某次运行的 `log.jsonl`）、运行目录 |
 | `/healthz` `/readyz` `/metrics` | 探针与 Prometheus |
@@ -92,7 +94,9 @@ WebSocket 客户端发 `{ subscribe: [...], since?, logFilter? }`，每条订阅
 
 ```
 protea serve                    # 守护进程（容器入口）
-protea status
+protea migrate                  # 数据库迁移（先快照；镜像入口脚本每次启动都跑）
+protea healthcheck              # /healthz 应答时退出码 0（镜像 HEALTHCHECK）
+protea status [--json]
 protea events push|tail|ls|show|promote|withdraw
 protea batches [ls]|show <id>
 protea sessions [ls]|handoff
@@ -103,7 +107,7 @@ protea skills ls|show|install <dir>|install --git URL|enable|disable|rm <name>
 protea config get [path] [--sources]|set <path> <value>|unset <path>
 protea secrets [ls]|set <NAME>|rm <NAME>     # set 从 stdin 读值
 protea scheduler [status]|pause|resume|discard --levels 3,4
-protea budget
+protea budget [release [--levels 2,3,4] [--hard-cap] [--hours 24]]
 protea approvals ls|approve|deny <id>
 protea memory [ls]|cat|put|search
 protea persona [ls]|cat|put
@@ -112,8 +116,9 @@ protea logq [同上过滤] [--run ID|--all]      # 直接读 <data>/runs/*/log.j
 protea runs
 protea audit [--kind K]
 protea dev-plugin <dir> [--check]            # 本地插件开发宿主 / 协议一致性检查
-protea replay --from <c> --to <c>            # M6
-protea backup [--to <git-url>]               # M6
+protea backup [--to DIR|GIT_URL] [--archive] [--include-workspace] [--include-runs]
+protea restore <backup-dir|.tar.gz> [--force] # 守护进程须已停止；被替换的文件移到 backups/pre-restore-*
+protea replay [--from C] [--to C] [--provider recorded|echo|config] [--run ID] [--out DIR]
 ```
 
-CLI 通过 `PROTEA_URL` 与 `PROTEA_ADMIN_TOKEN` 访问 API（`--url`、`--token`、`--data-dir` 可覆盖）；在容器内默认指向本机并从数据卷读令牌。`logs --follow` 走 WebSocket，`events tail` 与 `events push` 走 SSE。
+CLI 通过 `PROTEA_URL` 与 `PROTEA_ADMIN_TOKEN` 访问 API（`--url`、`--token`、`--data-dir` 可覆盖）；在容器内默认指向本机并从数据卷读令牌。`logs --follow` 走 WebSocket，`events tail` 与 `events push` 走 SSE。`migrate`、`healthcheck`、`backup`、`restore`、`replay` 与 `logq` 直接读写数据目录，不经 API（守护进程停着也能用）。容器里以 root 运行的 CLI（`docker exec` 的默认）会按 `PROTEA_RUN_AS` 先降为守护进程的用户，写出的文件属主不变。

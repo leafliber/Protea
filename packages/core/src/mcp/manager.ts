@@ -30,6 +30,7 @@ import type { PromptSkill, PromptSource } from '../skills/registry.js';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { ToolDef, ToolOutcome, ToolSpec } from '../tools/types.js';
 import { sleep } from '../util/abort.js';
+import { DEFAULT_PROCESS_LIMITS, MemoryWatchdog, passthroughEnv, withLimits } from '../util/child-process.js';
 import { errorMessage } from '../util/errors.js';
 import { matchesAny } from '../util/glob.js';
 import type { Clock } from '../util/time.js';
@@ -37,7 +38,8 @@ import { mcpOwner, mcpToolName } from './names.js';
 import { FileOAuthProvider } from './oauth.js';
 import type { McpServerSettings, McpSettings } from './settings.js';
 
-type Supervision = Pick<PluginHostSettings, 'restartBackoffMs' | 'maxCrashes' | 'stableAfterMs' | 'initializeTimeoutMs' | 'drainTimeoutMs'>;
+type Supervision = Pick<PluginHostSettings, 'restartBackoffMs' | 'maxCrashes' | 'stableAfterMs' | 'initializeTimeoutMs' | 'drainTimeoutMs'> &
+  Partial<Pick<PluginHostSettings, 'limits'>>;
 
 export interface McpManagerOptions {
   tools: ToolRegistry;
@@ -81,6 +83,8 @@ interface Entry {
   busy: number;
   latencies: number[];
   stderr: string[];
+  /** Resident memory of the server process tree at the last sample (stdio). */
+  rssBytes?: number;
   restartTimer: ReturnType<typeof setTimeout> | null;
   pingTimer: ReturnType<typeof setInterval> | null;
   listTimers: Partial<Record<'tools' | 'prompts' | 'resources', ReturnType<typeof setTimeout>>>;
@@ -162,7 +166,29 @@ export class McpManager implements PromptSource {
   private readonly retiring = new Map<string, Entry>();
   private stopping = false;
 
-  constructor(private readonly o: McpManagerOptions) {}
+  private readonly watchdog: MemoryWatchdog;
+
+  constructor(private readonly o: McpManagerOptions) {
+    this.watchdog = new MemoryWatchdog({
+      limits: () => o.supervision().limits ?? DEFAULT_PROCESS_LIMITS,
+      targets: () => [...this.entries.values()].flatMap((e) => (e.state === 'running' && e.pid !== undefined ? [{ id: e.id, pid: e.pid }] : [])),
+      onSample: (samples) => {
+        for (const [id, bytes] of samples) {
+          const e = this.entries.get(id);
+          if (e) e.rssBytes = bytes;
+        }
+      },
+      onExceeded: (id, bytes, limit) => {
+        const e = this.entries.get(id);
+        if (!e || e.state !== 'running') return;
+        const reason = `memory limit exceeded (${Math.round(bytes / 1048576)} MB > ${Math.round(limit / 1048576)} MB)`;
+        o.log.error({ mcp: id, rssMb: Math.round(bytes / 1048576), limitMb: Math.round(limit / 1048576) }, 'MCP server over its memory limit; restarting it');
+        const gen = e.generation;
+        void this.serialize(e, () => this.lost(e, gen, reason));
+      },
+    });
+    this.watchdog.start();
+  }
 
   /** Make the running servers match `servers` (config load and every hot reload). */
   async apply(servers: Record<string, McpServerSettings>): Promise<void> {
@@ -311,6 +337,7 @@ export class McpManager implements PromptSource {
 
   async stopAll(): Promise<void> {
     this.stopping = true;
+    this.watchdog.stop();
     await Promise.all([...this.retiring.values()].map((e) => e.op));
     await Promise.all([...this.entries.values()].map((e) => this.serialize(e, () => this.stopEntry(e, 'shutdown'))));
   }
@@ -383,6 +410,7 @@ export class McpManager implements PromptSource {
       prompts: e.prompts.length,
       resources: e.resources,
       ...(e.pid !== undefined ? { pid: e.pid } : {}),
+      ...(e.pid !== undefined && e.rssBytes !== undefined ? { memoryBytes: e.rssBytes } : {}),
       ...(e.restarts ? { restarts: e.restarts } : {}),
       ...(e.error ? { error: e.error } : {}),
       ...(e.authorizeUrl && e.state === 'auth_required' ? { authorizeUrl: e.authorizeUrl } : {}),
@@ -404,11 +432,12 @@ export class McpManager implements PromptSource {
     if (s.transport === 'stdio') {
       const cwd = s.cwd ? path.resolve(this.o.dataDir, s.cwd) : path.join(this.o.dataDir, 'plugin-data', 'mcp', e.id);
       fs.mkdirSync(cwd, { recursive: true });
-      const env: Record<string, string> = { ...getDefaultEnvironment() };
+      const env: Record<string, string> = { ...getDefaultEnvironment(), ...passthroughEnv() };
       for (const [k, v] of Object.entries(s.env)) env[k] = this.resolve(v);
+      const limited = withLimits(s.command as string, s.args.map((a) => this.resolve(a)), this.o.supervision().limits ?? DEFAULT_PROCESS_LIMITS);
       const t = new StdioClientTransport({
-        command: s.command as string,
-        args: s.args.map((a) => this.resolve(a)),
+        command: limited.command,
+        args: limited.args,
         env,
         cwd,
         stderr: 'pipe',

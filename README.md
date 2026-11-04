@@ -9,7 +9,7 @@ Protea 是一个 **24/7 常驻、事件流驱动、可热插拔** 的云端个�
 
 设计参考了 [Cortico](https://github.com/Pal-AI-Lab/Cortico) 的事件流 harness 思想，完整设计见 [docs/README.md](docs/README.md)，进度见 [路线图](docs/40-plan/01-roadmap.md)。
 
-## 当前状态：M5 控制平面
+## 当前状态：M6 单镜像与加固（v1.0 候选）
 
 已可运行：
 - **M0**：事件库与门禁、批窗口调度、主会话代理循环（Claude，流式 + 自适应思考 + 提示缓存）、append-only 转录与崩溃恢复、console 与 cron 两个内置插件、HTTP 控制 API（含 SSE 实时流）与 CLI。
@@ -19,10 +19,29 @@ Protea 是一个 **24/7 常驻、事件流驱动、可热插拔** 的云端个�
 
 - **M4**：记忆目录 `/data/memory`（`memory` 工具，命令面同 Claude 的 memory tool；全文检索 `memory_search`，中文可搜；`INDEX.md` 进系统前缀）；对话变长时自动交接（cheap 模型写交接笔记，新对话带着最近的消息继续）；人格文件与可选钩子热加载；所有发往模型的请求做秘密扫描。
 - **M5**：Web 控制台（总览、事件流、会话、插件、MCP、Skills、审批、记忆与人格、配置、日志），不用 SSH 就能做 M0–M4 的所有操作；完整的控制 API 与 WebSocket；只读令牌；Prometheus 指标与 Grafana 示例面板；运行目录里的关停记录与崩溃报告；`protea logq` 等全套 CLI。
+- **M6**：Docker 镜像（full 含 Python/uv，slim 只有 Node），非 root 运行、启动前自动迁移并快照数据库、健康检查；预算强制执行与全局硬上限（控制台可临时放行）；外发限速；内置 `shell` 工具（工作区、超时、输出截断、无秘密环境）；插件与 MCP 进程的内存与文件描述符上限；日志的秘密过滤；控制平面地址白名单；在线备份、恢复与 Git 备份；模型调用录制与离线回放；CI（测试、依赖审计、镜像构建、容器冒烟测试、Trivy）。
 
-Docker 镜像按路线图在 M6 实现。
+## 用 Docker 运行
 
-## 快速开始
+镜像还没有发布，先在仓库里构建（默认是 full；`--target slim` 是只含 Node 的变体）：
+
+```bash
+docker build -t protea .
+```
+
+```bash
+docker run -d --name protea -v protea-data:/data -p 127.0.0.1:7788:7788 -e ANTHROPIC_API_KEY=sk-ant-... --stop-timeout 40 --restart unless-stopped protea
+```
+
+控制台在 http://127.0.0.1:7788/ ，管理员令牌：
+
+```bash
+docker exec protea cat /data/secrets/PROTEA_ADMIN_TOKEN
+```
+
+容器里的 CLI 直接可用，例如 `docker exec protea protea status`、`docker exec protea protea backup --archive`。带 Caddy 自动证书的 compose 示例、备份与恢复、升级与回滚见 [docs/10-architecture/16-deployment.md](docs/10-architecture/16-deployment.md)。
+
+## 本地开发运行
 
 需要 Node.js ≥ 22.12 与 pnpm。
 
@@ -88,6 +107,12 @@ PROTEA_DATA_DIR=.dev-data pnpm protea scheduler pause
 
 ```bash
 PROTEA_DATA_DIR=.dev-data pnpm protea logq --level warn --since 1h
+```
+
+预算用尽后，L2 事件只随别的批顺带送达，L3/L4 事件只入库；`budget.hardDailyUsd` 是 24 小时的总上限，到了之后只处理你的消息（L0/L1）。临时放行：
+
+```bash
+PROTEA_DATA_DIR=.dev-data pnpm protea budget release --hours 4
 ```
 
 ## 接入 Telegram
@@ -166,6 +191,10 @@ pnpm protea dev-plugin examples/plugins/ts-notes
 
 ```bash
 pnpm test
+```
+
+```bash
+scripts/container-smoke.sh protea
 ```
 
 ```bash
