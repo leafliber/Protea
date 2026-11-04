@@ -253,6 +253,34 @@ export class PluginHost {
     }
   }
 
+  /**
+   * A plugin's configuration with its schema (null for in-process plugins and plugins without
+   * one). Values of `x-secret` keys that are not `${secret:…}` references are masked.
+   */
+  configOf(id: string): { config: Record<string, unknown>; schema: Record<string, unknown> | null; coldKeys: string[] } | undefined {
+    const e = this.entries.get(id);
+    if (!e) return undefined;
+    const schema = e.loaded?.configSchema ?? null;
+    const props = (schema?.['properties'] ?? {}) as Record<string, Record<string, unknown> | undefined>;
+    const config: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(e.config)) {
+      const secret = props[k]?.['x-secret'] === true;
+      config[k] = secret && !(typeof v === 'string' && /^\$\{secret:[A-Z][A-Z0-9_]*\}$/.test(v)) ? '********' : v;
+    }
+    return { config, schema, coldKeys: e.loaded?.coldKeys ?? [] };
+  }
+
+  /** Manifest facts for the console (display name, description, triggers, declared secrets). */
+  manifestOf(id: string): Record<string, unknown> | undefined {
+    const e = this.entries.get(id);
+    if (!e) return undefined;
+    if (e.inproc) return { id, kind: e.kind, displayName: id, builtIn: true };
+    const m = e.loaded?.manifest as unknown as Record<string, unknown> | undefined;
+    if (!m) return { id, kind: e.kind, errors: e.loaded?.errors ?? [] };
+    const pick = ['id', 'kind', 'version', 'displayName', 'description', 'runtime', 'level', 'triggers', 'secrets', 'hooks', 'skills', 'capabilities'];
+    return { ...Object.fromEntries(pick.filter((k) => m[k] !== undefined).map((k) => [k, m[k]])), dir: e.loaded?.dir, errors: e.loaded?.errors ?? [], warnings: e.loaded?.warnings ?? [] };
+  }
+
   get(id: string): PluginStatus | undefined {
     const e = this.entries.get(id);
     return e ? this.statusOf(e) : undefined;
@@ -417,7 +445,7 @@ export class PluginHost {
     // Copy next to the target and rename, so the directory watcher never sees half a plugin.
     const staging = path.join(path.dirname(dest), `.install-${id}-${process.pid}-${Date.now()}`);
     try {
-      fs.cpSync(src, staging, { recursive: true });
+      fs.cpSync(src, staging, { recursive: true, filter: (p) => path.basename(p) !== '.git' });
       fs.renameSync(staging, dest);
     } catch (err) {
       fs.rmSync(staging, { recursive: true, force: true });

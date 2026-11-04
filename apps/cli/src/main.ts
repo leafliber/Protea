@@ -17,6 +17,7 @@ import {
 } from '@protea/protocol';
 import { api, defaultDataDir, resolveClient, stream, type ClientOptions } from './client.js';
 import { devPlugin } from './dev-plugin.js';
+import { opsCommand } from './ops.js';
 import { bold, dim, formatApproval, formatEvent, formatFork, formatMcp, formatMcpTool, formatPlugin, formatSkill, formatStatus, green, red, yellow } from './format.js';
 
 const HELP = `protea — Protea personal assistant runtime
@@ -29,11 +30,22 @@ Usage:
   protea events tail [--since CURSOR] [--level N] [--source ID]
                                                 follow events, batches and outputs live
   protea events ls [--limit N] [--state S]      list recent events
+  protea events show <cursor>                   an event, its delivery and full text
+  protea events promote <cursor> [--trigger T]  deliver a waiting event sooner (default flush)
+  protea events withdraw <cursor>               withdraw an event that has not reached the model
+  protea batches [ls] [--limit N]               recent batches
+  protea batches show <id>                      a batch: its events and model rounds
+  protea sessions [ls]                          the main session and forks
+  protea sessions handoff [--reason R]          hand the main conversation off now
   protea forks [ls]                             list unfinished and recently ended forks
   protea forks show <id>                        show a fork and its transcript
-  protea forks cancel <id>                      cancel a fork
+  protea forks spawn <goal…> [--level N] [--model fork|main|cheap]
+  protea forks cancel|pause|resume <id>
   protea plugins [ls]                           list plugins and their state
+  protea plugins show <id>                      manifest, tools and configuration
   protea plugins install <dir> [--disabled]     install a plugin directory into the data volume
+  protea plugins install --git URL [--ref R] [--subdir D] | --tarball URL
+  protea plugins logs <id> [--limit N] [--level L]
   protea plugins enable|disable|reload|restart <id>
   protea plugins config <id> <json>             replace a plugin's configuration (validated, saved)
   protea plugins uninstall <id> [--keep-data]   remove a disabled data-volume plugin
@@ -48,11 +60,28 @@ Usage:
   protea mcp auth <id>                          start the OAuth authorization; prints the URL to open
   protea skills [ls]                            list skills (and rejected skill directories)
   protea skills show <name>                     print a skill's SKILL.md and files
-  protea skills install <dir>                   copy a skill directory into the data volume
+  protea skills install <dir> | --git URL [--ref R] [--subdir D]
+                                                install a skill into the data volume
   protea skills enable|disable <name>           show or hide a skill in the catalog
   protea skills rm <name>                       remove an installed skill
   protea approvals [ls] [--state S]             list approval requests
   protea approvals approve|deny <id>            decide an approval request
+  protea config get [path] [--sources [--all]]  effective configuration (secrets redacted) or where values come from
+  protea config set <path> <value>              change config.yaml (validated; JSON values, e.g. 500, true, [1,2])
+  protea config unset <path>
+  protea secrets [ls]                           secret names and where they come from (never values)
+  protea secrets set <NAME>                     store a secret, read from stdin
+  protea secrets rm <NAME>
+  protea scheduler [status] | pause | resume    pause or resume event delivery (events keep being stored)
+  protea scheduler discard --levels 3,4         drop pending events at those levels
+  protea budget                                 spend per level (rolling 24 h)
+  protea memory [ls] | cat <path> | put <path> | search <query…>
+  protea persona [ls] | cat <file> | put <file> SOUL.md, OPERATING.md, USER.md, … (put reads stdin)
+  protea logs [--level L] [--component C] [--plugin P] [--q TEXT] [--since 15m] [--run ID] [--follow] [--json]
+                                                daemon logs through the API (--follow streams over WebSocket)
+  protea logq [same filters] [--run ID | --all] read <data>/runs/*/log.jsonl directly (no daemon needed)
+  protea runs                                   run directories (logs, shutdown records, crash reports)
+  protea audit [--kind K] [--limit N]           side effects, approvals and control API writes
   protea dev-plugin <dir> [--check] [--config JSON] [--owner KEY]
                                                 run a plugin under a minimal host (or check its protocol conformance)
 
@@ -87,6 +116,25 @@ const { values, positionals } = parseArgs({
     bearer: { type: 'string' },
     oauth: { type: 'boolean' },
     trust: { type: 'string' },
+    git: { type: 'string' },
+    ref: { type: 'string' },
+    subdir: { type: 'string' },
+    tarball: { type: 'string' },
+    reason: { type: 'string' },
+    levels: { type: 'string' },
+    model: { type: 'string' },
+    component: { type: 'string' },
+    plugin: { type: 'string' },
+    q: { type: 'string' },
+    run: { type: 'string' },
+    kind: { type: 'string' },
+    batch: { type: 'string' },
+    session: { type: 'string' },
+    tool: { type: 'string' },
+    follow: { type: 'boolean', short: 'f' },
+    json: { type: 'boolean' },
+    sources: { type: 'boolean' },
+    all: { type: 'boolean' },
     help: { type: 'boolean', short: 'h' },
     version: { type: 'boolean', short: 'v' },
   },
@@ -215,7 +263,11 @@ async function tail(): Promise<void> {
                 ? (data['cursors'] as number[]).map((c) => `#${c}`).join(' ')
                 : kind === 'storm_cooldown'
                   ? String(data['source'])
-                  : (data['forkIds'] as string[]).join(' ');
+                  : kind === 'paused' || kind === 'resumed'
+                    ? `by ${String(data['by'])}`
+                    : kind === 'discarded'
+                      ? `${(data['cursors'] as number[]).length} event(s) at L${(data['levels'] as number[]).join(',')} by ${String(data['by'])}`
+                      : (data['forkIds'] as string[]).join(' ');
           console.log(yellow(`  ⚡ ${kind} ${detail}`));
           break;
         }
@@ -445,6 +497,8 @@ async function main(): Promise<number> {
     console.log(HELP);
     return cmd ? 0 : 1;
   }
+  const handled = await opsCommand(cmd, sub, rest, values, client);
+  if (handled !== null) return handled;
   switch (cmd) {
     case 'serve':
       await serve();

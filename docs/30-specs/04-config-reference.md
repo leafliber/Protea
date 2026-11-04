@@ -1,10 +1,10 @@
 # 规范：配置参考
 
-> 状态：Accepted（M0–M4 部分）· 更新：2026-11-03 · 设计：[../10-architecture/16-deployment.md](../10-architecture/16-deployment.md) §4
+> 状态：Accepted（M0–M5 部分）· 更新：2026-11-04 · 设计：[../10-architecture/16-deployment.md](../10-architecture/16-deployment.md) §4
 
 配置文件 `/data/config.yaml`，首次启动时写入一份带注释的模板。所有键都有默认值。层叠顺序（后者覆盖前者）：内置默认 → `config.yaml` → `PROTEA_*` 环境变量。对象逐层合并，数组与标量整体替换。
 
-## 1. 已生效的键（M0–M4）
+## 1. 已生效的键（M0–M5）
 
 ```yaml
 daemon:
@@ -15,7 +15,9 @@ daemon:
 control:
   listen: 0.0.0.0:7788                 # "host:port"；端口 0 表示随机
   adminTokenSecret: PROTEA_ADMIN_TOKEN # 秘密名；缺失时自动生成
+  readonlyTokenSecret: PROTEA_READONLY_TOKEN # 这个秘密存在时，它的值是只读令牌（GET 与 WS 订阅；M5）
   publicUrl: null                      # 浏览器访问控制平面的地址（MCP OAuth 回调）；null 时取实际监听地址
+  publicMetrics: false                 # true：/metrics 不需要令牌（只用于私有网络；M5）
 
 owner:
   identities:                          # 只有匹配的 (plugin, senderKey) 能产生 L1 事件
@@ -145,20 +147,22 @@ persona:
   dir: persona                         # 人格目录，相对数据目录
 
 observability:
-  logLevel: info                       # trace | debug | info | warn | error | silent
+  logLevel: info                       # 终端级别：trace | debug | info | warn | error | silent；log.jsonl 与内存缓冲总是 debug 起
   logFormat: auto                      # auto（TTY 下 pretty）| json | pretty；运行目录里的 log.jsonl 总是 JSON
   logEventText: false
+  keepRuns: 20                         # /data/runs 下保留的运行目录数（M5）
+  requiredPlugins: []                  # 这些插件不在 running 时 /readyz 不就绪（M5）
 ```
 
 ## 2. 计划中的键（后续里程碑）
 
 | 键 | 里程碑 |
 |---|---|
-| `scheduler.retention`（已结束 Fork 转录与事件的保留期） | M5 |
+| `scheduler.retention`（已结束 Fork 转录与事件的保留期） | M6 |
 | `budget.enforce`（耗尽时降级/存储） | M6 |
 | `permissions.conditions`（按批等级/参数/时间窗）、`permissions.egress` | M6 |
 | `pluginHost.resources`（插件内存/CPU 上限） | M6 |
-| `control.allowCidrs`、`control.readonlyTokenSecret`、`observability.metrics`、`observability.otlp` | M5 |
+| `control.allowCidrs`、`observability.otlp` | M6 |
 
 ## 3. 环境变量映射
 
@@ -179,7 +183,8 @@ observability:
 | `mcp.servers.<id>` | 新增 → 启动；删除 → 停止并移除工具；改动 → 重启该服务器 |
 | `skills` | 立即重扫，目录在下一个回合边界更新 |
 | `context.toolSearch`、`context.handoff`、`context.compaction` | 下一次模型请求生效 |
+| `budget` | 立即（M5 起；下一次状态查询与阈值检查用新值） |
 | `persona/` 目录里的文件（不是配置键） | 下一次模型请求生效（目录监视） |
-| 其他部分 | 需要重启，日志会列出改动了哪些部分 |
+| 其他部分（包括 `control`） | 需要重启，日志会列出改动了哪些部分；`PATCH /api/config` 在 `restartRequired` 里返回它们 |
 
-通过 API 或 CLI 做的修改（插件的启用、禁用、卸载、`PATCH /api/plugins/:id/config`；MCP 服务器的增删与启停；Skill 的启用/禁用）会写回 `config.yaml`。写入用 YAML 文档模型，保留注释与格式，并以"临时文件 + rename"原子替换。环境变量覆盖的值不会被文件改动覆盖。
+通过 API 或 CLI 做的修改（插件的启用、禁用、卸载、`PATCH /api/plugins/:id/config`；MCP 服务器的增删与启停；Skill 的启用/禁用；M5 起任意键：`PATCH /api/config`、`protea config set`）会写回 `config.yaml`。`PATCH /api/config` 是 JSON Merge Patch，与环境变量层合并后整体校验，通过才写入，随即重载（不等文件监视）。写入用 YAML 文档模型，保留注释与格式，并以"临时文件 + rename"原子替换。环境变量覆盖的值不会被文件改动覆盖。

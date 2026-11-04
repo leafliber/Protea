@@ -2,7 +2,8 @@
 
 export type RunPhase = 'idle' | 'delivering' | 'model' | 'tools' | 'backoff' | 'handoff';
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-export type ModelRole = 'main' | 'fork' | 'cheap';
+export const MODEL_ROLES = ['main', 'fork', 'cheap'] as const;
+export type ModelRole = (typeof MODEL_ROLES)[number];
 
 /**
  * Content blocks use the Anthropic Messages shape as the canonical form.

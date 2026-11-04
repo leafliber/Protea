@@ -1,0 +1,124 @@
+import { useEffect, useRef, useState } from 'react';
+import type { WsServerMessage, WsTopic } from '@protea/protocol';
+
+type Handler = (m: WsServerMessage) => void;
+export type LiveState = 'connecting' | 'open' | 'closed';
+
+/**
+ * One WebSocket for the whole console (`/ws`, cookie-authenticated), subscribed to every
+ * topic, reconnecting with backoff. Pages register handlers by message topic.
+ */
+class Live {
+  private ws: WebSocket | null = null;
+  private readonly handlers = new Map<string, Set<Handler>>();
+  private readonly stateListeners = new Set<(s: LiveState) => void>();
+  private stateValue: LiveState = 'closed';
+  private retry = 0;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private wanted = false;
+  /** Highest event cursor seen, so a reconnect replays what was missed. */
+  private lastCursor: number | null = null;
+  runId: string | null = null;
+
+  start(): void {
+    this.wanted = true;
+    if (!this.ws) this.connect();
+  }
+
+  stop(): void {
+    this.wanted = false;
+    if (this.timer) clearTimeout(this.timer);
+    this.ws?.close();
+    this.ws = null;
+  }
+
+  get state(): LiveState {
+    return this.stateValue;
+  }
+
+  private setState(s: LiveState): void {
+    this.stateValue = s;
+    for (const fn of this.stateListeners) fn(s);
+  }
+
+  private connect(): void {
+    const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
+    const ws = new WebSocket(url);
+    this.ws = ws;
+    this.setState('connecting');
+    ws.onopen = () => {
+      this.retry = 0;
+      const topics: WsTopic[] = ['events', 'phase', 'scheduler', 'output', 'changes', 'usage', 'logs'];
+      ws.send(JSON.stringify({ subscribe: topics, ...(this.lastCursor !== null ? { since: this.lastCursor } : {}), logFilter: { level: 'info' } }));
+      this.setState('open');
+    };
+    ws.onmessage = (ev) => {
+      let m: WsServerMessage;
+      try {
+        m = JSON.parse(String(ev.data)) as WsServerMessage;
+      } catch {
+        return;
+      }
+      if (m.topic === 'hello') {
+        // A new daemon run: cursors continue, but replay from where we were is still right.
+        this.runId = m.data.runId;
+      }
+      if (m.topic === 'event') this.lastCursor = Math.max(this.lastCursor ?? 0, m.data.cursor);
+      for (const fn of this.handlers.get(m.topic) ?? []) fn(m);
+      for (const fn of this.handlers.get('*') ?? []) fn(m);
+    };
+    ws.onclose = () => {
+      this.ws = null;
+      this.setState('closed');
+      if (!this.wanted) return;
+      const delay = Math.min(30_000, 500 * 2 ** this.retry++);
+      this.timer = setTimeout(() => this.connect(), delay);
+    };
+    ws.onerror = () => ws.close();
+  }
+
+  on(topics: string | string[], fn: Handler): () => void {
+    const list = Array.isArray(topics) ? topics : [topics];
+    for (const t of list) {
+      let set = this.handlers.get(t);
+      if (!set) this.handlers.set(t, (set = new Set()));
+      set.add(fn);
+    }
+    return () => {
+      for (const t of list) this.handlers.get(t)?.delete(fn);
+    };
+  }
+
+  onState(fn: (s: LiveState) => void): () => void {
+    this.stateListeners.add(fn);
+    return () => this.stateListeners.delete(fn);
+  }
+}
+
+export const live = new Live();
+
+/** Call `fn` for live messages of these topics (the latest `fn` is used). */
+export function useLive(topics: string | string[], fn: Handler): void {
+  const ref = useRef(fn);
+  ref.current = fn;
+  const key = Array.isArray(topics) ? topics.join(',') : topics;
+  useEffect(() => live.on(key.split(','), (m) => ref.current(m)), [key]);
+}
+
+export function useLiveState(): LiveState {
+  const [s, setS] = useState<LiveState>(live.state);
+  useEffect(() => live.onState(setS), []);
+  return s;
+}
+
+/** Re-run `reload` (debounced) whenever one of these topics arrives. */
+export function useReloadOn(topics: string | string[], reload: () => void, delayMs = 300): void {
+  const t = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useLive(topics, () => {
+    if (t.current) clearTimeout(t.current);
+    t.current = setTimeout(reload, delayMs);
+  });
+  useEffect(() => () => {
+    if (t.current) clearTimeout(t.current);
+  }, []);
+}

@@ -61,6 +61,8 @@ Core 自身事件的 `source` 固定为 `core`，`type` 以子系统为前缀（
 | `session.preempted` | L4 store | 模型调用被 `preempt` 取消并以合并后的事件重发（只记录） |
 | `scheduler.aged` | L4 store | 等待超过 `maxWaitMs` 的事件被提升为 `flush`（只记录） |
 | `scheduler.storm_cooldown` | L4 piggyback | 某来源触发抢占风暴，进入冷却 |
+| `scheduler.paused` / `scheduler.resumed` | L4 store / piggyback | 运营者暂停或恢复了事件投递（M5，控制 API） |
+| `scheduler.discarded` | L4 store | 运营者清空了某些等级的 pending 事件（M5） |
 | `budget.threshold` | L4 piggyback | 某等级 24 h 花费越过 `warnAt` 或 100%（M1 只统计、不限制） |
 | `plugin.crashed` | L4 store | 插件进程意外退出，正在退避重启（只记录） |
 | `plugin.failed` | L2 flush | 插件连续崩溃达到上限，已停止；其工具不可用 |

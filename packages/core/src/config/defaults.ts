@@ -8,7 +8,7 @@ import type { ProteaConfig } from './types.js';
 export function defaultConfig(): ProteaConfig {
   return {
     daemon: { timezone: defaultTimeZone(), language: 'zh', shutdown: { graceMs: 25_000 } },
-    control: { listen: '0.0.0.0:7788', adminTokenSecret: 'PROTEA_ADMIN_TOKEN', publicUrl: null },
+    control: { listen: '0.0.0.0:7788', adminTokenSecret: 'PROTEA_ADMIN_TOKEN', readonlyTokenSecret: 'PROTEA_READONLY_TOKEN', publicUrl: null, publicMetrics: false },
     owner: { identities: [{ plugin: 'console', senderKey: '*' }] },
     scheduler: {
       levels: {
@@ -56,7 +56,7 @@ export function defaultConfig(): ProteaConfig {
     },
     memory: { nativeTool: false },
     persona: { dir: 'persona' },
-    observability: { logLevel: 'info', logFormat: 'auto', logEventText: false },
+    observability: { logLevel: 'info', logFormat: 'auto', logEventText: false, keepRuns: 20, requiredPlugins: [] },
   };
 }
 
@@ -103,4 +103,13 @@ export const STARTER_CONFIG_YAML = `# Protea configuration. Every key is optiona
 #   handoff:                  # when the conversation grows too long it is handed off to a new one
 #     softTokens: 200000      # at the start of a batch above this; the newest third is carried over
 #     hardTokens: null        # before any request above this (null: context window - max output - 5 %)
+
+# control:
+#   listen: 0.0.0.0:7788      # the web console is at http://<host>:7788/ (sign in with the admin token)
+#   publicMetrics: false      # true serves /metrics without a token (private networks only)
+#                             # a secret PROTEA_READONLY_TOKEN enables a read-only token for dashboards
+
+# observability:
+#   keepRuns: 20              # run directories (log.jsonl, crash reports) kept under /data/runs
+#   requiredPlugins: []       # plugins that must be running for /readyz, e.g. [telegram]
 `;

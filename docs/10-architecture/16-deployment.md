@@ -94,6 +94,8 @@ entrypoint.sh
 ## 6. 云端注意事项
 
 - **出站为主**：Telegram 长轮询、IMAP、RSS、Anthropic API 都只需出站；没有 Webhook 时可以不暴露任何入站端口，控制台通过 SSH 隧道访问。
+- **控制台**：守护进程在同一端口的 `/` 托管构建好的控制台（镜像里的 `apps/web/dist`，`PROTEA_WEB_DIR` 可改），用管理员令牌登录。
+- **监控**：Prometheus 抓 `/metrics`，用只读令牌（秘密 `PROTEA_READONLY_TOKEN`）作 Bearer；示例抓取配置与 Grafana 面板在仓库的 `docker/observability/`。
 - **TLS**：需要公网访问控制台或 Webhook 时，用 Caddy/Traefik 做反向代理与自动证书；Protea 自身不终止 TLS。
 - **资源**：最小 1 vCPU / 1 GB；MCP 服务器多时建议 2 GB。SQLite 与转录增长缓慢（每天几十 MB 量级，视事件量）。
 - **时区**：`TZ` 环境变量；事件 `ts` 一律带时区偏移。
@@ -114,6 +116,6 @@ entrypoint.sh
 
 ## 9. 开发环境
 
-- 本地：`pnpm dev` 以热重载启动守护进程，`/data` 指向 `./.dev-data`。
+- 本地：`pnpm dev` 以热重载启动守护进程，`/data` 指向 `./.dev-data`；控制台先 `pnpm build` 一次，或用 `pnpm web` 起 Vite 开发服务器（把 `/api` 与 `/ws` 转给 `PROTEA_URL`，默认 `http://127.0.0.1:7788`）。
 - 容器内调试：`docker exec -it protea protea status`。
 - 插件开发：`protea dev-plugin ./my-plugin`，或在控制台把插件目录挂到 `/data/plugins` 后使用"重载"。

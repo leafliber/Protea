@@ -9,7 +9,7 @@ Protea 是一个 **24/7 常驻、事件流驱动、可热插拔** 的云端个�
 
 设计参考了 [Cortico](https://github.com/Pal-AI-Lab/Cortico) 的事件流 harness 思想，完整设计见 [docs/README.md](docs/README.md)，进度见 [路线图](docs/40-plan/01-roadmap.md)。
 
-## 当前状态：M4 记忆、交接、人格
+## 当前状态：M5 控制平面
 
 已可运行：
 - **M0**：事件库与门禁、批窗口调度、主会话代理循环（Claude，流式 + 自适应思考 + 提示缓存）、append-only 转录与崩溃恢复、console 与 cron 两个内置插件、HTTP 控制 API（含 SSE 实时流）与 CLI。
@@ -18,8 +18,9 @@ Protea 是一个 **24/7 常驻、事件流驱动、可热插拔** 的云端个�
 - **M3**：MCP 客户端（stdio、Streamable HTTP、SSE；bearer 与 OAuth；运行中增删，工具名 `mcp__<服务器>__<工具>`）；工具很多时启用 Claude 的工具搜索，MCP 工具按需加载；Skills 注册表（`SKILL.md`，热加载、`skill_load`）与 3 个内置 Skills；内置来源 `rss`、`imap`。
 
 - **M4**：记忆目录 `/data/memory`（`memory` 工具，命令面同 Claude 的 memory tool；全文检索 `memory_search`，中文可搜；`INDEX.md` 进系统前缀）；对话变长时自动交接（cheap 模型写交接笔记，新对话带着最近的消息继续）；人格文件与可选钩子热加载；所有发往模型的请求做秘密扫描。
+- **M5**：Web 控制台（总览、事件流、会话、插件、MCP、Skills、审批、记忆与人格、配置、日志），不用 SSH 就能做 M0–M4 的所有操作；完整的控制 API 与 WebSocket；只读令牌；Prometheus 指标与 Grafana 示例面板；运行目录里的关停记录与崩溃报告；`protea logq` 等全套 CLI。
 
-控制台与 Docker 镜像按路线图在 M5–M6 实现。
+Docker 镜像按路线图在 M6 实现。
 
 ## 快速开始
 
@@ -57,6 +58,36 @@ PROTEA_DATA_DIR=.dev-data pnpm protea events push "停下，先回答我" --trig
 
 ```bash
 PROTEA_DATA_DIR=.dev-data pnpm protea forks
+```
+
+## 控制台
+
+守护进程在同一端口托管 Web 控制台。先构建一次：
+
+```bash
+pnpm build
+```
+
+然后打开 http://127.0.0.1:7788/ ，用管理员令牌登录（在 `.dev-data/secrets/PROTEA_ADMIN_TOKEN`）。改控制台代码时用 Vite 开发服务器，它把 API 转给正在运行的守护进程：
+
+```bash
+pnpm web
+```
+
+不在本机访问时请放在 TLS 反向代理后面；控制台在明文 HTTP 的非本机地址上会一直显示提示。只给监控面板看的话，把一个值存为秘密 `PROTEA_READONLY_TOKEN`，它只能读。Prometheus 抓取 `/metrics`（需要令牌），示例配置与 Grafana 面板在 [docker/observability/](docker/observability/)。
+
+常用的运维命令也都有 CLI：
+
+```bash
+PROTEA_DATA_DIR=.dev-data pnpm protea config set budget.dailyUsd 5
+```
+
+```bash
+PROTEA_DATA_DIR=.dev-data pnpm protea scheduler pause
+```
+
+```bash
+PROTEA_DATA_DIR=.dev-data pnpm protea logq --level warn --since 1h
 ```
 
 ## 接入 Telegram
@@ -111,11 +142,13 @@ PROTEA_DATA_DIR=.dev-data pnpm protea skills
 
 人格在 `.dev-data/persona/`：`SOUL.md`（是谁）、`OPERATING.md`（怎么做事）、`USER.md`（关于你）。改完从下一次模型请求生效。需要代码时可以加 `persona/hooks.mjs`（例如自定义交接），见 [docs/10-architecture/11-memory-and-persona.md](docs/10-architecture/11-memory-and-persona.md) §6。
 
-对话超过 `context.handoff.softTokens`（默认 200k token）时会交接：较早的部分写成 `memory/handoff/` 下的笔记，新对话带着最近的消息继续。也可以手动触发：
+对话超过 `context.handoff.softTokens`（默认 200k token）时会交接：较早的部分写成 `memory/handoff/` 下的笔记，新对话带着最近的消息继续。也可以在控制台的"会话"页手动触发，或者：
 
 ```bash
-curl -X POST -H "Authorization: Bearer $(cat .dev-data/secrets/PROTEA_ADMIN_TOKEN)" http://127.0.0.1:7788/api/sessions/main/handoff
+PROTEA_DATA_DIR=.dev-data pnpm protea sessions handoff
 ```
+
+记忆与人格文件都能在控制台的"记忆与人格"页浏览和编辑。
 
 ## 写一个插件
 

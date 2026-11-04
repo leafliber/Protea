@@ -110,8 +110,12 @@ export interface MemorySettings {
 
 export interface ProteaConfig {
   daemon: { timezone: string; language: string; shutdown: { graceMs: number } };
-  /** `publicUrl`: how a browser reaches the control plane (OAuth redirects); null derives it from `listen`. */
-  control: { listen: string; adminTokenSecret: string; publicUrl: string | null };
+  /**
+   * `publicUrl`: how a browser reaches the control plane (OAuth redirects); null derives it from `listen`.
+   * `readonlyTokenSecret`: a secret that, when set, is a token for GET and WebSocket only.
+   * `publicMetrics`: serve /metrics without a token (a scraper on a private network).
+   */
+  control: { listen: string; adminTokenSecret: string; readonlyTokenSecret: string; publicUrl: string | null; publicMetrics: boolean };
   owner: { identities: OwnerIdentity[] };
   scheduler: { levels: Record<Level, LevelSettings>; preemptStorm: PreemptStormSettings; forks: ForkSchedulerSettings };
   budget: BudgetSettings;
@@ -130,5 +134,9 @@ export interface ProteaConfig {
   memory: MemorySettings;
   /** Persona directory, relative to the data directory. */
   persona: { dir: string };
-  observability: { logLevel: string; logFormat: 'json' | 'pretty' | 'auto'; logEventText: boolean };
+  /**
+   * `keepRuns`: run directories (logs, crash reports) kept under <data>/runs.
+   * `requiredPlugins`: plugin ids that must be running for /readyz.
+   */
+  observability: { logLevel: string; logFormat: 'json' | 'pretty' | 'auto'; logEventText: boolean; keepRuns: number; requiredPlugins: string[] };
 }

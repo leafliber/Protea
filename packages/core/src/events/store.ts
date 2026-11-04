@@ -210,6 +210,17 @@ export class EventStore {
     return e;
   }
 
+  /**
+   * Withdraw an event that has not reached the model yet (control API). Returns the settled
+   * envelope, or undefined when it is in flight, already settled or unknown.
+   */
+  withdraw(cursor: number): EventEnvelope | undefined {
+    const e = this.get(cursor);
+    if (!e || (e.state !== 'pending' && e.state !== 'archived')) return undefined;
+    if (this.settle([cursor], 'withdrawn').length === 0) return undefined;
+    return this.get(cursor);
+  }
+
   revertToPending(cursors: readonly number[]): void {
     const stmt = this.db.prepare("UPDATE events SET state = 'pending', batch_id = NULL WHERE cursor = ? AND state = 'delivering'");
     this.db.transaction(() => {

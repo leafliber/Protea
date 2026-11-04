@@ -28,6 +28,8 @@ export interface LoadedManifest {
   warnings: string[];
   /** Compiled config schema, if the manifest has one. */
   validateConfig?: ValidateFunction;
+  /** The schema itself (the console builds a form from it). */
+  configSchema?: Record<string, unknown>;
   /** Top-level config keys marked `x-hot: false` (changing them reloads the plugin). */
   coldKeys: string[];
   /** Absolute path of the environment prompt template, if the file exists. */
@@ -157,6 +159,7 @@ export function loadManifest(dir: string, origin: LoadedManifest['origin']): Loa
       try {
         const schema = JSON.parse(fs.readFileSync(schemaFile, 'utf8')) as Record<string, unknown>;
         out.validateConfig = ajv.compile(schema);
+        out.configSchema = schema;
         const props = (schema['properties'] ?? {}) as Record<string, Record<string, unknown>>;
         out.coldKeys = Object.entries(props)
           .filter(([, p]) => p && p['x-hot'] === false)

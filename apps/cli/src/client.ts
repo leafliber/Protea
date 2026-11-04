@@ -32,13 +32,18 @@ export function resolveClient(flags: { url?: string; token?: string; dataDir?: s
   return { url, token };
 }
 
-export async function api<T>(o: ClientOptions, method: string, p: string, body?: unknown): Promise<T> {
+/** JSON request; a string body with `text: true` is sent as plain text (secrets, memory and persona files). */
+export async function api<T>(o: ClientOptions, method: string, p: string, body?: unknown, opts: { text?: boolean } = {}): Promise<T> {
   let res: Response;
+  const plain = opts.text === true && typeof body === 'string';
   try {
     res = await fetch(`${o.url}${p}`, {
       method,
-      headers: { authorization: `Bearer ${o.token}`, ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      headers: {
+        authorization: `Bearer ${o.token}`,
+        ...(body !== undefined ? { 'content-type': plain ? 'text/plain; charset=utf-8' : 'application/json' } : {}),
+      },
+      ...(body !== undefined ? { body: plain ? (body as string) : JSON.stringify(body) } : {}),
     });
   } catch (err) {
     throw new Error(`cannot reach the daemon at ${o.url}: ${(err as Error).message}`);
@@ -89,4 +94,11 @@ export async function* stream(o: ClientOptions, p: string, signal: AbortSignal):
   const res = await fetch(`${o.url}${p}`, { headers: { authorization: `Bearer ${o.token}`, accept: 'text/event-stream' }, signal });
   if (!res.ok || !res.body) throw new ApiError(res.status, `GET ${p}: ${res.status} ${res.statusText}`);
   yield* parseSse(res.body as unknown as AsyncIterable<Uint8Array>);
+}
+
+/** Read all of stdin (secret values, file contents). */
+export async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk as Uint8Array));
+  return Buffer.concat(chunks).toString('utf8');
 }

@@ -10,12 +10,13 @@
   },
   "scripts": {
     "build": "pnpm -r run build",
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p apps/web/tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "dev": "PROTEA_DATA_DIR=.dev-data PROTEA_DEV=1 node --conditions=source --import tsx apps/cli/src/main.ts serve",
     "protea": "node --conditions=source --import tsx apps/cli/src/main.ts",
-    "clean": "rm -rf packages/*/dist plugins/*/dist apps/*/dist"
+    "clean": "rm -rf packages/*/dist plugins/*/dist apps/*/dist",
+    "web": "pnpm --filter @protea/web dev"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",

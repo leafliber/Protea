@@ -53,6 +53,7 @@ type Listener<K extends BusTopic> = (data: BusTopics[K]) => void;
  */
 export class Bus {
   private readonly listeners = new Map<BusTopic, Set<Listener<BusTopic>>>();
+  private readonly taps = new Set<(topic: BusTopic, data: unknown) => void>();
 
   constructor(private readonly onListenerError: (topic: string, err: unknown) => void = () => {}) {}
 
@@ -66,7 +67,20 @@ export class Bus {
     return () => set.delete(fn as Listener<BusTopic>);
   }
 
+  /** See every record on every topic (the crash trail, the WebSocket fan-out). */
+  tap(fn: (topic: BusTopic, data: unknown) => void): () => void {
+    this.taps.add(fn);
+    return () => this.taps.delete(fn);
+  }
+
   emit<K extends BusTopic>(topic: K, data: BusTopics[K]): void {
+    for (const fn of this.taps) {
+      try {
+        fn(topic, data);
+      } catch (err) {
+        this.onListenerError(topic, err);
+      }
+    }
     const set = this.listeners.get(topic);
     if (!set) return;
     for (const fn of [...set]) {

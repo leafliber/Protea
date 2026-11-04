@@ -33,22 +33,23 @@ export interface LoggerOptions {
   format?: LogFormat;
   /** Also append JSON lines to this file (the run's log.jsonl). */
   file?: string;
+  /** Extra destinations that get every line at debug level and above (the in-memory LogRing). */
+  sinks?: Array<{ write(s: string): void }>;
   base?: Record<string, unknown>;
 }
 
 export function createLogger(opts: LoggerOptions = {}): Logger {
   const level = opts.level ?? 'info';
   const format = opts.format === 'auto' || opts.format === undefined ? (process.stdout.isTTY ? 'pretty' : 'json') : opts.format;
-  const streams: { stream: { write(s: string): void }; level: pino.Level }[] = [
-    { stream: format === 'pretty' ? new PrettyStream() : process.stdout, level: level as pino.Level },
-  ];
+  const streams: { stream: { write(s: string): void }; level: pino.Level }[] = [];
+  // "silent" quiets the terminal only; the run's file and in-memory sinks still get everything.
+  if (level !== 'silent') streams.push({ stream: format === 'pretty' ? new PrettyStream() : process.stdout, level: level as pino.Level });
   if (opts.file) {
     streams.push({ stream: fs.createWriteStream(opts.file, { flags: 'a' }), level: 'debug' });
   }
-  return pino(
-    { level: level === 'silent' ? 'silent' : 'debug', base: opts.base ?? {}, timestamp: pino.stdTimeFunctions.epochTime },
-    level === 'silent' ? undefined : pino.multistream(streams),
-  );
+  for (const sink of opts.sinks ?? []) streams.push({ stream: sink, level: 'debug' });
+  if (streams.length === 0) return pino({ level: 'silent' });
+  return pino({ level: 'debug', base: opts.base ?? {}, timestamp: pino.stdTimeFunctions.epochTime }, pino.multistream(streams));
 }
 
 export function silentLogger(): Logger {

@@ -1,76 +1,93 @@
 # 规范：控制 API
 
-> 状态：Draft（M0–M4 部分已实现，见文末）· 更新：2026-11-03 · 设计：[../10-architecture/13-control-plane.md](../10-architecture/13-control-plane.md)
+> 状态：Accepted（M5）· 更新：2026-11-04 · 设计：[../10-architecture/13-control-plane.md](../10-architecture/13-control-plane.md)
 
-基址 `http://host:7788`。JSON；错误形态 `{ error: { code, message, details? } }`。鉴权 `Authorization: Bearer <token>`。分页用 `?cursor=&limit=`（事件按游标）或 `?page=&size=`。
+基址 `http://host:7788`。JSON；错误形态 `{ error: { code, message, details? } }`。鉴权 `Authorization: Bearer <token>` 或控制台会话 cookie（见"鉴权"）。分页：事件用 `?cursor=&limit=`（返回 `nextCursor`），批用 `?before=&limit=`。类型定义在 `@protea/protocol`（`control.ts`）。
+
+## 鉴权
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/auth/login` | `{ token }`（管理员或只读令牌）→ `{ role }`，并设置 cookie `protea_session`（HttpOnly、SameSite=Strict、Path=/、HTTPS 下 Secure、30 天）。失败 401；同一地址 1 分钟内失败 10 次后 429。**不需要令牌** |
+| POST | `/api/auth/logout` | 清除 cookie |
+| GET | `/api/auth/whoami` | `{ role: admin\|readonly, via: bearer\|cookie }`；未登录 401 |
+
+- `admin`：全部操作。`readonly`（秘密 `PROTEA_READONLY_TOKEN` 存在时）：只有 GET 与 WS 订阅，且 `/api/memory*`、`/api/persona*`、`/api/secrets*` 返回 403。
+- 用 cookie 鉴权的非 GET 请求必须带 `x-protea-csrf: 1`，否则 403 `csrf`。
+- 所有非 GET 请求（鉴权通过之后）记审计 `control_write`：`summary` 为 `METHOD /path`，`owner` 为 `api:<role>` 或 `console:<role>`，`outcome` 为状态码。
 
 ## 状态
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/healthz` | 存活 |
-| GET | `/readyz` | 就绪（含原因列表） |
-| GET | `/metrics` | Prometheus |
-| GET | `/api/status` | `StatusResponse`：`{ runId, version, startedAt, uptimeSec, phase, batchId, pending: {0..4}, provider, plugins, mcp, skills, tools, context, memory, persona, usage24h, forks: ForkInfo[], budget: { enforced, dailyUsd, levels: {0..4: { spentUsd, tokens, limitUsd, usedRatio }} } }` |
+| GET | `/healthz` | 存活。不需要令牌 |
+| GET | `/readyz` | `{ ready, reasons }`，不就绪 503：Provider 未就绪、已启用但 failed 的插件或 MCP 服务器、`observability.requiredPlugins` 中没有 running 的插件、SQLite 拿不到写锁、投递被暂停。不需要令牌 |
+| GET | `/metrics` | Prometheus 文本格式（[15-observability.md](../10-architecture/15-observability.md) §3）；需要令牌（只读即可），`control.publicMetrics: true` 时不需要 |
+| GET | `/api/status` | `StatusResponse`：`{ runId, version, startedAt, uptimeSec, phase, batchId, pending: {0..4}, provider, plugins, mcp, skills, tools, context, memory, persona, usage24h, scheduler: { paused, cooldowns }, forks: ForkInfo[], budget: { enforced, dailyUsd, levels: {0..4: { spentUsd, tokens, limitUsd, usedRatio }} } }` |
 
-## 事件
+## 事件与批
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/events?level=&source=&state=&since=&until=&cursor=&limit=` | 列表 |
-| GET | `/api/events/:cursor` | 信封 + 投递记录 |
-| POST | `/api/events` | 推送（来源固定为 `console`，senderKey 为令牌主体；等级 ≤ 1） |
-| POST | `/api/events/:cursor/promote` | `{ trigger }` |
-| POST | `/api/events/:cursor/withdraw` | |
-| GET | `/api/batches?limit=` · `/api/batches/:id` | 批与回合 |
+| GET | `/api/events?level=&source=&state=&type=&since=&until=&cursor=&limit=&order=` | `{ events, nextCursor }`。默认新的在前；`cursor` 取比它旧的一页，`nextCursor` 为 null 表示没有更多。`level` 是最大等级，`state` 可逗号分隔，`limit` ≤ 1000 |
+| GET | `/api/events/:cursor` | `{ event, delivery }`（信封 + 投递记录） |
+| POST | `/api/events` | 推送 `{ text, level?, trigger?, tags? }`（来源固定为 `console`，senderKey 为 `api:admin` 或 `console:admin`）→ 201 `PushEventResponse` |
+| POST | `/api/events/:cursor/promote` | `{ trigger }`（默认 `flush`，不接受 `store`）→ `{ event }`；只对 pending/archived 事件，否则 409 |
+| POST | `/api/events/:cursor/withdraw` | → `{ event }`（状态 `withdrawn`）；在途或已结束的事件 409 |
+| GET | `/api/batches?limit=&before=&session=` | `{ batches: BatchInfo[] }`，新的在前；`BatchInfo`：`{ id, level, reason, sessionId, startedAt, endedAt, rounds, endReason }` |
+| GET | `/api/batches/:id` | `{ batch, events, rounds: UsageInfo[] }`（批里的事件与每次模型调用） |
 
 ## 会话
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/sessions` | 主会话 + Fork 列表（`{ sessions: [{ id: 'main', kind, phase, batchId }, { kind: 'fork', ...ForkInfo }] }`） |
-| GET | `/api/sessions/:id/transcript?from=&limit=&thinking=summary\|none` | 转录；`:id` 为 `main` 或 Fork id（M1 未实现 `thinking` 参数） |
+| GET | `/api/sessions/:id/transcript?from=&limit=&thinking=summary\|none` | `{ total, from, messages }`；`:id` 为 `main` 或 Fork id；`summary`（默认）保留思考文本但去掉签名，`none` 去掉思考块 |
 | GET | `/api/sessions/forks` · `/api/sessions/forks/:id` | Fork 列表（未结束的 + 最近 10 个已结束的）、详情（`ForkInfo`） |
 | POST | `/api/sessions/main/handoff` | 手动交接 `{ reason? }`：空闲时立即执行，返回 `{ handedOff, transcript?, notes?, dropped?, kept? }`（没有可丢弃的内容时 `handedOff: false`）；忙时 202 `{ scheduled: true }`，在下一批开始时执行 |
-| POST | `/api/sessions/forks` | 派生 Fork（ForkOptions） |
-| POST | `/api/sessions/forks/:id/cancel` · `/pause` · `/resume` | 返回 `ForkInfo`；对已结束的 Fork 无副作用 |
+| POST | `/api/sessions/forks` | `{ goal, level?(默认 3), model?: fork\|main\|cheap, context?, tools?, maxTurns?, reportTo?: main\|none }` → 201 `ForkInfo`；被拒（并发上限等）422 |
+| POST | `/api/sessions/forks/:id/cancel` · `/pause` · `/resume` | 返回 `ForkInfo`。`pause`：运行中的在下一个边界停下、排队的不再启动（`pauseReason: operator`，重启后保留）；`resume` 只恢复运营暂停；对已结束的 Fork 无副作用 |
 
 ## 插件 / MCP / Skills
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/plugins` · `/api/plugins/:id` | 列表、详情（状态、清单、工具、最近错误） |
-| POST | `/api/plugins` | `{ source: git\|tarball\|path, url }` 安装（M2：`{ path, enable? }`，本地目录；201 返回 `PluginStatus`） |
+| GET | `/api/plugins` · `/api/plugins/:id` | 列表、详情（`PluginStatus` + `manifest`：显示名、说明、版本、等级、触发、声明的秘密、目录、清单错误与警告） |
+| POST | `/api/plugins` | `{ path, enable? }`、`{ source: git, url, ref?, subdir?, enable? }` 或 `{ source: tarball, url, subdir?, enable? }`：取到本地临时目录（Git 浅克隆；tarball ≤ 50 MB，单层包装目录自动展开），校验清单后复制到 `/data/plugins/<id>`（不含 `.git`）→ 201 `PluginStatus`。来源里必须有可直接运行的入口；指向来源外的符号链接、越界的 `subdir` 一律 400 |
 | POST | `/api/plugins/:id/enable` · `/disable` · `/reload` · `/restart` | 返回 `PluginStatus`；`restart` 从 failed 恢复 |
 | DELETE | `/api/plugins/:id?keepData=true` | 卸载（须先禁用）；返回 `{ ok, replacedBy }`（重新出现的同名内置插件） |
-| GET/PATCH | `/api/plugins/:id/config` | 按 schema 校验（M2：`PATCH {config}` 整体替换并写回 `config.yaml`） |
-| GET | `/api/plugins/:id/logs?limit=` | |
+| GET | `/api/plugins/:id/config` | `{ config, schema, coldKeys }`：`schema` 为插件的 JSON Schema（没有则 null）；`x-secret` 键若不是 `${secret:…}` 引用则显示为 `********`；`coldKeys` 是 `x-hot: false` 的键 |
+| PATCH | `/api/plugins/:id/config` | `{ config }` 整体替换：按 schema 校验，写回 `config.yaml` 并应用 |
+| GET | `/api/plugins/:id/logs?limit=&level=&q=&since=` | `{ logs }`：本次运行中带该插件字段的日志 |
 | GET | `/api/mcp/servers` · `/api/mcp/servers/:id` | `{ servers: McpServerStatus[] }` · `McpServerStatus` |
 | POST | `/api/mcp/servers` | `{ id, ...配置项 }`（同 `mcp.servers.<id>`）：校验、写回 `config.yaml`、启动并等它就绪或失败；新建 201、替换 200；配置无效 400 |
 | DELETE | `/api/mcp/servers/:id` | 停止、移除工具、从 `config.yaml` 删除 |
 | POST | `/api/mcp/servers/:id/enable` · `/disable` · `/restart` | 返回 `McpServerStatus`；`restart` 从 failed 恢复 |
 | GET | `/api/mcp/servers/:id/tools` | `{ tools: McpToolInfo[] }`（含被 allow/deny 过滤掉的，标 `filtered`） |
 | POST | `/api/mcp/servers/:id/oauth/start` | `{ authorizeUrl?, state }`：开始或继续 OAuth 授权 |
-| GET | `/api/mcp/oauth/callback?code&state` | **不需要管理令牌**（浏览器回跳，靠 `state` 匹配）；返回一页 HTML；未知 state 400 |
+| GET | `/api/mcp/oauth/callback?code&state` | **不需要令牌**（浏览器回跳，靠 `state` 匹配）；返回一页 HTML；未知 state 400 |
 | GET | `/api/skills` · `/api/skills/<name>` | `{ skills: SkillInfo[] }`（含被拒绝的目录及原因）· 详情加 `body` 与 `files`；名字是路径的剩余部分（MCP prompt 型 Skill 的名字含 `:` 与 `/`，需 URL 编码） |
-| POST | `/api/skills` | `{ path }` 从本地目录安装（M3）；`{ gitUrl }`（M5）；201 返回 `SkillInfo` |
+| POST | `/api/skills` | `{ path }`、`{ gitUrl, ref?, subdir? }` 或 `{ source, url, … }`（同插件）→ 201 `SkillInfo` |
 | POST | `/api/skills/<name>/enable` · `/disable` | 写回 `skills.disabled` |
 | DELETE | `/api/skills/<name>` | 删除用户 Skill（`/data/skills/<name>`）；返回 `{ ok, replacedBy }` |
 
-## 配置、秘密、权限、预算
+## 配置、秘密、权限、预算、审计
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/config?effective=true` | 生效配置（秘密脱敏，附来源层） |
-| PATCH | `/api/config` | JSON Merge Patch；校验后写回文件 |
-| GET | `/api/secrets` | 名称列表 |
-| PUT | `/api/secrets/:name` | 写值（body 为纯文本） |
-| DELETE | `/api/secrets/:name` | |
-| GET/PATCH | `/api/permissions` | |
+| GET | `/api/config` | `ConfigResponse`：`{ config, layers, sources, hot }`。`config` 是生效配置，其中出现的秘密值替换为 `[REDACTED:<NAME>]`；`layers` 是来源层（低到高）；`sources` 是每个叶子键（点分路径，数组算叶子）的来源 `defaults \| file \| environment`；`hot` 是不需重启即生效的顶层分节 |
+| PATCH | `/api/config` | JSON Merge Patch（RFC 7386：对象合并、`null` 删除、其余替换；空对象不产生键；YAML 里的数字键按原样匹配）。与环境变量层合并后整体校验，通过才原子写回 `config.yaml`（保留注释），随即重载 → `{ changed: string[], restartRequired: string[] }`（改动涉及的非热分节）；无效 400 且文件不变 |
+| GET | `/api/secrets` | `{ secrets: SecretInfo[] }`：`{ name, source: env\|file, shadowedFile }`，永远不含值 |
+| PUT | `/api/secrets/:name` | 请求体为纯文本值（不能为空）；名字须为 `UPPER_CASE`；原子写入 `/data/secrets/<NAME>`（0600）→ `{ ok, secret }`。使用它的插件与 MCP 服务器在重启时取到新值 |
+| DELETE | `/api/secrets/:name` | 删除文件 → `{ ok, stillSetByEnvironment }`；管理员令牌不能删（400）；没有这个秘密 404 |
+| GET | `/api/permissions` | `{ settings, tools: [{ name, owner, policy, rule }] }`：规则与每个工具当前的决定 |
+| PATCH | `/api/permissions` | `permissions` 分节的 Merge Patch（如 `{ tools: { con_send: ask } }`，`null` 删除规则），经 `PATCH /api/config` → 合并后的结果 |
 | GET | `/api/approvals?state=pending` | `{ approvals: ApprovalInfo[] }`（state：pending、approved、denied、expired、used） |
 | POST | `/api/approvals/:id/decide` | `{ decision: approve\|deny, note? }`；决定者记为 `console:admin`；已决定或已过期 → 409 |
-| GET/PATCH | `/api/budget` | |
-| POST | `/api/budget/release` | `{ level, untilTs }` 临时放行 |
+| GET | `/api/budget` | `{ settings, status: BudgetStatus }` |
+| PATCH | `/api/budget` | `budget` 分节的 Merge Patch（热更新） |
+| POST | `/api/budget/release` | `{ level, untilTs }` 临时放行（M6，随预算强制执行） |
+| GET | `/api/audit?kind=&tool=&limit=` | `{ audit: AuditRow[] }`，新的在前；kind：`tool_call`、`tool_blocked`、`approval_requested`、`approval_decided`、`approval_expired`、`memory_write`、`control_write` |
 
 ## Webhook
 
@@ -82,10 +99,11 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/scheduler/pause` · `/resume` | 暂停投递（事件继续入库） |
-| POST | `/api/scheduler/discard` | `{ levels: [3,4] }` 清空 pending（记 discarded） |
+| GET | `/api/scheduler` | `{ paused, cooldowns, pending }` |
+| POST | `/api/scheduler/pause` · `/resume` | 暂停投递（事件继续入库，正在运行的批跑完，抢占也等待）→ `{ paused, changed }`；暂停记为内部事件 `scheduler.paused` 与调度动作 `paused`，并在重启后保持 |
+| POST | `/api/scheduler/discard` | `{ levels: [3,4] }`（只能 2–4）把这些等级的 pending 事件结算为 `discarded` → `{ discarded, cursors }`；记内部事件 `scheduler.discarded` |
 
-## 记忆
+## 记忆与人格
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -93,21 +111,42 @@
 | GET | `/api/memory/file?path=` | `{ path, text }`；`path` 可写 `notes/a.md` 或 `/memories/notes/a.md`；越界 400，不存在 404 |
 | PUT | `/api/memory/file?path=` | 请求体为纯文本，整份写入（原子替换），记审计 `memory_write`；越界或超过 1 MB 400 |
 | GET | `/api/memory/search?q=&paths=&limit=` | `{ hits: [{ path, snippet }] }`，同 `memory_search` |
+| GET | `/api/persona/files` | `{ files: [{ path, size, mtime }] }`：人格目录下的 `.md`（`SOUL.md`、`OPERATING.md`、`USER.md` 总在列表里，不存在时 size 为 0），含 `plugins/<id>/ENV_PROMPT.md` |
+| GET | `/api/persona/file?path=` | `{ path, text }`；不存在 404 |
+| PUT | `/api/persona/file?path=` | 纯文本整份写入（≤ 256 KB，原子替换），随即重载人格，从下一次模型请求生效；只接受目录内的 `.md`（钩子是代码，不开放）→ 400 |
+
+## 日志与运行目录
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/logs?level=&component=&plugin=&q=&since=&until=&batch=&session=&cursor=&tool=&limit=&run=` | `{ run, logs: LogRecord[] }`，旧的在前、最多 `limit`（≤ 5000）条最新的。没有 `run`（或为本次运行）时查内存里最近 5000 行；否则读 `/data/runs/<run>/log.jsonl`。`level` 是最低级别（名字或数字），`since`/`until` 接受毫秒或日期，`q` 是整行的不区分大小写子串；未知级别 400 |
+| GET | `/api/runs` | `{ current, runs: [{ id, startedAt, logBytes, crashes, hasShutdown }] }`，新的在前 |
+| GET | `/api/runs/:id` | `{ id, info, shutdown, crashes: [{ file, report }] }` |
+
+## 控制台
+
+`GET /`、`/index.html`、`/assets/*`、`/favicon.svg` 返回构建好的控制台（`apps/web/dist`，或 `PROTEA_WEB_DIR`），不需要令牌（页面自己调用 `/api/auth/*`）。响应带 `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; …`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`；`/assets/` 下的文件长期缓存，`index.html` 每次校验。未构建时返回一页说明。
 
 ## 实时流
 
-**SSE（M0 起）** `GET /api/stream?since=<cursor>`。连接后先发 `hello {runId}`；带 `since` 时先按游标补发之后的事件，再转为实时。事件名：`event`（id 为游标）、`settled`、`phase`、`batch.started`、`batch.extended`（M1 起带 `level`）、`batch.ended`、`output`（插件输出，如 `con_send`）、`scheduler`（M1：`preempt` / `interrupt` / `aged` / `storm_cooldown` / `fork_yield` / `fork_resume`）、`fork`（M1：`ForkInfo` 变化）、`plugin`（M2：`PluginStatus` 变化）、`approval`（M2：`ApprovalInfo` 变化）、`mcp`（M3：`McpServerStatus` 变化）、`skills`（M3：目录变化，`{ names }`）、`handoff`（M4：`{ from, to, notes, dropped, kept }`）、`ping`（15 s 保活）。载荷形态见 `@protea/protocol` 的 `StreamMessage` 与 `SchedulerAction`。
+**SSE（M0 起）** `GET /api/stream?since=<cursor>`。连接后先发 `hello {runId}`；带 `since` 时先按游标补发之后的事件，再转为实时。事件名：`event`（id 为游标）、`settled`、`phase`、`batch.started`、`batch.extended`（M1 起带 `level`）、`batch.ended`、`output`（插件输出，如 `con_send`）、`scheduler`（M1：`preempt` / `interrupt` / `aged` / `storm_cooldown` / `fork_yield` / `fork_resume`；M5：`paused` / `resumed` / `discarded`）、`fork`（M1：`ForkInfo` 变化）、`plugin`（M2：`PluginStatus` 变化）、`approval`（M2：`ApprovalInfo` 变化）、`mcp`（M3：`McpServerStatus` 变化）、`skills`（M3：目录变化，`{ names }`）、`handoff`（M4：`{ from, to, notes, dropped, kept }`）、`ping`（15 s 保活）。载荷形态见 `@protea/protocol` 的 `StreamMessage` 与 `SchedulerAction`。
 
-已实现的 HTTP 端点：
+**WebSocket（M5）** `GET /ws`（升级）。鉴权同 HTTP：`Authorization: Bearer` 或会话 cookie；用 cookie 时 `Origin` 的主机必须等于 `Host`，否则 403；没有凭据 401。
+
+- 连接后服务端先发 `{ topic: 'hello', data: { runId, role } }`。
+- 客户端发 `WsClientMessage`：`{ subscribe: WsTopic[], since?: cursor, logFilter?: { level?, component?, plugin?, q? } }`；每条替换之前的订阅，服务端回 `{ topic: 'subscribed', data: { topics } }`；未知分组回 `{ topic: 'error', data: { message } }`。
+- 分组 `WS_TOPICS`：`events`（`event`、`settled`、`promoted`）、`phase`（`phase`、`batch.*`）、`scheduler`、`output`、`changes`（`fork`、`plugin`、`approval`、`mcp`、`skills`、`handoff`、`persona`）、`usage`（`UsageInfo`）、`logs`（`log`，`LogRecord`）。
+- 带 `since` 且订阅了 `events` 时，先补发游标之后存储的全部事件，期间的实时消息暂存后放出；同一游标不会发两次。
+- 服务端每 30 s ping，一个周期内没有 pong 的连接被终止；未发出的数据超过 8 MB 时以 1013 关闭。
+
+SSE 与 WS 的消息都按总线记录的因果顺序发出：事件先于为它开的批、它的结算与之后的调度动作。
+
+## 实现进度
+
 - M0：`/healthz`、`/readyz`、`GET /api/status`、`POST|GET /api/events`、`GET /api/events/:cursor`、`GET /api/stream`。
-- M1：`GET /api/sessions`、`GET /api/sessions/:id/transcript?from=&limit=`、`GET /api/sessions/forks`、`GET /api/sessions/forks/:id`、`POST /api/sessions/forks/:id/cancel`。
-- M2：`GET /api/plugins`、`GET /api/plugins/:id`、`POST /api/plugins`、`POST /api/plugins/:id/enable|disable|reload|restart`、`PATCH /api/plugins/:id/config`、`DELETE /api/plugins/:id`、`GET /api/approvals`、`POST /api/approvals/:id/decide`、`/hooks/<name>`。`PluginStatus`：`{ id, kind, state, enabled, origin: inproc|builtin|data, version?, tools, pid?, restarts?, error? }`。
-- M3：`/api/mcp/servers*`、`/api/mcp/oauth/callback`、`/api/skills*`（见上表）。`McpServerStatus`：`{ id, transport, state（PluginState 或 auth_required）, enabled, trust, origin: config, server?: {name, version}, tools, prompts, resources, pid?, restarts?, error?, authorizeUrl?, avgLatencyMs? }`；`SkillInfo`：`{ name, description, origin: builtin|user|plugin|mcp, owner?, version?, enabled, listed, errors, warnings, allowedTools, requiresTools, level?, loads, lastLoadedAt? }`。`/api/status` 增加 `mcp`、`skills: {listed, rejected}`、`tools: {total, deferred}`；`/readyz` 也报告 `failed` 的已启用 MCP 服务器。
-
-- M4：`POST /api/sessions/main/handoff`、`GET /api/memory/tree`、`GET|PUT /api/memory/file`、`GET /api/memory/search`。`/api/status` 增加 `context: { transcript, handoffs, estimatedTokens, softTokens, hardTokens }`、`memory: { files }`、`persona: { hooks, problem? }`。
-
-其余端点在 M5 实现。
-
-### WebSocket `/ws`（M5）
-
-客户端发送 `{ subscribe: ["events", "phase", "logs", "usage"], since?: cursor, logFilter?: {...} }`；服务端推送 `{ topic, data }`。心跳 30 s。
+- M1：`GET /api/sessions`、`GET /api/sessions/:id/transcript`、`GET /api/sessions/forks[/:id]`、`POST /api/sessions/forks/:id/cancel`。
+- M2：`/api/plugins*`（目录安装）、`/api/approvals*`、`/hooks/<name>`。
+- M3：`/api/mcp/servers*`、`/api/mcp/oauth/callback`、`/api/skills*`（目录安装）。
+- M4：`POST /api/sessions/main/handoff`、`/api/memory/*`；`/api/status` 增加 `context`、`memory`、`persona`。
+- M5：其余全部（本页各表），`/api/status` 增加 `scheduler`；`/ws`、`/metrics`、控制台托管。
+- M6：`POST /api/budget/release`。

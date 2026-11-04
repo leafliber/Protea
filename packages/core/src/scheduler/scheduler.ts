@@ -45,6 +45,8 @@ export class Scheduler implements BatchFeed {
   private agingAt = Number.POSITIVE_INFINITY;
   private readonly stormHits = new Map<string, number[]>();
   private readonly cooldownUntil = new Map<string, number>();
+  private pausedBy: string | null = null;
+  private resumePending = false;
 
   constructor(private readonly o: SchedulerOptions) {
     o.main.attachFeed(this);
@@ -63,7 +65,8 @@ export class Scheduler implements BatchFeed {
     );
     this.armAging();
     if (this.o.main.needsResume()) {
-      this.deliverResume();
+      if (this.pausedBy !== null) this.resumePending = true;
+      else this.deliverResume();
       return;
     }
     const pending = this.o.store.pending();
@@ -95,6 +98,69 @@ export class Scheduler implements BatchFeed {
     return this.due;
   }
 
+  /** Who paused delivery (control API), or null while delivering. */
+  get paused(): string | null {
+    return this.pausedBy;
+  }
+
+  /**
+   * Stop opening and extending batches; events keep arriving and stay pending, and the
+   * running batch finishes. Preempt/interrupt events wait too. Recorded as an internal event.
+   */
+  pause(by: string, opts: { record?: boolean } = {}): boolean {
+    if (this.pausedBy !== null) return false;
+    this.pausedBy = by;
+    this.o.bus.emit('scheduler.action', { kind: 'paused', by });
+    if (opts.record !== false) {
+      this.o.pushInternal({ type: 'scheduler.paused', level: 4, trigger: 'store', text: `Event delivery paused by ${by}; events are stored and wait until it resumes.` });
+    }
+    this.o.log.warn({ by }, 'event delivery paused');
+    return true;
+  }
+
+  resume(by: string): boolean {
+    if (this.pausedBy === null) return false;
+    this.pausedBy = null;
+    this.o.bus.emit('scheduler.action', { kind: 'resumed', by });
+    const waiting = Object.values(this.o.store.pendingCounts()).reduce((a, b) => a + b, 0);
+    this.o.pushInternal({ type: 'scheduler.resumed', level: 4, trigger: 'piggyback', text: `Event delivery resumed by ${by}; ${waiting} event(s) were waiting.` });
+    this.o.log.info({ by, waiting }, 'event delivery resumed');
+    if (!this.started || this.draining) return true;
+    if (this.resumePending) {
+      this.resumePending = false;
+      this.deliverResume();
+      return true;
+    }
+    // Windows that closed during the pause left `due` set; pending flush events count too.
+    if (this.o.store.pending().some((e) => e.effTrigger === 'flush' || e.effTrigger === 'preempt' || e.effTrigger === 'interrupt')) this.due = true;
+    this.tryDeliver();
+    return true;
+  }
+
+  /**
+   * Settle every pending event at these levels as `discarded` (control API). Returns the
+   * cursors; recorded as one internal event.
+   */
+  discard(levels: readonly Level[], by: string): number[] {
+    const set = new Set(levels);
+    const cursors = this.o.store
+      .pending()
+      .filter((e) => set.has(e.effLevel) && e.source !== CORE_SOURCE)
+      .map((e) => e.cursor);
+    const done = this.o.store.settle(cursors, 'discarded');
+    if (done.length > 0) {
+      this.o.bus.emit('scheduler.action', { kind: 'discarded', cursors: done, levels: [...set].sort(), by });
+      this.o.pushInternal({
+        type: 'scheduler.discarded',
+        level: 4,
+        trigger: 'store',
+        text: `${by} discarded ${done.length} pending event(s) at level(s) ${[...set].sort().join(', ')}.`,
+      });
+      this.o.log.warn({ by, levels: [...set], count: done.length }, 'pending events discarded');
+    }
+    return done;
+  }
+
   /** Sources whose preempt/interrupt requests are currently scheduled as flush. */
   cooldowns(): Array<{ source: string; untilMs: number }> {
     const now = this.o.clock.now();
@@ -121,7 +187,7 @@ export class Scheduler implements BatchFeed {
         // When idle the event simply starts a batch; only a running batch can be cut short.
         const wasBusy = this.o.main.busy;
         this.requestDelivery();
-        if (wasBusy) this.considerCancel(e);
+        if (wasBusy && this.pausedBy === null) this.considerCancel(e);
         return;
       }
     }
@@ -272,7 +338,7 @@ export class Scheduler implements BatchFeed {
   }
 
   private tryDeliver(): void {
-    if (!this.due || this.draining || this.o.main.busy) return;
+    if (!this.due || this.draining || this.pausedBy !== null || this.o.main.busy) return;
     const batchId = newBatchId();
     const events = this.takeDue(batchId);
     if (events.length === 0) return;
@@ -311,7 +377,7 @@ export class Scheduler implements BatchFeed {
   // —— BatchFeed ——
 
   takeBoundaryEvents(): EventEnvelope[] {
-    if (!this.due || this.draining) return [];
+    if (!this.due || this.draining || this.pausedBy !== null) return [];
     const batchId = this.o.main.currentBatchId ?? newBatchId();
     return this.takeDue(batchId);
   }

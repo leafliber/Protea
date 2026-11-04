@@ -1,6 +1,6 @@
 # 规范：存储 Schema
 
-> 状态：Accepted（M0–M3）· 更新：2026-11-03 · 设计：[../10-architecture/03-event-store-and-bus.md](../10-architecture/03-event-store-and-bus.md)
+> 状态：Accepted（M0–M5）· 更新：2026-11-04 · 设计：[../10-architecture/03-event-store-and-bus.md](../10-architecture/03-event-store-and-bus.md)
 
 ## 1. SQLite（/data/protea.db）
 
@@ -95,13 +95,13 @@ CREATE INDEX ix_approvals_lookup ON approvals(tool, input_hash, state);
 
 CREATE TABLE audit (                                    -- 只追加（I-8）
   id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL,
-  kind TEXT NOT NULL,                                   -- tool_call | tool_blocked | approval_requested | approval_decided | approval_expired
+  kind TEXT NOT NULL,                                   -- tool_call | tool_blocked | approval_requested | approval_decided | approval_expired | memory_write（M4）| control_write（M5）
   tool TEXT, owner TEXT, session_id TEXT, batch_id TEXT, call_id TEXT,
   input_hash TEXT, summary TEXT, policy TEXT, outcome TEXT, approval_id TEXT, detail TEXT
 );
 ```
 
-`input_hash` = sha256(工具名 + 换行 + 键排序后的 JSON 输入)。`summary` 与 `reason` 写入前经过秘密扫描。插件的 kv 状态（例如 Telegram 的偏移量、filewatch 的快照）在 `kv` 表的 `plugin:<id>` 命名空间。
+`input_hash` = sha256(工具名 + 换行 + 键排序后的 JSON 输入)。`summary` 与 `reason` 写入前经过秘密扫描。`control_write`（M5）是控制 API 的写请求：`summary` 为 `METHOD /path`，`owner` 为 `api:<role>` 或 `console:<role>`，`outcome` 为 HTTP 状态码。调度的运营暂停在 `kv` 的 `scheduler` / `paused`（值为暂停者），重启后保持。插件的 kv 状态（例如 Telegram 的偏移量、filewatch 的快照）在 `kv` 表的 `plugin:<id>` 命名空间。
 
 ### 1.3 迁移 3：`tool-stats`（M3）
 
@@ -146,8 +146,10 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(path UNINDEXED, body, tokenize = 'tri
 | `skills/<name>/` | 目录 | 用户 Skills（`SKILL.md` + 附带文件）；`.install-*` 是安装中的临时目录 |
 | `workspace/` | 目录 | 向 MCP 服务器声明的根目录（roots） |
 | `inbox/` | 目录 | `filewatch` 默认监视的目录 |
-| `runs/<runId>/log.jsonl` | NDJSON | 本次运行的结构化日志 |
+| `runs/<runId>/log.jsonl` | NDJSON | 本次运行的结构化日志（debug 及以上） |
 | `runs/<runId>/transcript.jsonl` | NDJSON | 启动修复时移出的内容（`truncated-tail`、`orphan-result-drop`） |
+| `runs/<runId>/shutdown.json` | JSON | 正常关停的记录（M5，字段见 [15-observability.md](../10-architecture/15-observability.md) §4）；只保留最近 `observability.keepRuns` 个运行目录 |
+| `runs/<runId>/crash/<time>.json` | JSON | 未捕获异常 / 未处理拒绝的报告：错误、堆栈、最近 200 条总线记录（M5） |
 | `secrets/<NAME>` | 文本，0600 | 秘密 |
 | `secrets/mcp-oauth/<id>.json` | JSON，0600 | MCP 服务器的 OAuth 客户端注册、令牌与 PKCE verifier |
 | `persona/*.md` | Markdown | 人格文件，首次启动从默认人格复制；`persona/hooks.{ts,mts,mjs,js}` 为可选钩子（M4） |

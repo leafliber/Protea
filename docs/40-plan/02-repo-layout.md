@@ -1,6 +1,6 @@
 # 代码仓库结构
 
-> 状态：Draft · 更新：2026-11-03 · 决策：[ADR-0001](../20-decisions/ADR-0001-typescript-node-runtime.md)
+> 状态：Draft · 更新：2026-11-04 · 决策：[ADR-0001](../20-decisions/ADR-0001-typescript-node-runtime.md)
 
 pnpm workspace，TypeScript ESM，Node 22。
 
@@ -34,10 +34,10 @@ Protea/
 │   │   │   ├── memory/          记忆存储（memory 工具命令面）、FTS5 索引、memory / memory_search / memory_recent
 │   │   │   ├── config/          默认值、层叠加载、环境变量映射、秘密
 │   │   │   ├── db/              SQLite 打开与内嵌迁移、仓储（batches/usage/kv/sessions/tool_stats）
-│   │   │   ├── observability/   pino 日志（TTY 美化 + 运行目录 JSON）
+│   │   │   ├── observability/   pino 日志（TTY 美化 + 运行目录 JSON）、内存日志缓冲与查询（logs.ts）、Prometheus 指标（metrics.ts）、关停记录与崩溃报告（run-dir.ts）
 │   │   │   └── util/            时间与时区、id、中止、错误
 │   │   └── test/                单元、组件、属性测试与测试夹具（含可编排的 MCP 测试服务器与假 OAuth 服务器）
-│   └── control/                 @protea/control：Hono HTTP API 与 SSE
+│   └── control/                 @protea/control：Hono HTTP API（app.ts、ops.ts）、鉴权与会话 cookie（auth.ts）、SSE/WS 共用的总线投影（stream.ts）、WebSocket（ws.ts）、控制台托管（static.ts）
 ├── plugins/
 │   ├── console/                 进程内连接器：控制台输入、con_send 输出、审批请求显示
 │   ├── cron/                    进程内来源：日程与 sleep_until
@@ -49,10 +49,12 @@ Protea/
 ├── skills/                      内置 Skills（protea-self-ops、daily-brief、memory-hygiene）
 ├── apps/
 │   ├── daemon/                  组装 Core + 控制平面 + 内置插件；单实例锁；崩溃端到端测试
-│   └── cli/                     `protea` 命令（serve 直接启动守护进程；dev-plugin 本地运行插件；其余经 HTTP API）
+│   ├── cli/                     `protea` 命令（serve 直接启动守护进程；dev-plugin 本地运行插件；logq 直接读运行目录；其余经 HTTP API / SSE / WebSocket）
+│   └── web/                     @protea/web：Web 控制台（Vite + React；pages/ 每页一个文件，components/ 通用组件与 JSON Schema 表单，live.ts 是唯一的 WebSocket 连接）
 ├── sdks/python/protea_plugin/   Python 插件 SDK（宿主放进 Python 插件的 PYTHONPATH）
 ├── examples/plugins/            py-notes（Python）、ts-notes（TypeScript）示例插件与一致性探针
-└── (计划) apps/web, docker/, tests/e2e
+├── docker/observability/        Prometheus 抓取配置与 Grafana 示例面板（M5）
+└── (计划) docker/Dockerfile, tests/e2e
 ```
 
 ## 包依赖方向
@@ -63,7 +65,8 @@ Protea/
 
 - 开发：`pnpm dev`（`node --conditions=source --import tsx`，直接运行各包源码，无需构建；开发模式下内置插件也跑源码；数据目录 `.dev-data`）；`pnpm protea <命令>` 调用 CLI。各包 `exports` 带 `source` 条件指向 `src/index.ts`。
 - 测试：`pnpm test`（不需要先构建）；类型检查：`pnpm typecheck`。
-- 构建：`pnpm build` 按依赖拓扑顺序构建每个包：库用 `tsc` 输出到 `dist/`，进程外插件用 `scripts/bundle-plugin.mjs` 打包成 `dist/main.js`；`node apps/cli/dist/main.js serve` 即可运行。
+- 构建：`pnpm build` 按依赖拓扑顺序构建每个包：库用 `tsc` 输出到 `dist/`，进程外插件用 `scripts/bundle-plugin.mjs` 打包成 `dist/main.js`，控制台用 Vite 输出到 `apps/web/dist/`；`node apps/cli/dist/main.js serve` 即可运行。
+- 控制台开发：`pnpm web`（Vite 开发服务器，把 `/api`、`/ws`、`/metrics` 转给 `PROTEA_URL`）；类型检查 `pnpm typecheck` 同时检查 `apps/web`（它有自己的 tsconfig：DOM、JSX、bundler 解析）。
 - 插件开发：`pnpm protea dev-plugin <dir>`（交互）/ `--check`（一致性检查）。
 
 ## 命名

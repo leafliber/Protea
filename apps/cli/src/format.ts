@@ -1,4 +1,4 @@
-import type { ApprovalInfo, EventEnvelope, ForkInfo, McpServerStatus, McpToolInfo, PluginStatus, SkillInfo, StatusResponse } from '@protea/protocol';
+import type { ApprovalInfo, BatchInfo, EventEnvelope, ForkInfo, LogRecord, McpServerStatus, McpToolInfo, PluginStatus, SkillInfo, StatusResponse } from '@protea/protocol';
 
 const tty = process.stdout.isTTY;
 const paint = (code: string) => (s: string): string => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
@@ -84,8 +84,9 @@ export function formatStatus(s: StatusResponse): string {
     .join(' ');
   return [
     `${bold('Protea')} ${s.version}  run ${s.runId}  up ${s.uptimeSec}s`,
-    `phase      ${s.phase}${s.batchId ? ` (${s.batchId})` : ''}`,
+    `phase      ${s.phase}${s.batchId ? ` (${s.batchId})` : ''}${s.scheduler.paused ? red(`  delivery paused by ${s.scheduler.paused}`) : ''}`,
     `pending    ${pending}`,
+    `context    ~${s.context.estimatedTokens} tokens (handoff at ${s.context.softTokens}, hard ${s.context.hardTokens}) · ${s.context.transcript}${s.context.handoffs ? dim(` · ${s.context.handoffs} handoffs`) : ''}`,
     `provider   ${s.provider.id}/${s.provider.mainModel} ${s.provider.ready ? green('ready') : red(`not ready: ${s.provider.problem ?? ''}`)}`,
     `plugins    ${s.plugins.map((p) => `${p.id}:${p.state === 'running' ? green(p.state) : red(p.state)}`).join('  ')}`,
     `mcp        ${s.mcp.length ? s.mcp.map((m) => `${m.id}:${m.state === 'running' ? green(m.state) : red(m.state)}`).join('  ') : dim('none')}`,
@@ -98,4 +99,24 @@ export function formatStatus(s: StatusResponse): string {
     `forks      ${s.forks.filter((f) => ['queued', 'running', 'paused'].includes(f.state)).length} active` +
       `${s.forks.length > 0 ? dim(` · latest ${(s.forks[0] as ForkInfo).id} ${(s.forks[0] as ForkInfo).state}`) : ''}`,
   ].join('\n');
+}
+
+export function formatBatch(b: BatchInfo): string {
+  const color = LEVEL_COLOR[b.level] ?? ((x: string) => x);
+  const end = b.endReason === null ? cyan('running') : ['end_turn', 'ends_turn'].includes(b.endReason) ? dim(b.endReason) : yellow(b.endReason);
+  return `${dim(b.id)} ${color(`L${b.level}`)} ${b.reason.padEnd(8)} ${end} ${dim(`${b.rounds} rounds · ${b.startedAt}${b.sessionId !== 'main' ? ` · ${b.sessionId}` : ''}`)}`;
+}
+
+const LOG_NAMES: Record<number, string> = { 10: 'TRACE', 20: 'DEBUG', 30: 'INFO', 40: 'WARN', 50: 'ERROR', 60: 'FATAL' };
+const LOG_SKIP = new Set(['level', 'time', 'msg', 'run', 'component', 'pid', 'hostname']);
+
+export function formatLog(e: LogRecord): string {
+  const name = LOG_NAMES[e.level] ?? String(e.level);
+  const level = e.level >= 50 ? red(name.padEnd(5)) : e.level >= 40 ? yellow(name.padEnd(5)) : e.level <= 20 ? dim(name.padEnd(5)) : name.padEnd(5);
+  const extra = Object.entries(e)
+    .filter(([k]) => !LOG_SKIP.has(k))
+    .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
+    .join(' ');
+  const comp = e['component'] ? cyan(`[${String(e['component'])}] `) : '';
+  return `${dim(new Date(e.time).toISOString().replace('T', ' ').slice(0, 23))} ${level} ${comp}${e.msg}${extra ? dim(` ${extra}`) : ''}`;
 }

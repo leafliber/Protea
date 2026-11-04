@@ -120,6 +120,7 @@ Fork 是独立的工具循环（[05-sessions-and-agent-loop.md](05-sessions-and-
   1. `pause`：Fork 在下一个回合边界停下并写检查点（合作式，默认）；
   2. `cancel`：若 30 秒内未到边界且 Fork 等级 ≥ L3，取消其模型调用（Fork 的工具调用不被打断），写检查点。
 - **恢复**：主会话回到 `idle` 后，被暂停的 Fork 按原顺序恢复。
+- **运营暂停**（M5，`POST /api/sessions/forks/:id/pause|resume`）：运行中的 Fork 在下一个边界停下、排队的不再启动，`pauseReason: operator`；它不随让渡结束而恢复，重启后仍保持暂停，只能由 `resume` 恢复（恢复时若正在让渡，就加入让渡队列一起恢复）。
 - Fork 之间不互相抢占。
 
 **M1 实现**：还没有 Provider 并发/速率池，让渡条件简化为"主会话正在运行等级 ≤ `scheduler.forks.yieldLevel`（默认 1）的批"——主人对话期间所有 Fork 让路，期间也不启动排队中的 Fork。Fork 的回合边界是每次模型调用之前（已开始的工具会跑完）；等级 ≥ L3 的 Fork 在 `yieldTimeoutMs`（默认 30 s）内没到边界，其模型调用被取消，恢复时重发。主会话回到 `idle` 后（若调度器没有立即开始另一个让渡级别的批）恢复。按池满条件让渡留待 Provider 并发池实现时补上。
@@ -134,7 +135,12 @@ Fork 是独立的工具循环（[05-sessions-and-agent-loop.md](05-sessions-and-
 4. 通知插件 `stop`，等待其 `shutdownVerification` 快照（只读），记录到运行目录。
 5. 刷新 SQLite WAL，退出。
 
-重启后：pending 事件按游标继续投递；被暂停的 Fork 恢复；缺失工具结果的回合按 [05-sessions-and-agent-loop.md](05-sessions-and-agent-loop.md) §6 修复。
+重启后：pending 事件按游标继续投递；被暂停的 Fork 恢复（运营暂停的除外）；缺失工具结果的回合按 [05-sessions-and-agent-loop.md](05-sessions-and-agent-loop.md) §6 修复。
+
+**运营干预**（M5，控制 API / CLI / 控制台）：
+- **暂停投递**（`POST /api/scheduler/pause`）：调度器不再开新批，也不在回合边界并入新事件；事件照常入库、老化照常提升，preempt/interrupt 也只是排队；正在运行的批跑完。暂停记为调度动作 `paused` 与内部事件 `scheduler.paused`，存在 `kv` 里，重启后仍然暂停（启动时要续跑的中断批也等到恢复）。`/readyz` 在暂停期间报告不就绪。
+- **恢复投递**：清除暂停，有等待中的事件就立刻开批；记 `resumed` 与 `scheduler.resumed`。
+- **清空**（`POST /api/scheduler/discard {levels}`）：把这些等级（只能 L2–L4）的 pending 事件结算为 `discarded`，Core 自己的内部事件不动；记 `discarded` 与 `scheduler.discarded`。
 
 ## 9. 可观测点
 

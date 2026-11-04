@@ -11,11 +11,15 @@
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "@protea/protocol": "workspace:*",
+    "@protea/core": "workspace:*",
     "@protea/daemon": "workspace:*",
-    "@protea/core": "workspace:*"
+    "@protea/protocol": "workspace:*",
+    "ws": "^8.22.1"
   },
   "bin": {
     "protea": "./dist/main.js"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.2"
   }
 }

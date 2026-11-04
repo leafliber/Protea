@@ -1,6 +1,6 @@
 # 路线图
 
-> 状态：Draft · 更新：2026-11-03
+> 状态：Draft · 更新：2026-11-04
 
 每个里程碑有**可演示的验收标准**；没有通过验收不进入下一个。估时按一人全职、不含控制台美化。
 
@@ -169,19 +169,43 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 - 人格变化走"重建系统前缀"（缓存失效一次），而不是 API 推荐的"会话中系统消息"追加形式；后者能做到缓存不失效，记为后续优化（[04-risks-and-open-questions.md](04-risks-and-open-questions.md) Q11）。
 - Fork 不做交接（受 `maxTurns` 约束），但同样使用 thinking 截止标记。记忆向量检索（sqlite-vec）未实现。
 
-## M5 · 控制平面（3 周）
+## M5 · 控制平面（3 周）· 状态：已实现（2026-11-04），真实 Prometheus 抓取待复核
 
 **目标**：看得见、管得住。
 
-- HTTP API 全量（[05-control-api.md](../30-specs/05-control-api.md)）、WebSocket、鉴权。
-- 控制台页面最小集（总览、事件流、会话、插件、MCP、Skills、审批、配置、日志）。
-- 指标端点、运行目录、`logq`。
-- CLI 全量。
+- [x] HTTP API 全量（[05-control-api.md](../30-specs/05-control-api.md)）：事件分页、提升、撤回；批与其模型调用；Fork 派生、暂停、恢复；插件详情、带 schema 的配置、日志，从 Git / tarball 安装插件与 Skills；生效配置（附每个键的来源层）与 JSON Merge Patch 写回；秘密（只写与列名）；权限、预算；调度暂停/恢复/清空；日志检索、运行目录；人格文件；审计。
+- [x] 鉴权（`packages/control/src/auth.ts`）：管理员令牌与可选的只读令牌（秘密 `PROTEA_READONLY_TOKEN`，只能 GET 与订阅，读不到记忆、人格与秘密）；控制台登录换 HttpOnly + SameSite=Strict 的会话 cookie（值是令牌的 HMAC，换令牌即全部失效），cookie 发起的写请求要带 `x-protea-csrf: 1`；失败登录按地址限流；所有写请求记审计 `control_write`。
+- [x] WebSocket `/ws`（`packages/control/src/ws.ts`）：订阅分组 `events / phase / scheduler / output / changes / usage / logs`，可带 `since` 先补发再转实时（不漏不重），日志可按级别、组件、插件、文字过滤；30 s 心跳；跟不上的客户端被断开；浏览器 cookie 连接校验 Origin。SSE 与 WS 都经总线的 tap 投影，按因果顺序发出（事件先于为它开的批与它的结算）。
+- [x] Web 控制台（`apps/web`，Vite + React，守护进程在同一端口托管 `apps/web/dist`）：
+  - 总览：阶段呼吸灯、待处理、上下文环、用量、按等级的预算、Fork、内部事件、暂停/恢复投递、手动交接。
+  - 事件流：实时 + 历史分页；抢占、老化、清空、暂停等调度动作与内部事件高亮；详情抽屉里提升或撤回；输入框即 console 来源。
+  - 会话：转录（含思考摘要开关）、批与每轮用量、Fork 派生/暂停/恢复/取消。
+  - 插件：卡片、启停重载卸载、Git / tarball / 目录安装、按 JSON Schema 生成的配置表单（标出 `x-hot: false`）、日志。
+  - MCP：增删、启停、工具、OAuth 授权。Skills：正文、启停、安装、删除。审批：待处理、历史、审计。
+  - 记忆与人格：目录树、全文检索、编辑器。配置：生效值与来源、按路径或补丁修改、秘密、权限、预算、调度。日志：实时、检索、运行目录的关停记录与崩溃报告。
+  - 只读令牌登录时修改按钮全部隐藏；明文 HTTP 且非本机访问时持续显示风险提示。
+- [x] 指标端点 `/metrics`（prom-client，`packages/core/src/observability/metrics.ts`）：[15-observability.md](../10-architecture/15-observability.md) §3 的全部指标，另有 `protea_info` 与 Node.js 进程指标；默认需要令牌（`control.publicMetrics`）。`docker/observability/` 提供 Prometheus 抓取配置与 Grafana 面板（27 个面板）。
+- [x] 运行目录：`log.jsonl`、`transcript.jsonl`、`shutdown.json`（关停原因、各步骤耗时、批是否跑完、插件与 Fork 状态）、`crash/`（未捕获异常的堆栈与最近 200 条总线记录）；只保留最近 `observability.keepRuns`（默认 20）个；内存里保留本次运行最近 5000 行日志供 API 与 WS 使用。`/readyz` 增加 SQLite 写锁、必需插件（`observability.requiredPlugins`）与"投递已暂停"。
+- [x] CLI 全量：`events show|promote|withdraw`、`batches`、`sessions [ls]|handoff`、`forks spawn|pause|resume`、`plugins show|logs|install --git|--tarball`、`skills install --git`、`config get|set|unset`、`secrets ls|set|rm`、`scheduler pause|resume|discard`、`budget`、`memory`、`persona`、`logs [--follow]`、`logq`（直接读运行目录，不需要守护进程）、`runs`、`audit`。
 
 **验收**：
-- [ ] 所有 M0–M4 的操作都可在控制台完成，且不需要 SSH。
-- [ ] 事件流页面实时显示抢占/老化/预算动作。
-- [ ] Prometheus 抓取成功；Grafana 示例面板随仓库提供。
+- [x] 所有 M0–M4 的操作都可在控制台完成，且不需要 SSH。
+  - API 层由 `apps/daemon/test/m5.e2e.test.ts` 覆盖：鉴权与角色、cookie 与 CSRF、事件、批、调度、配置、秘密、人格、日志、Fork、从 Git/tarball 安装、WebSocket、指标、控制台托管。
+  - 页面在内置浏览器里对构建产物逐页走过：登录、推送事件看回复、抢占实时显示、插件配置表单、配置来源、日志、人格编辑、审计。
+  - 例外：人格钩子 `hooks.*` 是在守护进程内执行的代码，不开放 API 编辑；"从守护进程所在机器的目录安装"仍要求目录已在那台机器上（远程用 Git / tarball）。
+- [x] 事件流页面实时显示抢占/老化/预算动作：调度动作走 `scheduler` 主题（抢占、打断、老化、风暴冷却、Fork 让渡、暂停、清空），预算阈值与 `session.preempted` 等走内部事件，两者在页面上高亮。抢占在浏览器里实测，WS 侧由测试覆盖。
+- [~] Prometheus 抓取成功；Grafana 示例面板随仓库提供。
+  - 已验证：`/metrics` 的输出逐行符合文本格式，关键序列随事件流变化（同一测试文件）；面板里用到的每个指标名都在守护进程的实际输出里。
+  - 待复核：本机没有 Prometheus/Grafana，**真实抓取与面板导入还没跑过**。
+
+**M5 与原设计的差异**（已同步进各文档）：
+- 控制台界面为中文，hash 路由，不用 UI 组件库；构建产物在 `apps/web/dist`（`PROTEA_WEB_DIR` 可改），开发时 `pnpm web` 起 Vite 并把 API 转给守护进程。多语言仍在 M7。
+- WebSocket 主题从设计的 4 个（events、phase、logs、usage）扩成 7 个分组，覆盖 SSE 的全部主题；控制台只用一条 WS 连接，SSE 留给 CLI。
+- 会话 cookie 是令牌的 HMAC（没有服务端会话表，重启不掉登录）；只读令牌另外读不到记忆、人格与秘密名称；`/metrics` 默认也要令牌。
+- 指标里的 `turns` 对主会话按"批"计（一批含多轮模型调用），对 Fork 按整个 Fork 计；`protea_plugin_restarts_total` 由插件状态变化推导。
+- 推迟：`protea replay`（离线回放需要录制的工具定义与回执，和 M6 的 Provider 录制模式一起做）；`POST /api/budget/release`（随 M6 的预算强制执行）；日志的秘密过滤（M6）。`protea backup` 按原计划在 M6。
+- 新增（原设计没有）：Fork 的运营暂停/恢复（`pauseReason: operator`，重启后保留）；调度暂停持久化（重启后仍暂停）；清空 pending 只允许 L2–L4；审计 `control_write`；`/api/audit`、`/api/runs`、`/api/persona/*`、`/api/auth/*`；预算设置改为热更新。
+- 从 Git / tarball 安装时不做构建：来源里必须有可直接运行的入口（与 M2 的目录安装一致）；`.git` 不复制；指向来源之外的符号链接直接拒绝。
 
 ## M6 · 单镜像与加固（2 周）
 
@@ -190,6 +214,7 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 - Dockerfile（full/slim）、entrypoint、迁移、健康检查、非 root、`stop-timeout` 文档。
 - 预算限制生效、外发速率限制、沙箱化 `shell`、秘密扫描覆盖日志。
 - 备份/恢复命令。
+- 从 M5 推迟：离线回放 `protea replay`（与 Provider 录制模式一起）、`POST /api/budget/release`（随预算强制执行）。
 - 安全检查清单；依赖与镜像扫描进 CI。
 - 长稳测试：模拟来源持续 72 h。
 

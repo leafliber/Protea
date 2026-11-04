@@ -124,6 +124,15 @@ function validate(cfg: ProteaConfig, warnings: string[]): void {
       throw new Error('control.publicUrl must be a URL or null');
     }
   }
+  if (typeof cfg.control.publicMetrics !== 'boolean') throw new Error('control.publicMetrics must be a boolean');
+  if (typeof cfg.control.readonlyTokenSecret !== 'string' || !/^[A-Z][A-Z0-9_]{0,63}$/.test(cfg.control.readonlyTokenSecret)) {
+    throw new Error('control.readonlyTokenSecret must be a secret name (UPPER_CASE)');
+  }
+  const obs = cfg.observability;
+  if (!Number.isInteger(obs.keepRuns) || obs.keepRuns < 1) throw new Error('observability.keepRuns must be an integer of at least 1');
+  if (!Array.isArray(obs.requiredPlugins) || !obs.requiredPlugins.every((p) => typeof p === 'string')) {
+    throw new Error('observability.requiredPlugins must be a list of plugin ids');
+  }
   if (!isPlainObject(cfg.mcp.servers)) throw new Error('mcp.servers must be a mapping');
   for (const [id, raw] of Object.entries(cfg.mcp.servers)) cfg.mcp.servers[id] = normalizeMcpServer(id, raw);
   if (!(cfg.mcp.pingIntervalMs >= 0) || !(cfg.mcp.listChangedDebounceMs >= 0)) {
@@ -161,13 +170,24 @@ function validate(cfg: ProteaConfig, warnings: string[]): void {
   }
 }
 
-export function loadConfig(dataDir: string, env: NodeJS.ProcessEnv = process.env): LoadedConfig {
+/**
+ * Defaults ← config.yaml ← PROTEA_* environment. `fileDoc` replaces the file's contents
+ * (validating a change before it is written); the file is then neither read nor created.
+ */
+export function loadConfig(dataDir: string, env: NodeJS.ProcessEnv = process.env, opts: { fileDoc?: unknown } = {}): LoadedConfig {
   const warnings: string[] = [];
   const sources = ['defaults'];
   let config = defaultConfig();
 
   const file = path.join(dataDir, 'config.yaml');
-  if (fs.existsSync(file)) {
+  if ('fileDoc' in opts) {
+    const doc = opts.fileDoc;
+    if (doc !== null && doc !== undefined) {
+      if (!isPlainObject(doc)) throw new Error('config: top level must be a mapping');
+      config = deepMerge(config, doc);
+    }
+    sources.push(file);
+  } else if (fs.existsSync(file)) {
     const doc = YAML.parse(fs.readFileSync(file, 'utf8')) as unknown;
     if (doc !== null && doc !== undefined) {
       if (!isPlainObject(doc)) throw new Error(`${file}: top level must be a mapping`);
@@ -187,4 +207,29 @@ export function loadConfig(dataDir: string, env: NodeJS.ProcessEnv = process.env
 
   validate(config, warnings);
   return { config, sources, warnings };
+}
+
+/** Where each leaf of the effective configuration comes from (arrays count as leaves). */
+export function configSources(dataDir: string, env: NodeJS.ProcessEnv = process.env): Record<string, 'defaults' | 'file' | 'environment'> {
+  const file = path.join(dataDir, 'config.yaml');
+  const fileDoc = fs.existsSync(file) ? (YAML.parse(fs.readFileSync(file, 'utf8')) as unknown) : null;
+  const overlay = envOverlay(env);
+  const has = (root: unknown, keys: string[]): boolean => {
+    let node = root;
+    for (const k of keys) {
+      if (!isPlainObject(node) || !(k in node)) return false;
+      node = node[k];
+    }
+    return true;
+  };
+  const out: Record<string, 'defaults' | 'file' | 'environment'> = {};
+  const walk = (node: unknown, keys: string[]): void => {
+    if (isPlainObject(node) && Object.keys(node).length > 0) {
+      for (const [k, v] of Object.entries(node)) walk(v, [...keys, k]);
+      return;
+    }
+    out[keys.join('.')] = has(overlay, keys) ? 'environment' : has(fileDoc, keys) ? 'file' : 'defaults';
+  };
+  walk(loadConfig(dataDir, env, { fileDoc }).config, []);
+  return out;
 }

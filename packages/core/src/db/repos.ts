@@ -35,18 +35,39 @@ export class BatchRepo {
 
   get(id: string): BatchRow | undefined {
     const r = this.db.prepare('SELECT * FROM batches WHERE id = ?').get(id) as Record<string, unknown> | undefined;
-    if (!r) return undefined;
-    return {
-      id: String(r['id']),
-      level: Number(r['level']) as Level,
-      reason: r['reason'] as BatchReason,
-      sessionId: String(r['session_id']),
-      startedAt: String(r['started_at']),
-      endedAt: (r['ended_at'] as string | null) ?? null,
-      rounds: Number(r['rounds']),
-      endReason: (r['end_reason'] as BatchEndReason | null) ?? null,
-    };
+    return r ? toBatch(r) : undefined;
   }
+
+  /** Newest first; `before` pages backwards by batch id (ULIDs sort by time). */
+  list(q: { limit?: number; before?: string; sessionId?: string } = {}): BatchRow[] {
+    const where: string[] = [];
+    const args: unknown[] = [];
+    if (q.before !== undefined) (where.push('id < ?'), args.push(q.before));
+    if (q.sessionId !== undefined) (where.push('session_id = ?'), args.push(q.sessionId));
+    args.push(Math.min(Math.max(q.limit ?? 50, 1), 500));
+    const rows = this.db
+      .prepare(`SELECT * FROM batches ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY started_at DESC, id DESC LIMIT ?`)
+      .all(...args) as Array<Record<string, unknown>>;
+    return rows.map(toBatch);
+  }
+
+  /** Cursors delivered (or otherwise settled) in a batch. */
+  cursorsOf(id: string): number[] {
+    return (this.db.prepare('SELECT cursor FROM deliveries WHERE batch_id = ? ORDER BY cursor').all(id) as Array<{ cursor: number }>).map((r) => r.cursor);
+  }
+}
+
+function toBatch(r: Record<string, unknown>): BatchRow {
+  return {
+    id: String(r['id']),
+    level: Number(r['level']) as Level,
+    reason: r['reason'] as BatchReason,
+    sessionId: String(r['session_id']),
+    startedAt: String(r['started_at']),
+    endedAt: (r['ended_at'] as string | null) ?? null,
+    rounds: Number(r['rounds']),
+    endReason: (r['end_reason'] as BatchEndReason | null) ?? null,
+  };
 }
 
 export interface UsageRecord {
@@ -108,15 +129,20 @@ export class UsageRepo {
       );
   }
 
-  totalsSince(sinceMs: number): UsageTotals {
+  /** Totals since a time, optionally for one model role or one batch. */
+  totalsSince(sinceMs: number, only: { role?: ModelRole; batchId?: string } = {}): UsageTotals {
+    const where = ['at_ms >= ?'];
+    const args: unknown[] = [sinceMs];
+    if (only.role !== undefined) (where.push('role = ?'), args.push(only.role));
+    if (only.batchId !== undefined) (where.push('batch_id = ?'), args.push(only.batchId));
     const r = this.db
       .prepare(
         `SELECT COUNT(*) AS calls, COALESCE(SUM(input_tokens),0) AS i, COALESCE(SUM(output_tokens),0) AS o,
                 COALESCE(SUM(cache_read_tokens),0) AS cr, COALESCE(SUM(cache_write_tokens),0) AS cw,
                 COALESCE(SUM(cost_usd),0) AS cost
-         FROM usage WHERE at_ms >= ?`,
+         FROM usage WHERE ${where.join(' AND ')}`,
       )
-      .get(sinceMs) as { calls: number; i: number; o: number; cr: number; cw: number; cost: number };
+      .get(...args) as { calls: number; i: number; o: number; cr: number; cw: number; cost: number };
     const denom = r.i + r.cr + r.cw;
     return {
       calls: r.calls,
@@ -127,6 +153,31 @@ export class UsageRepo {
       costUsd: Math.round(r.cost * 1e6) / 1e6,
       cacheHitRatio: r.calls === 0 || denom === 0 ? null : r.cr / denom,
     };
+  }
+
+  /** The model calls of one batch (its rounds), oldest first. */
+  forBatch(batchId: string): UsageRecord[] {
+    const rows = this.db.prepare('SELECT * FROM usage WHERE batch_id = ? ORDER BY id').all(batchId) as Array<Record<string, unknown>>;
+    return rows.map((r) => {
+      const u: UsageRecord = {
+        at: String(r['at']),
+        atMs: Number(r['at_ms']),
+        provider: String(r['provider']),
+        model: String(r['model']),
+        role: r['role'] as ModelRole,
+        sessionId: String(r['session_id']),
+        inputTokens: Number(r['input_tokens']),
+        outputTokens: Number(r['output_tokens']),
+        cacheReadTokens: Number(r['cache_read_tokens']),
+        cacheWriteTokens: Number(r['cache_write_tokens']),
+      };
+      if (r['batch_id'] !== null) u.batchId = String(r['batch_id']);
+      if (r['level'] !== null) u.level = Number(r['level']) as Level;
+      if (r['cost_usd'] !== null) u.costUsd = Number(r['cost_usd']);
+      if (r['stop_reason'] !== null) u.stopReason = String(r['stop_reason']);
+      if (r['fallback_model'] !== null) u.fallbackModel = String(r['fallback_model']);
+      return u;
+    });
   }
 }
 

@@ -1,6 +1,6 @@
 # 安全与权限
 
-> 状态：Draft（§1–§4 的工具权限、审批、审计与秘密注入已在 M2 实现）· 更新：2026-11-03 · 实现：`packages/core/src/permissions/`
+> 状态：Draft（§1–§4 的工具权限、审批、审计与秘密注入已在 M2 实现；§8 控制平面在 M5 实现）· 更新：2026-11-04 · 实现：`packages/core/src/permissions/`、`packages/control/src/auth.ts`
 
 威胁模型：一个常驻在公网 VPS 上、持有主人多种凭据、能执行命令并对外发消息的代理。主要风险：（1）陌生人冒充主人指挥助理；（2）外部内容（网页、邮件、群消息）里的提示注入；（3）助理自身误操作造成不可逆副作用；（4）凭据泄露进模型上下文或日志；（5）失控插件耗尽资源或费用。
 
@@ -81,8 +81,12 @@ M2 实现细节：
 
 ## 8. 控制平面安全
 
-- 管理员令牌；可选 IP 白名单；登录失败退避。
-- 控制台只在 TLS 或回环下显示秘密管理页。
+- 管理员令牌与可选的只读令牌（只能 GET 与订阅，读不到记忆、人格与秘密名称）；IP 白名单（`control.allowCidrs`）在 M6。
+- 控制台登录换会话 cookie（HttpOnly、SameSite=Strict，值为令牌的 HMAC，不含令牌本身）；cookie 发起的写请求必须带 `x-protea-csrf: 1`，WS 用 cookie 时校验 `Origin`；同一地址 1 分钟内失败登录 10 次后拒绝（429）。
+- 每个写请求记审计 `control_write`（方法、路径、主体、状态码；不记请求体，秘密值不进审计）。
+- 控制台只在 TLS 或回环下显示秘密管理页；明文 HTTP 的非本机访问持续显示风险提示。页面带严格的 CSP（只允许同源脚本与连接）、`X-Frame-Options: DENY`。
+- 配置 API 返回的生效配置里，出现的秘密值替换为 `[REDACTED:<NAME>]`；秘密 API 只写与列名。人格钩子是进程内代码，不开放 API 编辑。
+- 从 Git / tarball 安装插件与 Skills 是管理员操作（等同于在守护进程里运行代码）：只接受 `https/ssh/git/file` 的 Git 地址与 `http(s)` 的 tarball（≤ 50 MB），拒绝越界的子目录与指向来源之外的符号链接，不复制 `.git`。
 - Webhook 必须签名或带独立 token；无签名的 `/hooks/<name>` 默认禁用（`webhook` 插件只有在 `verify: none` 且显式 `allowUnsigned: true` 时才服务该路径）。`/hooks/*` 不需要管理员令牌，校验由插件完成；请求体上限 1 MB。
 
 ## 9. 安全检查清单（发布前）

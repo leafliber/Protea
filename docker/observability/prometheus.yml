@@ -1,0 +1,15 @@
+# Prometheus scrape configuration for Protea (docs/10-architecture/15-observability.md §3).
+# /metrics needs a token unless control.publicMetrics is true. Use the read-only token:
+# store a value as the secret PROTEA_READONLY_TOKEN (protea secrets set PROTEA_READONLY_TOKEN)
+# and put the same value in the file below.
+global:
+  scrape_interval: 30s
+
+scrape_configs:
+  - job_name: protea
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/protea-readonly-token
+    static_configs:
+      - targets: ['protea:7788']

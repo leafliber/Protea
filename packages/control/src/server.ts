@@ -1,4 +1,6 @@
+import type { IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import type { Duplex } from 'node:stream';
 import { serve } from '@hono/node-server';
 import type { Hono } from 'hono';
 
@@ -8,8 +10,15 @@ export interface ControlServer {
   close(): Promise<void>;
 }
 
-/** Listen on "host:port" (port 0 picks a free port). */
-export function startControlServer(app: Hono, listen: string): Promise<ControlServer> {
+/**
+ * Listen on "host:port" (port 0 picks a free port). `upgrade` gets WebSocket upgrade requests
+ * and returns false for paths it does not serve (those are refused).
+ */
+export function startControlServer(
+  app: Hono,
+  listen: string,
+  opts: { upgrade?: (req: IncomingMessage, socket: Duplex, head: Buffer) => boolean } = {},
+): Promise<ControlServer> {
   const idx = listen.lastIndexOf(':');
   const hostname = idx > 0 ? listen.slice(0, idx) : '0.0.0.0';
   const port = Number(idx >= 0 ? listen.slice(idx + 1) : listen);
@@ -29,5 +38,10 @@ export function startControlServer(app: Hono, listen: string): Promise<ControlSe
       });
     });
     server.once('error', reject);
+    server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+      if (opts.upgrade?.(req, socket, head)) return;
+      socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+      socket.destroy();
+    });
   });
 }

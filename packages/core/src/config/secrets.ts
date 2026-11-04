@@ -31,7 +31,34 @@ export class SecretStore {
 
   set(name: string, value: string): void {
     this.check(name);
-    fs.writeFileSync(path.join(this.dir, name), `${value}\n`, { mode: 0o600 });
+    if (value.trim() === '') throw new Error('a secret value cannot be empty');
+    const file = path.join(this.dir, name);
+    const tmp = path.join(this.dir, `.tmp-${name}-${process.pid}`);
+    fs.writeFileSync(tmp, `${value.trim()}\n`, { mode: 0o600 });
+    fs.renameSync(tmp, file);
+  }
+
+  /** Remove the stored file. A value from the environment stays in effect (and is reported). */
+  delete(name: string): { removed: boolean; fromEnv: boolean } {
+    this.check(name);
+    const file = path.join(this.dir, name);
+    const removed = fs.existsSync(file);
+    if (removed) fs.rmSync(file);
+    return { removed, fromEnv: !!(this.env[`PROTEA_SECRET_${name}`] ?? (this.seen.has(name) ? this.env[name] : undefined)) };
+  }
+
+  /** Names only (never values), with where each one comes from; the environment wins over a file. */
+  list(): Array<{ name: string; source: 'env' | 'file'; shadowedFile: boolean }> {
+    const files = new Set(fs.existsSync(this.dir) ? fs.readdirSync(this.dir).filter((f) => NAME_RE.test(f)) : []);
+    const names = new Set([...files, ...this.seen]);
+    for (const k of Object.keys(this.env)) if (k.startsWith('PROTEA_SECRET_') && NAME_RE.test(k.slice(14))) names.add(k.slice(14));
+    const out: Array<{ name: string; source: 'env' | 'file'; shadowedFile: boolean }> = [];
+    for (const name of [...names].sort()) {
+      const env = this.env[`PROTEA_SECRET_${name}`] ?? (this.seen.has(name) ? this.env[name] : undefined);
+      if (env) out.push({ name, source: 'env', shadowedFile: files.has(name) });
+      else if (files.has(name)) out.push({ name, source: 'file', shadowedFile: false });
+    }
+    return out;
   }
 
   /** Returns the existing value, or generates and stores a random one. */

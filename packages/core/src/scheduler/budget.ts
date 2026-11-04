@@ -25,10 +25,16 @@ export class BudgetTracker {
   /** Last notice per level, so each threshold is reported once until usage drops below it again. */
   private readonly noticed = new Map<Level, 'warn' | 'over'>();
 
-  constructor(private readonly o: BudgetTrackerOptions) {
+  constructor(private o: BudgetTrackerOptions) {
     o.bus.on('usage.recorded', (u) => {
       if (u.level !== undefined) this.check(u.level);
     });
+  }
+
+  /** Budget settings are hot: the next status or check uses them. */
+  updateSettings(settings: BudgetSettings): void {
+    this.o.settings = settings;
+    this.noticed.clear();
   }
 
   limitFor(level: Level): number | null {

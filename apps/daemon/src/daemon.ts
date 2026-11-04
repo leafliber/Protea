@@ -7,6 +7,7 @@ import {
   Bus,
   BatchRepo,
   BudgetTracker,
+  BusTrail,
   ContextAssembler,
   ForkManager,
   EventStore,
@@ -17,6 +18,7 @@ import {
   RedactingProvider,
   PluginHost,
   KvRepo,
+  LogRing,
   MainSession,
   OwnerRegistry,
   PermissionGuard,
@@ -34,7 +36,9 @@ import {
   Transcript,
   UsageRepo,
   approvalTools,
+  configSources,
   createLogger,
+  createMetrics,
   contextLimits,
   createProvider,
   ensureMemoryDir,
@@ -51,6 +55,8 @@ import {
   newId,
   normalizeMcpServer,
   openDatabase,
+  patchConfigFile,
+  pruneRuns,
   reconcileDeliveries,
   resolveDevLoader,
   secretsEpoch,
@@ -59,15 +65,18 @@ import {
   systemClock,
   transcriptSeq,
   watchPaths,
+  writeCrashReport,
+  writeShutdownReport,
   type Clock,
   type Db,
   type Logger,
   type McpServerSettings,
+  type Metrics,
   type PluginSettings,
   type ProteaConfig,
   type Provider,
 } from '@protea/core';
-import { createControlApp, startControlServer, type ControlServer } from '@protea/control';
+import { createControlApp, createWebSocketEndpoint, startControlServer, type ControlServer } from '@protea/control';
 import { ConsolePlugin } from '@protea/plugin-console';
 import { CronPlugin } from '@protea/plugin-cron';
 import type { Level, StatusResponse } from '@protea/protocol';
@@ -83,6 +92,8 @@ export interface DaemonOptions {
   /** Override control.listen, e.g. "127.0.0.1:0" (tests). */
   listen?: string;
   logger?: Logger;
+  /** Node.js process metrics on /metrics (default on; tests that start many daemons turn it off). */
+  processMetrics?: boolean;
   clock?: Clock;
 }
 
@@ -113,6 +124,13 @@ export interface Daemon {
   persona: Persona;
   /** Resolves once the MCP servers configured at start have been tried (they start in the background). */
   mcpReady: Promise<void>;
+  /** This run's directory (<data>/runs/<runId>): log.jsonl, transcript.jsonl, shutdown.json, crash/. */
+  runDir: string;
+  /** The last log lines of this run. */
+  logs: LogRing;
+  /** The last bus records (crash reports). */
+  trail: BusTrail;
+  log: Logger;
   status(): StatusResponse;
   /** Re-read config.yaml now (the file watcher also does this on change). */
   reloadConfig(): Promise<void>;
@@ -124,6 +142,11 @@ function assetsDir(env: NodeJS.ProcessEnv): string {
   if (env['PROTEA_ASSETS_DIR']) return path.resolve(env['PROTEA_ASSETS_DIR']);
   // apps/daemon/{src,dist}/daemon.* → repository root
   return fileURLToPath(new URL('../../../', import.meta.url));
+}
+
+/** The built web console: $PROTEA_WEB_DIR or apps/web/dist next to the shipped assets. */
+function webDir(env: NodeJS.ProcessEnv, assets: string): string {
+  return env['PROTEA_WEB_DIR'] ? path.resolve(env['PROTEA_WEB_DIR']) : path.join(assets, 'apps', 'web', 'dist');
 }
 
 /** Development mode runs plugin sources through tsx: PROTEA_DEV=1, or the daemon itself runs from source. */
@@ -149,21 +172,26 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const loadedConfig = loadConfig(dataDir, env);
   const { sources, warnings } = loadedConfig;
   let config = loadedConfig.config;
+  const logRing = new LogRing();
   const log =
     opts.logger ??
     createLogger({
       level: config.observability.logLevel,
       format: config.observability.logFormat,
       file: path.join(runDir, 'log.jsonl'),
+      sinks: [logRing],
       base: { run: runId },
     });
   for (const w of warnings) log.warn(w);
+  const prunedRuns = pruneRuns(path.join(dataDir, 'runs'), config.observability.keepRuns, runId);
+  if (prunedRuns.length > 0) log.info({ removed: prunedRuns.length }, 'old run directories removed');
   const clock = opts.clock ?? systemClock;
   const tz = config.daemon.timezone;
 
   const { db, migration } = openDatabase(path.join(dataDir, 'protea.db'));
   if (migration.applied.length > 0) log.info({ applied: migration.applied }, 'database migrated');
   const bus = new Bus((topic, err) => log.error({ topic, err: errorMessage(err) }, 'bus listener failed'));
+  const trail = new BusTrail(bus);
   const store = new EventStore(db, bus, { runId, clock });
   const batches = new BatchRepo(db);
   const usage = new UsageRepo(db);
@@ -362,7 +390,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const dispatcher = new ToolDispatcher(tools, log.child({ component: 'tools' }));
   dispatcher.setGuard(new PermissionGuard(policy, approvals, audit));
   const toolStats = new ToolStatsRepo(db);
-  dispatcher.observe((name, ms, failed) => toolStats.record(name, ms, failed, new Date(clock.now()).toISOString()));
+  let metrics: Metrics | null = null;
+  dispatcher.observe((name, ms, failed) => {
+    toolStats.record(name, ms, failed, new Date(clock.now()).toISOString());
+    metrics?.toolCall(name, ms, failed);
+  });
   // Tool search: past context.toolSearch.threshold tools, MCP tools load on demand.
   const exposure = new ToolExposure({
     tools,
@@ -418,6 +450,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   };
   const limits = () => contextLimits(config.context.handoff, provider.contextWindow('main'), config.providers.anthropic.maxOutputTokens);
   let main: MainSession;
+  const contextTokens = (): number => {
+    const t = main.currentTranscript;
+    const base = t.sinceLastUsage();
+    return base ? base.tokens + estimateMessagesTokens(base.after) : estimateMessagesTokens(t.messages);
+  };
   const status = (): StatusResponse => {
     const h = provider.health();
     return {
@@ -441,11 +478,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       context: (() => {
         const t = main.currentTranscript;
         const lim = limits();
-        const base = t.sinceLastUsage();
         return {
           transcript: path.basename(t.file),
           handoffs: transcriptSeq(t.file) - 1,
-          estimatedTokens: base ? base.tokens + estimateMessagesTokens(base.after) : estimateMessagesTokens(t.messages),
+          estimatedTokens: contextTokens(),
           softTokens: lim.soft,
           hardTokens: lim.hard,
         };
@@ -453,6 +489,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       memory: { files: memoryIndex?.size ?? 0 },
       persona: { hooks: persona.hooks !== null, ...(persona.hooksProblem ? { problem: persona.hooksProblem } : {}) },
       usage24h: usage.totalsSince(clock.now() - 86_400_000),
+      scheduler: { paused: scheduler.paused, cooldowns: scheduler.cooldowns() },
       forks: forks.list(),
       budget: budget.status(),
     };
@@ -537,8 +574,48 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     clock,
     pushInternal,
   });
+  // An operator pause outlives restarts (it is shown in the status and the console).
+  const schedulerKv = kvNamespace(kv, 'scheduler');
+  const pausedBy = schedulerKv.get<string>('paused');
+  if (typeof pausedBy === 'string') {
+    scheduler.pause(pausedBy, { record: false });
+    log.warn({ by: pausedBy }, 'event delivery is paused (since before the restart); resume it from the console or with protea scheduler resume');
+  }
+  const schedulerOps = {
+    get paused() {
+      return scheduler.paused;
+    },
+    pause: (by: string) => {
+      const changed = scheduler.pause(by);
+      if (changed) schedulerKv.set('paused', by);
+      return changed;
+    },
+    resume: (by: string) => {
+      const changed = scheduler.resume(by);
+      if (changed) schedulerKv.delete('paused');
+      return changed;
+    },
+    discard: (levels: readonly number[], by: string) => scheduler.discard(levels as Level[], by),
+    cooldowns: () => scheduler.cooldowns(),
+  };
+
+  metrics = createMetrics({
+    bus,
+    store,
+    clock,
+    version: VERSION,
+    runId,
+    plugins: () => plugins.status(),
+    mcp: () => mcp.status(),
+    forks: () => forks.list(),
+    budget: () => budget.status(),
+    cacheHitRatio: (role) => usage.totalsSince(clock.now() - 86_400_000, { role }).cacheHitRatio,
+    contextTokens,
+    processMetrics: opts.processMetrics !== false,
+  });
 
   // Control plane.
+  const startControl = { ...config.control };
   const token = secrets.ensure(config.control.adminTokenSecret);
   if (token.generated) log.warn({ file: token.file }, 'generated an admin token for the control API');
   const ready = (): { ready: boolean; reasons: string[] } => {
@@ -547,11 +624,22 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     if (!h.ready) reasons.push(`provider: ${h.problem ?? 'not ready'}`);
     for (const p of plugins.status()) if (p.enabled && p.state === 'failed') reasons.push(`plugin ${p.id}: ${p.error ?? 'failed'}`);
     for (const m of mcp.status()) if (m.enabled && m.state === 'failed') reasons.push(`mcp ${m.id}: ${m.error ?? 'failed'}`);
+    for (const id of config.observability.requiredPlugins) {
+      const p = plugins.get(id);
+      if (!p || p.state !== 'running') reasons.push(`required plugin ${id}: ${p ? p.state : 'not installed'}`);
+    }
+    try {
+      // SQLite must take a write lock (disk full, read-only volume and lock trouble show here).
+      db.exec('BEGIN IMMEDIATE; ROLLBACK');
+    } catch (err) {
+      reasons.push(`database: ${errorMessage(err)}`);
+    }
+    if (scheduler.paused !== null) reasons.push(`event delivery paused by ${scheduler.paused}`);
     return { ready: reasons.length === 0, reasons };
   };
 
   // Hot configuration (docs/30-specs/04-config-reference.md §4).
-  const HOT_SECTIONS = new Set(['owner', 'permissions', 'plugins', 'mcp', 'skills', 'context']);
+  const HOT_SECTIONS = new Set(['owner', 'permissions', 'plugins', 'mcp', 'skills', 'context', 'budget']);
   const reloadConfig = async (): Promise<void> => {
     let next: ProteaConfig;
     try {
@@ -565,6 +653,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     config = next;
     owner.update(next.owner.identities);
     policy.update(next.permissions);
+    budget.updateSettings(next.budget);
     segments.refresh();
     const ids = new Set([...Object.keys(prev.plugins), ...Object.keys(next.plugins), ...plugins.status().map((p) => p.id)]);
     for (const id of ids) {
@@ -614,8 +703,65 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     persist(['skills', 'disabled'], config.skills.disabled);
     skills.refreshCatalog();
   };
+  // Configuration, secrets and policy views for the control API (docs/30-specs/05-control-api.md).
+  const redactJson = <T>(value: T): T => JSON.parse(secrets.redact(JSON.stringify(value))) as T;
+  const configOps = {
+    get: () => ({
+      config: redactJson(config) as unknown as Record<string, unknown>,
+      layers: sources,
+      sources: configSources(dataDir, env),
+      hot: [...HOT_SECTIONS].sort(),
+    }),
+    patch: async (patch: Record<string, unknown>) => {
+      const { changed } = patchConfigFile(dataDir, patch, env);
+      // Apply now rather than waiting for the file watcher.
+      await reloadConfig();
+      const restartRequired = [...new Set(changed.map((k) => k.split('.')[0] as string))].filter((k) => !HOT_SECTIONS.has(k));
+      return { changed, restartRequired };
+    },
+  };
+  const secretOps = {
+    list: () => secrets.list(),
+    set: (name: string, value: string) => {
+      secrets.set(name, value);
+      log.info({ secret: name }, 'secret written through the control API');
+    },
+    delete: (name: string) => {
+      if (name === config.control.adminTokenSecret) throw new Error('the admin token cannot be deleted through the API; replace it instead');
+      const r = secrets.delete(name);
+      if (r.removed) log.info({ secret: name }, 'secret deleted through the control API');
+      return r;
+    },
+  };
+  const wsEndpoint = createWebSocketEndpoint({
+    bus,
+    store,
+    log: log.child({ component: 'ws' }),
+    auth: () => ({ adminToken: token.value, readonlyToken: secrets.get(startControl.readonlyTokenSecret) ?? null }),
+    runId: () => runId,
+    logs: logRing,
+  });
   const app = createControlApp({
     adminToken: token.value,
+    readonlyToken: () => secrets.get(startControl.readonlyTokenSecret) ?? null,
+    audit,
+    metrics,
+    // control is a cold section: these keep their start-up values until a restart.
+    publicMetrics: () => startControl.publicMetrics,
+    webDir: () => webDir(env, assets),
+    batches,
+    usage,
+    scheduler: schedulerOps,
+    config: configOps,
+    secrets: secretOps,
+    permissions: () => ({
+      settings: config.permissions,
+      tools: tools.list().map((t) => ({ name: t.name, owner: t.owner, ...policy.decide(t) })),
+    }),
+    budget: () => ({ settings: config.budget, status: budget.status() }),
+    logs: { ring: logRing, runsDir: path.join(dataDir, 'runs'), runId },
+    persona,
+    onPersonaWrite: () => void reloadPersona(),
     bus,
     store,
     log: log.child({ component: 'control' }),
@@ -648,9 +794,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   });
   let server: ControlServer;
   try {
-    server = await startControlServer(app, opts.listen ?? config.control.listen);
+    server = await startControlServer(app, opts.listen ?? config.control.listen, { upgrade: wsEndpoint.handleUpgrade });
     controlUrl = server.url;
   } catch (err) {
+    wsEndpoint.close();
+    metrics.close();
     await mcp.stopAll();
     await plugins.stopAll();
     transcript.close();
@@ -706,16 +854,49 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const stop = (reason = 'stop requested'): Promise<void> => {
     stopping ??= (async () => {
       log.info({ reason }, 'stopping');
+      const t0 = clock.now();
+      const steps: Record<string, number> = {};
+      const step = async (name: string, fn: () => Promise<unknown> | unknown): Promise<void> => {
+        const s0 = clock.now();
+        try {
+          await fn();
+        } catch (err) {
+          log.warn({ step: name, err: errorMessage(err) }, 'shutdown step failed');
+        }
+        steps[name] = clock.now() - s0;
+      };
+      const before = { phase: main.phase, batchId: main.currentBatchId, pending: store.pendingCounts(), forks: forks.activeCount() };
       for (const off of unwatch) off();
       clearInterval(expiry);
       plugins.pushInternal({ type: 'daemon.stopping', level: 4, trigger: 'store', text: `Daemon stopping: ${reason}.` });
       scheduler.drain();
       const graceMs = config.daemon.shutdown.graceMs;
-      const [finished] = await Promise.all([main.drain(graceMs), forks.stop(graceMs)]);
+      let finished = true;
+      await step('drain', async () => {
+        [finished] = await Promise.all([main.drain(graceMs), forks.stop(graceMs)]);
+      });
       if (!finished) log.warn('the running batch was aborted at shutdown; it resumes on the next start');
-      await mcp.stopAll();
-      await plugins.stopAll();
-      await server.close();
+      await step('mcp', () => mcp.stopAll());
+      await step('plugins', () => plugins.stopAll());
+      wsEndpoint.close();
+      await step('server', () => server.close());
+      try {
+        writeShutdownReport(runDir, {
+          at: new Date(clock.now()).toISOString(),
+          reason,
+          durationMs: clock.now() - t0,
+          steps,
+          before,
+          batchFinished: finished,
+          plugins: plugins.status().map((p) => ({ id: p.id, state: p.state, ...(p.error ? { error: p.error } : {}) })),
+          mcp: mcp.status().map((m) => ({ id: m.id, state: m.state })),
+          forks: forks.list().filter((f) => f.state === 'paused' || f.state === 'queued').map((f) => ({ id: f.id, state: f.state })),
+        });
+      } catch (err) {
+        log.warn({ err: errorMessage(err) }, 'could not write shutdown.json');
+      }
+      metrics.close();
+      trail.close();
       main.currentTranscript.close();
       db.close();
       lock.release();
@@ -753,6 +934,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     memoryIndex,
     persona,
     mcpReady,
+    runDir,
+    logs: logRing,
+    trail,
+    log,
     status,
     reloadConfig,
     stop,
@@ -762,6 +947,18 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
 /** Run until SIGTERM/SIGINT (the `protea serve` entry point). */
 export async function runDaemon(opts: DaemonOptions): Promise<void> {
   const daemon = await startDaemon(opts);
+  // Crash reports go to <run>/crash/ (docs/10-architecture/15-observability.md §4). An uncaught
+  // exception ends the process (the next start resumes the interrupted batch); a stray rejected
+  // promise is reported and the daemon keeps running.
+  process.on('uncaughtException', (err) => {
+    const file = writeCrashReport(daemon.runDir, err, daemon.trail, { kind: 'uncaughtException' });
+    daemon.log.fatal({ err: errorMessage(err), report: file }, 'uncaught exception; exiting');
+    setTimeout(() => process.exit(1), 100).unref();
+  });
+  process.on('unhandledRejection', (reason) => {
+    const file = writeCrashReport(daemon.runDir, reason, daemon.trail, { kind: 'unhandledRejection' });
+    daemon.log.error({ err: errorMessage(reason), report: file }, 'unhandled promise rejection');
+  });
   let signals = 0;
   const onSignal = (sig: NodeJS.Signals): void => {
     signals++;

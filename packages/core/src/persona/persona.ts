@@ -123,6 +123,59 @@ export class Persona {
     return filesChanged || hooksChanged;
   }
 
+  /**
+   * Markdown files under the persona directory (SOUL.md, OPERATING.md, USER.md, environment
+   * prompt overrides under plugins/<id>/), for the control API. Hooks are code and stay off it.
+   */
+  listFiles(): Array<{ path: string; size: number; mtime: string }> {
+    const out: Array<{ path: string; size: number; mtime: string }> = [];
+    const walk = (dir: string, depth: number): void => {
+      if (depth > 3 || !fs.existsSync(dir)) return;
+      for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (ent.name.startsWith('.') || ent.name === 'node_modules') continue;
+        const full = path.join(dir, ent.name);
+        if (ent.isDirectory()) walk(full, depth + 1);
+        else if (ent.isFile() && ent.name.endsWith('.md')) {
+          const st = fs.statSync(full);
+          out.push({ path: path.relative(this.dir, full).split(path.sep).join('/'), size: st.size, mtime: st.mtime.toISOString() });
+        }
+      }
+    };
+    walk(this.dir, 0);
+    for (const f of PERSONA_FILES) if (!out.some((o) => o.path === f)) out.push({ path: f, size: 0, mtime: '' });
+    return out.sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  /** The full path of an editable persona file; throws for anything but a .md file inside the directory. */
+  private fileFor(rel: string): string {
+    const clean = rel.replace(/^\/+/, '');
+    if (!clean.endsWith('.md')) throw new Error('only Markdown (.md) persona files can be read or written here');
+    const full = path.resolve(this.dir, clean);
+    if (!full.startsWith(`${path.resolve(this.dir)}${path.sep}`)) throw new Error(`path escapes the persona directory: ${rel}`);
+    const realDir = fs.realpathSync(this.dir);
+    let probe = full;
+    while (!fs.existsSync(probe)) probe = path.dirname(probe);
+    const real = fs.realpathSync(probe);
+    if (real !== realDir && !real.startsWith(`${realDir}${path.sep}`)) throw new Error(`path escapes the persona directory via symlink: ${rel}`);
+    return full;
+  }
+
+  readFile(rel: string): string | undefined {
+    const full = this.fileFor(rel);
+    return fs.existsSync(full) ? fs.readFileSync(full, 'utf8') : undefined;
+  }
+
+  /** Atomic write; the directory watcher (or the caller) then reloads the persona. */
+  writeFile(rel: string, text: string): string {
+    const full = this.fileFor(rel);
+    if (Buffer.byteLength(text) > 256 * 1024) throw new Error('persona files are limited to 256 KB');
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    const tmp = `${full}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, text);
+    fs.renameSync(tmp, full);
+    return path.relative(this.dir, full).split(path.sep).join('/');
+  }
+
   /** (Re)load the hooks module when its file or mtime changed. Returns true when the hooks changed. */
   async loadHooks(): Promise<boolean> {
     const file = HOOK_FILES.map((f) => path.join(this.dir, f)).find((f) => fs.existsSync(f));

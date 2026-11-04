@@ -1,4 +1,4 @@
-import crypto from 'node:crypto';
+import { getConnInfo } from '@hono/node-server/conninfo';
 import { Hono, type Context } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import {
@@ -14,6 +14,7 @@ import {
 import {
   MemoryError,
   type ApprovalService,
+  type AuditLog,
   type Bus,
   type EventStore,
   type ForkManager,
@@ -27,9 +28,15 @@ import {
   type SkillRegistry,
   type Transcript,
 } from '@protea/core';
+import { principal, registerAuthRoutes, requireAuth, type AuthSettings } from './auth.js';
+import { installFrom, registerOpsRoutes, type OpsDeps } from './ops.js';
+import { registerConsole } from './static.js';
+import { subscribeStream } from './stream.js';
 
-export interface ControlDeps {
+export interface ControlDeps extends Omit<OpsDeps, 'store' | 'audit'> {
   adminToken: string;
+  /** Optional read-only token (GET and WebSocket only); read on every request so it can change. */
+  readonlyToken?: () => string | null;
   bus: Bus;
   store: EventStore;
   log: Logger;
@@ -56,18 +63,19 @@ export interface ControlDeps {
   /** Deliver an operator message through the console plugin. */
   pushConsole: (req: PushEventRequest, senderKey: string) => PushResult;
   keepAliveMs?: number;
-}
-
-function tokenMatches(given: string | undefined, expected: string): boolean {
-  if (!given) return false;
-  const a = crypto.createHash('sha256').update(given).digest();
-  const b = crypto.createHash('sha256').update(expected).digest();
-  return crypto.timingSafeEqual(a, b);
+  /** Prometheus text exposition at /metrics. */
+  metrics?: { render(): Promise<string>; contentType: string };
+  /** Serve /metrics without a token (a scraper on a private network). */
+  publicMetrics?: () => boolean;
+  /** The built web console (apps/web/dist); null serves a "not built" page. */
+  webDir?: () => string | null;
+  /** State-changing requests are recorded as `control_write`. */
+  audit?: AuditLog;
 }
 
 const MAX_HOOK_BODY = 1024 * 1024;
 
-function errorJson(c: Context, status: 400 | 404 | 409, code: string, err: unknown) {
+function errorJson(c: Context, status: 400 | 404 | 409 | 422, code: string, err: unknown) {
   return c.json({ error: { code, message: err instanceof Error ? err.message : String(err) } }, status);
 }
 
@@ -78,12 +86,23 @@ function intParam(c: Context, name: string): number | undefined {
   return Number.isInteger(n) ? n : undefined;
 }
 
+const THINKING_TYPES = new Set(['thinking', 'redacted_thinking']);
+
 /**
- * HTTP control plane (M0/M1 subset of docs/30-specs/05-control-api.md): health,
- * status, events, session transcripts, forks and a Server-Sent Events stream.
+ * HTTP control plane (docs/30-specs/05-control-api.md): health and metrics, status, events,
+ * batches, sessions, plugins, MCP, Skills, approvals, memory, persona, configuration,
+ * secrets, scheduler, logs, the SSE stream and the web console. The WebSocket lives in ws.ts.
  */
 export function createControlApp(d: ControlDeps): Hono {
   const app = new Hono();
+  const auth = (): AuthSettings => ({ adminToken: d.adminToken, readonlyToken: d.readonlyToken?.() ?? null });
+  const clientAddress = (c: Context): string => {
+    try {
+      return getConnInfo(c).remote.address ?? 'unknown';
+    } catch {
+      return 'unknown';
+    }
+  };
 
   app.get('/healthz', (c) => c.json({ ok: true }));
   app.get('/readyz', (c) => {
@@ -140,11 +159,24 @@ export function createControlApp(d: ControlDeps): Hono {
     }
   });
 
+  registerAuthRoutes(app, auth, clientAddress);
+  const guard = requireAuth(auth);
+  app.use('/api/*', guard);
+  // Every state-changing request is audited (memory writes also get their own record).
   app.use('/api/*', async (c, next) => {
-    const header = c.req.header('authorization');
-    const token = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
-    if (!tokenMatches(token, d.adminToken)) return c.json({ error: { code: 'unauthorized', message: 'missing or invalid token' } }, 401);
     await next();
+    if (!d.audit || c.req.method === 'GET' || c.req.method === 'HEAD') return;
+    const p = principal(c);
+    d.audit.record({ kind: 'control_write', summary: `${c.req.method} ${c.req.path}`, owner: `${p.via === 'cookie' ? 'console' : 'api'}:${p.role}`, outcome: String(c.res.status) });
+  });
+
+  app.get('/metrics', async (c, next) => {
+    if (!d.publicMetrics?.()) return guard(c, next);
+    return next();
+  });
+  app.get('/metrics', async (c) => {
+    if (!d.metrics) return c.text('# no metrics\n', 200);
+    return c.body(await d.metrics.render(), 200, { 'content-type': d.metrics.contentType });
   });
 
   app.get('/api/status', (c) => c.json(d.status()));
@@ -170,7 +202,7 @@ export function createControlApp(d: ControlDeps): Hono {
       ...(b.trigger !== undefined ? { trigger: b.trigger } : {}),
       ...(Array.isArray(b.tags) ? { tags: b.tags } : {}),
     };
-    const r = d.pushConsole(req, 'console:admin');
+    const r = d.pushConsole(req, principal(c).via === 'cookie' ? 'console:admin' : 'api:admin');
     if (!r.ok || r.cursor === undefined) {
       return c.json({ error: { code: 'rejected', message: 'event rejected', details: r.errors ?? [] } }, 422);
     }
@@ -184,22 +216,31 @@ export function createControlApp(d: ControlDeps): Hono {
     return c.json(res, 201);
   });
 
+  // Newest first by default; `cursor` pages backwards (events older than it), `nextCursor` continues.
   app.get('/api/events', (c) => {
     const state = c.req.query('state');
     const states = state ? (state.split(',').filter((s) => (EVENT_STATES as readonly string[]).includes(s)) as EventState[]) : undefined;
     const since = intParam(c, 'since');
+    const until = intParam(c, 'until');
+    const before = intParam(c, 'cursor');
     const level = intParam(c, 'level');
-    const limit = intParam(c, 'limit');
+    const limit = Math.min(Math.max(intParam(c, 'limit') ?? 100, 1), 1000);
     const source = c.req.query('source');
+    const type = c.req.query('type');
+    const order = c.req.query('order') === 'asc' ? 'asc' : 'desc';
+    const upper = before !== undefined ? Math.min(before - 1, until ?? Number.MAX_SAFE_INTEGER) : until;
     const events = d.store.query({
-      order: c.req.query('order') === 'asc' ? 'asc' : 'desc',
+      order,
+      limit,
       ...(since !== undefined ? { sinceCursor: since } : {}),
+      ...(upper !== undefined ? { untilCursor: upper } : {}),
       ...(level !== undefined && isLevel(level) ? { maxLevel: level } : {}),
-      ...(limit !== undefined ? { limit } : {}),
       ...(source ? { source } : {}),
+      ...(type ? { type } : {}),
       ...(states ? { states } : {}),
     });
-    return c.json({ events });
+    const last = events[events.length - 1];
+    return c.json({ events, nextCursor: order === 'desc' && events.length === limit && last ? last.cursor : null });
   });
 
   app.get('/api/events/:cursor', (c) => {
@@ -215,7 +256,17 @@ export function createControlApp(d: ControlDeps): Hono {
     if (!all) return c.json({ error: { code: 'not_found', message: 'no such session' } }, 404);
     const limit = Math.min(Math.max(intParam(c, 'limit') ?? 50, 1), 500);
     const from = intParam(c, 'from') ?? Math.max(0, all.length - limit);
-    return c.json({ total: all.length, from, messages: all.slice(from, from + limit) });
+    // thinking=summary (default) keeps the summarized thinking text but never the signature; none drops it.
+    const mode = c.req.query('thinking') === 'none' ? 'none' : 'summary';
+    const messages = all.slice(from, from + limit).map((m) => ({
+      ...m,
+      content: m.content
+        .filter((b) => mode === 'summary' || !THINKING_TYPES.has(b.type))
+        .map((b) =>
+          b.type === 'thinking' ? { type: 'thinking', thinking: (b as { thinking?: string }).thinking ?? '' } : b.type === 'redacted_thinking' ? { type: 'redacted_thinking' } : b,
+        ),
+    }));
+    return c.json({ total: all.length, from, messages });
   });
 
   app.get('/api/sessions', (c) => {
@@ -295,14 +346,16 @@ export function createControlApp(d: ControlDeps): Hono {
   app.get('/api/plugins', (c) => c.json({ plugins: d.plugins?.status() ?? [] }));
   app.get('/api/plugins/:id', (c) => {
     const p = d.plugins?.get(c.req.param('id'));
-    return p ? c.json(p) : c.json({ error: { code: 'not_found', message: 'no such plugin' } }, 404);
+    return p ? c.json({ ...p, manifest: d.plugins?.manifestOf(p.id) ?? null }) : c.json({ error: { code: 'not_found', message: 'no such plugin' } }, 404);
   });
+  // { path } | { source: git, url, ref?, subdir? } | { source: tarball, url, subdir? }
   app.post('/api/plugins', async (c) => {
     if (!d.plugins) return c.json({ error: { code: 'unavailable', message: 'no plugin host' } }, 404);
-    const body = (await c.req.json().catch(() => null)) as { path?: unknown; enable?: unknown } | null;
-    if (!body || typeof body.path !== 'string') return c.json({ error: { code: 'bad_request', message: 'path is required (git and tarball sources arrive later)' } }, 400);
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!body) return c.json({ error: { code: 'bad_request', message: 'body must be { path } or { source, url }' } }, 400);
+    const plugins = d.plugins;
     try {
-      return c.json(await d.plugins.install(body.path, { enable: body.enable !== false }), 201);
+      return c.json(await installFrom(body, (dir) => plugins.install(dir, { enable: body['enable'] !== false })), 201);
     } catch (err) {
       return errorJson(c, 400, 'install_failed', err);
     }
@@ -402,12 +455,14 @@ export function createControlApp(d: ControlDeps): Hono {
   const skillName = (c: Context, suffix = ''): string => decodeURIComponent(c.req.path.slice('/api/skills/'.length, suffix ? -suffix.length : undefined));
   const noSkill = (c: Context) => c.json({ error: { code: 'not_found', message: 'no such skill' } }, 404);
   app.get('/api/skills', (c) => c.json({ skills: d.skills?.list() ?? [] }));
+  // { path } | { gitUrl, ref?, subdir? } | { source, url, … } as for plugins.
   app.post('/api/skills', async (c) => {
     if (!d.skills) return noSkill(c);
-    const body = (await c.req.json().catch(() => null)) as { path?: unknown } | null;
-    if (!body || typeof body.path !== 'string') return c.json({ error: { code: 'bad_request', message: 'path is required (git sources arrive later)' } }, 400);
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!body) return c.json({ error: { code: 'bad_request', message: 'body must be { path } or { gitUrl }' } }, 400);
+    const skills = d.skills;
     try {
-      return c.json(d.skills.install(body.path), 201);
+      return c.json(await installFrom(body, (dir) => skills.install(dir)), 201);
     } catch (err) {
       return errorJson(c, 400, 'install_failed', err);
     }
@@ -462,38 +517,9 @@ export function createControlApp(d: ControlDeps): Hono {
         queue.push(m);
         wake?.();
       };
-      const unsubs = [
-        d.bus.on('event.stored', (e) => push({ topic: 'event', data: e })),
-        d.bus.on('event.settled', (s) =>
-          push({
-            topic: 'settled',
-            data: { cursors: s.cursors, outcome: s.outcome, ...(s.batchId !== undefined ? { batchId: s.batchId } : {}) },
-          }),
-        ),
-        d.bus.on('session.phase', (p) =>
-          push({
-            topic: 'phase',
-            data: {
-              phase: p.phase,
-              ...(p.batchId !== undefined ? { batchId: p.batchId } : {}),
-              ...(p.round !== undefined ? { round: p.round } : {}),
-            },
-          }),
-        ),
-        d.bus.on('batch.started', (b) => push({ topic: 'batch.started', data: b })),
-        d.bus.on('batch.extended', (b) => push({ topic: 'batch.extended', data: b })),
-        d.bus.on('batch.ended', (b) => push({ topic: 'batch.ended', data: b })),
-        d.bus.on('plugin.output', (o) => push({ topic: 'output', data: o })),
-        d.bus.on('scheduler.action', (a) => push({ topic: 'scheduler', data: a })),
-        d.bus.on('fork.changed', (f) => push({ topic: 'fork', data: f })),
-        d.bus.on('plugin.changed', (p) => push({ topic: 'plugin', data: p })),
-        d.bus.on('approval.changed', (a) => push({ topic: 'approval', data: a })),
-        d.bus.on('mcp.changed', (m) => push({ topic: 'mcp', data: m })),
-        d.bus.on('skills.changed', (k) => push({ topic: 'skills', data: k })),
-        d.bus.on('session.handoff', (h) => push({ topic: 'handoff', data: { from: h.from.split('/').pop() ?? h.from, to: h.to.split('/').pop() ?? h.to, notes: h.notes, dropped: h.dropped, kept: h.kept } })),
-      ];
+      const unsub = subscribeStream(d.bus, (m) => push(m as StreamMessage));
       stream.onAbort(() => {
-        for (const u of unsubs) u();
+        unsub();
         wake?.();
       });
 
@@ -526,9 +552,12 @@ export function createControlApp(d: ControlDeps): Hono {
         wake = null;
         if (timedOut && !stream.aborted) await stream.writeSSE({ event: 'ping', data: '{}' });
       }
-      for (const u of unsubs) u();
+      unsub();
     });
   });
+
+  registerOpsRoutes(app, { ...d, ...(d.audit ? { audit: d.audit } : {}) });
+  registerConsole(app, d.webDir ?? (() => null));
 
   app.onError((err, c) => {
     d.log.error({ err: err.message, path: c.req.path }, 'control API error');

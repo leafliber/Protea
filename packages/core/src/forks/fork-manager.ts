@@ -70,6 +70,9 @@ type RunOutcome =
   | { kind: 'paused' }
   | { kind: 'cancelled' };
 
+/** pauseReason of a fork the operator paused. */
+const OPERATOR_PAUSE = 'operator';
+
 interface Fork {
   cp: Checkpoint;
   transcript: Transcript | null;
@@ -171,6 +174,13 @@ export class ForkManager {
         this.o.log.warn({ fork: row.id }, 'fork checkpoint missing; marked failed');
         continue;
       }
+      // An operator pause outlives restarts; every other pause resumes as queued.
+      if (cp.state === 'paused' && cp.pauseReason === OPERATOR_PAUSE) {
+        const f = this.track(cp);
+        this.persist(f);
+        n++;
+        continue;
+      }
       cp.state = 'queued';
       delete cp.pauseReason;
       const f = this.track(cp);
@@ -246,6 +256,41 @@ export class ForkManager {
     return this.info(f);
   }
 
+  /**
+   * Operator pause (control API): a running fork stops at its next model/tool boundary and a
+   * queued one does not start, until resume(). Survives restarts.
+   */
+  pause(id: string): ForkInfo {
+    const f = this.forks.get(id);
+    if (!f) throw new Error(`no fork ${id}`);
+    if (f.cp.state === 'queued') {
+      f.cp.state = 'paused';
+      f.cp.pauseReason = OPERATOR_PAUSE;
+      this.persist(f);
+    } else if (f.cp.state === 'running') {
+      f.pauseRequested = OPERATOR_PAUSE;
+    } else if (f.cp.state === 'paused' && f.cp.pauseReason !== OPERATOR_PAUSE) {
+      f.cp.pauseReason = OPERATOR_PAUSE;
+      this.persist(f);
+    }
+    return this.info(f);
+  }
+
+  resume(id: string): ForkInfo {
+    const f = this.forks.get(id);
+    if (!f) throw new Error(`no fork ${id}`);
+    if (f.cp.state === 'running' && f.pauseRequested === OPERATOR_PAUSE) f.pauseRequested = null;
+    if (f.cp.state !== 'paused' || f.cp.pauseReason !== OPERATOR_PAUSE) return this.info(f);
+    if (this.yielding) {
+      // Forks are yielding to an urgent main batch: join them and resume together.
+      f.cp.pauseReason = 'yield';
+      this.persist(f);
+    } else if (this.started && !this.stopping) {
+      this.launch(f);
+    }
+    return this.info(f);
+  }
+
   get(id: string): ForkInfo | undefined {
     const f = this.forks.get(id);
     if (f) return this.info(f);
@@ -313,6 +358,7 @@ export class ForkManager {
   }
 
   private requestYield(f: Fork): void {
+    if (f.pauseRequested === OPERATOR_PAUSE) return;
     f.pauseRequested = 'yield';
     // Low-priority forks that keep the model busy too long lose their call (it is re-issued on resume).
     if (f.cp.level >= 3 && !f.yieldTimer) {
