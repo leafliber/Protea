@@ -15,10 +15,16 @@ const EVENT_RE = /<event [^>]*source="console"[^>]*>\n([\s\S]*?)\n<\/event>/g;
  * (long-running tests on echo would otherwise keep one ever-growing conversation).
  */
 export class EchoProvider implements Provider {
-  readonly id = 'echo';
   private seq = 0;
 
-  constructor(private readonly delayMs = 0) {}
+  constructor(
+    private readonly delayMs = 0,
+    readonly id = 'echo',
+  ) {}
+
+  async listModels(): Promise<string[]> {
+    return ['echo'];
+  }
 
   modelFor(_role: ModelRole): string {
     return 'echo';

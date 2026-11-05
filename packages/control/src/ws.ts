@@ -4,14 +4,15 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { WS_TOPICS, type ControlRole, type WsClientMessage, type WsServerMessage, type WsTopic } from '@protea/protocol';
 import { logMatcher, type Bus, type Cidr, type EventStore, type LogEntry, type LogRing, type Logger } from '@protea/core';
 import { addressGate } from './allow.js';
-import { SESSION_COOKIE, cookieFrom, principalOf, type AuthSettings } from './auth.js';
+import { SESSION_COOKIE, cookieFrom, type Principal } from './auth.js';
 import { subscribeStream } from './stream.js';
 
 export interface WsDeps {
   bus: Bus;
   store: EventStore;
   log: Logger;
-  auth: () => AuthSettings;
+  /** Resolve the caller from the Authorization header and the session cookie (auth.ts `authenticate`). */
+  authenticate: (authorization: string | undefined, cookie: string | undefined) => Principal | null;
   runId: () => string;
   logs?: LogRing;
   /** Ping interval; a client that misses a pong is dropped. */
@@ -144,7 +145,7 @@ export function createWebSocketEndpoint(d: WsDeps): {
         socket.destroy();
         return true;
       }
-      const p = principalOf(d.auth(), req.headers.authorization, cookieFrom(req.headers.cookie, SESSION_COOKIE));
+      const p = d.authenticate(req.headers.authorization, cookieFrom(req.headers.cookie, SESSION_COOKIE));
       // A browser always sends Origin; the cookie alone must not let another site connect.
       const origin = req.headers.origin;
       const hostOf = (o: string): string | null => {

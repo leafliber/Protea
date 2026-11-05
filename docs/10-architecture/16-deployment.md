@@ -33,15 +33,15 @@ docker build -t protea:slim --target slim .    # slim
 docker run -d --name protea \
   -v protea-data:/data \
   -p 127.0.0.1:7788:7788 \
-  -e ANTHROPIC_API_KEY=... \
   --stop-timeout 40 \
   --restart unless-stopped \
   protea
 ```
 
-- API key 可以不放进环境变量（`docker inspect` 看得到）：`docker exec -i protea protea secrets set ANTHROPIC_API_KEY`，然后 `docker restart protea`（Provider 启动时读取 key）。
+- **首次启动**：没有管理员账号时，守护进程把一次性设置码打印到容器日志：`docker logs protea`（或 `docker exec protea protea setup`）。打开控制台，用设置码创建管理员账号，接着在引导里选模型供应商（Anthropic、OpenAI、DeepSeek、通义千问、Kimi、GLM、OpenRouter、Ollama 或任何 OpenAI / Anthropic 兼容接口），填地址、API Key 与模型，测试连接后保存。供应商立即生效，不用重启；以后在「模型」页增加、切换或按角色分配。不开浏览器也可以：`docker exec -it protea protea setup --user admin`，再 `docker exec -it protea protea providers set deepseek --model deepseek-chat --key-stdin`。
+- 也可以完全用环境变量配置供应商（自动化部署），见 [../30-specs/04-config-reference.md](../30-specs/04-config-reference.md) §3；密钥用 `PROVIDER_<ID>_API_KEY` 或 `PROTEA_SECRET_PROVIDER_<ID>_API_KEY`（`docker inspect` 看得到环境变量，存成秘密更好）。2026-11-05 之前的 `ANTHROPIC_API_KEY` 文件在启动时自动改名并配好 `anthropic` 档案。
 - 本地构建：`pnpm docker:build`（`scripts/docker-build.sh`），标签 `protea:latest`、`protea:<版本>`、`protea:<版本>-<提交>`；slim 用 `pnpm docker:build:slim`。
-- 管理员令牌不设置时自动生成并写入 `/data/secrets/PROTEA_ADMIN_TOKEN`：`docker exec protea cat /data/secrets/PROTEA_ADMIN_TOKEN`。
+- API 令牌（CLI、脚本、Prometheus）不设置时自动生成并写入 `/data/secrets/PROTEA_ADMIN_TOKEN`；容器里的 CLI 自动读取它。控制台用账号登录，令牌只在恢复时用（登录页"改用 API 令牌登录"）。忘记密码：`docker exec -it protea protea accounts passwd <用户名>`。
 - 控制台在 `http://127.0.0.1:7788/`；不在本机时用 SSH 隧道或下面的 Caddy。
 - 其他秘密：`docker exec -i protea protea secrets set TELEGRAM_BOT_TOKEN`（从 stdin 读），或环境变量 `PROTEA_SECRET_<NAME>`。
 

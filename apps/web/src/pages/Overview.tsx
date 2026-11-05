@@ -28,7 +28,11 @@ export function Overview({ status, reload }: { status: StatusResponse | undefine
           )}
         </div>
       )}
-      {!status.provider.ready && <div className="banner banner-bad span-all">模型 Provider 未就绪：{status.provider.problem}</div>}
+      {!status.provider.ready && (
+        <div className="banner banner-bad span-all">
+          模型未就绪：{status.provider.problem} <a href="#/providers">去「模型」页配置</a>
+        </div>
+      )}
       {(badPlugins.length > 0 || badMcp.length > 0) && (
         <div className="banner banner-warn span-all">
           {badPlugins.map((p) => (

@@ -1,8 +1,8 @@
 # 控制平面
 
-> 状态：Accepted（M6）· 更新：2026-11-04 · 规范：[../30-specs/05-control-api.md](../30-specs/05-control-api.md)
+> 状态：Accepted（M6）· 更新：2026-11-05 · 规范：[../30-specs/05-control-api.md](../30-specs/05-control-api.md)
 
-> **实现状态（M6）**：HTTP API 与鉴权在 `packages/control/src/`（`app.ts`、`ops.ts`、`auth.ts`），地址白名单在 `allow.ts`，WebSocket 在 `ws.ts`，SSE/WS 共用的总线投影在 `stream.ts`，控制台托管在 `static.ts`；Web 控制台是 `apps/web`；CLI 在 `apps/cli/src/`（`main.ts`、`ops.ts`，以及在数据目录上直接工作的 `admin.ts`：migrate、healthcheck、backup、restore、replay）。M6 新增预算放行、备份 API 与 `control.allowCidrs`。未实现：`/mcp` 服务端（M7）。
+> **实现状态（M6）**：HTTP API 与鉴权在 `packages/control/src/`（`app.ts`、`ops.ts`、`auth.ts`），地址白名单在 `allow.ts`，WebSocket 在 `ws.ts`，SSE/WS 共用的总线投影在 `stream.ts`，控制台托管在 `static.ts`；Web 控制台是 `apps/web`；CLI 在 `apps/cli/src/`（`main.ts`、`ops.ts`，以及在数据目录上直接工作的 `admin.ts`：migrate、healthcheck、backup、restore、replay）。M6 新增预算放行、备份 API 与 `control.allowCidrs`。2026-11-05 新增账号、设置码与供应商档案：账号与会话存储在 `packages/core/src/auth/accounts.ts`，路由在 `auth.ts` 与 `providers.ts`，控制台的 `pages/Setup.tsx`、`pages/Providers.tsx`，CLI 的 `accounts.ts`（`setup`、`accounts`、`providers`）。未实现：`/mcp` 服务端（M7）。
 
 ## 1. 组成
 
@@ -20,13 +20,17 @@
 
 ## 2. 鉴权
 
-- **管理员令牌**：秘密 `PROTEA_ADMIN_TOKEN`。首次启动若未设置，生成随机值写入 `/data/secrets/PROTEA_ADMIN_TOKEN`（0600），日志只给出文件路径、不打印令牌；容器内的 CLI 会自动读取该文件。API 与 WS 用 `Authorization: Bearer`。
-- **只读令牌**（可选）：秘密 `PROTEA_READONLY_TOKEN`（名字可用 `control.readonlyTokenSecret` 改）存在时生效。只允许 GET 与 WS 订阅，并且读不到 `/api/memory*`、`/api/persona*`、`/api/secrets*`；用于监控面板与 Prometheus。
-- **控制台会话**：`POST /api/auth/login {token}` 校验后设置 cookie `protea_session`（HttpOnly、SameSite=Strict、Path=/，经 HTTPS 访问时加 Secure，30 天）。cookie 的值是 `v1.<role>.` 加上令牌对固定串的 HMAC：服务端不存会话，重启不掉登录，换令牌即全部失效，cookie 里也没有令牌本身。
+控制台用**账号**（用户名 + 密码）登录；CLI、脚本与监控用 **API 令牌**（Bearer）。两者是同一组角色：`admin` 与 `readonly`。
+
+- **首次设置**：数据库里还没有管理员账号时，守护进程生成一次性**设置码**（4 组 4 个字符，约 78 位，不含易混字符），存入秘密 `PROTEA_SETUP_CODE`（`/data/secrets/`，0600），并在启动时把它连同控制台地址打印到标准输出（`docker logs protea` 看得到）。这一段不经过日志器，所以 `log.jsonl`、内存日志缓冲与诊断包里都没有设置码；它同时是已知秘密值，万一出现在别处的日志行里也会被脱敏。控制台检测到 `GET /api/setup` 为 `required` 时显示初始化页：输入设置码、用户名与密码创建管理员（同时登录），再引导配置模型供应商（[12-model-providers.md](12-model-providers.md) §3）。账号建好后设置码文件删除、不再有效；之后重启也不再打印。也可以在容器里完成：`docker exec -it protea protea setup --user <name>`（CLI 从数据卷读设置码，密码不回显）。
+- **账号**：`accounts` 表；密码用 scrypt（N=2¹⁵、r=8、p=1，32 MiB，约 0.1 s）加 16 字节盐，哈希串自带参数便于以后调高；用户名不区分大小写。管理员可以增删账号、改角色、重设密码（重设会结束该账号的全部会话）；每个账号可以改自己的密码。最后一个管理员不能删除或降级。忘记密码：`docker exec -it protea protea accounts passwd <name>`（CLI 用 API 令牌）。
+- **控制台会话**：登录成功后设置 cookie `protea_session`（HttpOnly、SameSite=Strict、Path=/，经 HTTPS 访问时加 Secure，30 天）。cookie 值是随机的 `v2.<32 字节>`，数据库 `auth_sessions` 只存它的 SHA-256，所以会话可以单独注销（退出、改密码、删账号都会结束会话），重启不掉登录。
+- **API 令牌**：秘密 `PROTEA_ADMIN_TOKEN`。首次启动若未设置，生成随机值写入 `/data/secrets/PROTEA_ADMIN_TOKEN`（0600），日志只给出文件路径、不打印令牌；容器内的 CLI 会自动读取该文件。API 与 WS 用 `Authorization: Bearer`。控制台登录页也可以"改用 API 令牌登录"（恢复用）：这样的会话记着令牌指纹，换令牌即失效。
+- **只读令牌**（可选）：秘密 `PROTEA_READONLY_TOKEN`（名字可用 `control.readonlyTokenSecret` 改）存在时生效。只允许 GET 与 WS 订阅，并且读不到 `/api/memory*`、`/api/persona*`、`/api/secrets*`、`/api/diagnostics*`、`/api/accounts*`；用于监控面板与 Prometheus。只读账号的限制相同。
 - **CSRF**：用 cookie 鉴权的写请求必须带 `x-protea-csrf: 1`（跨站表单设不了自定义头，跨站脚本又过不了同源策略）；WS 用 cookie 连接时 `Origin` 必须与 `Host` 一致。
-- **限流**：同一地址 1 分钟内失败登录 10 次后返回 429。
+- **限流**：同一地址 1 分钟内失败的登录、设置码尝试与改密码合计 10 次后返回 429。
 - **地址白名单**（M6）：`control.allowCidrs` 非空时，只有其中的地址与回环地址能访问 HTTP 与 WS（在鉴权之前判断）；`/hooks/*` 不受限。反向代理后面看到的是代理的地址，此时应在代理上做白名单。
-- **审计**：每个写请求（非 GET）记一条 `control_write`（`METHOD /path`、主体 `api|console:<role>`、状态码），记忆写入另记 `memory_write`。
+- **审计**：每个写请求（非 GET）记一条 `control_write`（`METHOD /path`、主体 `api:<role>` / `console:<用户名>` / `console:<role>`、状态码），记忆写入另记 `memory_write`；用设置码建管理员另记一条。
 - **Webhook** 与 MCP OAuth 回调不用令牌：前者由插件校验签名，后者靠 `state` 匹配。
 - 反向代理与 TLS 由部署层负责（[16-deployment.md](16-deployment.md) §6）；控制平面默认监听 `0.0.0.0:7788`。控制台在明文 HTTP 且非本机地址上访问时持续显示风险提示。
 
@@ -35,7 +39,10 @@
 | 资源 | 主要操作 |
 |---|---|
 | `/api/status` | 运行信息、阶段、待处理、Provider、插件/MCP/Skills/工具、上下文、记忆、人格、24 h 用量、调度暂停与冷却、Fork、预算 |
-| `/api/auth` | 登录、登出、当前身份 |
+| `/api/setup` | 是否需要初始化；用设置码创建第一个管理员 |
+| `/api/auth` | 账号或令牌登录、登出、当前身份、改自己的密码 |
+| `/api/accounts` | 账号列表、添加、改角色或重设密码、删除（管理员） |
+| `/api/providers` | 供应商档案（设置、密钥状态、就绪）、保存（含密钥）、删除、默认与按角色选择、测试连接、模型列表 |
 | `/api/events` | 列表（游标分页、按等级/来源/状态/类型过滤）、详情与投递记录、`POST` 推送（`console` 来源）、提升、撤回 |
 | `/api/batches` | 批历史、批的事件与每轮模型调用 |
 | `/api/sessions` | 主会话与 Fork 列表、转录（思考摘要开关）、手动交接、派生/取消/暂停/恢复 Fork |
@@ -80,15 +87,16 @@ WebSocket 客户端发 `{ subscribe: [...], since?, logFilter? }`，每条订阅
 | 总览 | 阶段呼吸灯、待处理、上下文占用环、24 h 用量、按等级的预算、进行中的 Fork、最近的内部事件；暂停/恢复投递、手动交接 |
 | 事件流 | 实时 + 历史（按等级着色、分页），调度动作与内部事件高亮；点开看信封与投递记录，提升或撤回；顶部输入框即 `console` 来源 |
 | 会话 | 主会话转录（思考摘要开关）、上下文环、手动交接；批与每轮用量；Fork 列表、转录、派生、暂停/恢复/取消 |
+| 模型 | 供应商档案卡片（协议、地址、模型、密钥状态、服务的角色、就绪）；添加/编辑（厂商预设、协议、地址、API Key、按角色的模型、获取模型列表、测试连接、高级设置）；设为默认；按角色选择供应商 |
 | 插件 | 卡片：状态、来源、工具数、重启次数、最近错误；安装（Git / tarball / 目录）/启用/禁用/重载/卸载；配置表单（由 JSON Schema 生成，标出 `x-hot: false`）与 JSON 编辑；日志；清单 |
 | MCP | 服务器列表、工具、延迟、添加（本地命令或远程 URL，bearer / OAuth）、OAuth 授权 |
 | Skills | 列表、正文预览、诊断、安装、启停、删除 |
 | 审批 | 待处理与历史、审计记录 |
 | 记忆与人格 | 记忆目录树、全文检索、编辑器；人格文件编辑（钩子是代码，不在这里编辑） |
-| 配置 | 生效配置与来源层、按路径或补丁修改；秘密名称管理；权限；预算；调度 |
+| 配置 | 生效配置与来源层、按路径或补丁修改；账号（添加、角色、重设密码、删除）与自己的密码；秘密名称管理；权限；预算；调度 |
 | 日志 | 实时尾随（WS）、检索（本次或历次运行）、运行目录的关停记录与崩溃报告 |
 
-控制台不做"聊天"界面；与助理对话走 `console` 连接器（事件流页面的输入框即是），保持"一切皆事件"。只读令牌登录时，所有修改控件隐藏。界面为中文；多语言在 M7。
+首次访问（还没有管理员账号）时显示初始化页：设置码 + 管理员账号 → 模型供应商 → 完成。控制台不做"聊天"界面；与助理对话走 `console` 连接器（事件流页面的输入框即是），保持"一切皆事件"。只读账号或只读令牌登录时，所有修改控件隐藏。界面为中文；多语言在 M7。
 
 ## 6. CLI
 

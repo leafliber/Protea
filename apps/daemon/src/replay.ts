@@ -89,10 +89,12 @@ export async function replay(o: ReplayOptions): Promise<ReplayReport> {
     recorded = new RecordedProvider(readRecording(recording));
     provider = recorded;
   } else if (o.provider === 'config') {
-    // The API key is handed over in memory, never copied into the replay directory.
-    const name = loadConfig(dataDir, env).config.providers.anthropic.apiKeySecret;
-    const key = new SecretStore(path.join(dataDir, 'secrets'), env).get(name);
-    if (key) replayEnv[`PROTEA_SECRET_${name}`] = key;
+    // The providers' keys are handed over in memory, never copied into the replay directory.
+    const names = Object.values(loadConfig(dataDir, env).config.providers.profiles).flatMap((p) => (p.apiKeySecret ? [p.apiKeySecret] : []));
+    for (const name of new Set(names)) {
+      const key = new SecretStore(path.join(dataDir, 'secrets'), env).get(name);
+      if (key) replayEnv[`PROTEA_SECRET_${name}`] = key;
+    }
   }
 
   // 3. Tool calls are answered from the production transcripts.

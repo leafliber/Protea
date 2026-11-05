@@ -88,8 +88,10 @@ M2 实现细节：
 
 ## 8. 控制平面安全
 
-- 管理员令牌与可选的只读令牌（只能 GET 与订阅，读不到记忆、人格与秘密名称）；地址白名单 `control.allowCidrs`（M6）：非空时只有其中的地址与回环地址能访问 HTTP 与 WebSocket，`/hooks/*` 除外。
-- 控制台登录换会话 cookie（HttpOnly、SameSite=Strict，值为令牌的 HMAC，不含令牌本身）；cookie 发起的写请求必须带 `x-protea-csrf: 1`，WS 用 cookie 时校验 `Origin`；同一地址 1 分钟内失败登录 10 次后拒绝（429）。
+- 控制台用账号登录（scrypt 密码哈希，服务端会话，可单独注销）；CLI 与脚本用 API 令牌（管理员令牌与可选的只读令牌）。只读角色只能 GET 与订阅，读不到记忆、人格、秘密名称、诊断包与账号。地址白名单 `control.allowCidrs`（M6）：非空时只有其中的地址与回环地址能访问 HTTP 与 WebSocket，`/hooks/*` 除外。
+- 第一个管理员账号只能用设置码创建：它在启动时打印到标准输出（不进日志文件与诊断包，[13-control-plane.md](13-control-plane.md) §2），保存在 `secrets/PROTEA_SETUP_CODE`，账号建好即作废。能看到容器日志或数据卷的人才拿得到它；在它被使用之前，暴露在网络上的控制台只有初始化页可用。
+- 会话 cookie（HttpOnly、SameSite=Strict，值为随机串，数据库只存哈希）；cookie 发起的写请求必须带 `x-protea-csrf: 1`，WS 用 cookie 时校验 `Origin`；同一地址 1 分钟内失败的登录、设置码与改密码尝试合计 10 次后拒绝（429）。
+- 供应商的 API Key 是秘密（默认 `PROVIDER_<ID>_API_KEY`）：控制台只能写入、看到“已设置”与来源，读不回值；“测试连接”可以带一个尚未保存的 Key，它只在那一次请求的内存里使用。供应商地址可以是任意 http(s) URL（本机模型服务），设置它是管理员操作。
 - 每个写请求记审计 `control_write`（方法、路径、主体、状态码；不记请求体，秘密值不进审计）。
 - 控制台只在 TLS 或回环下显示秘密管理页；明文 HTTP 的非本机访问持续显示风险提示。页面带严格的 CSP（只允许同源脚本与连接）、`X-Frame-Options: DENY`。
 - 配置 API 返回的生效配置里，出现的秘密值替换为 `[REDACTED:<NAME>]`；秘密 API 只写与列名。人格钩子是进程内代码，不开放 API 编辑。
@@ -100,7 +102,7 @@ M2 实现细节：
 
 M6 的状态（测试在 `apps/daemon/test/m6-security.test.ts`，除非另注）：
 
-- [x] 静态检查：读取秘密值的代码只有这几处——Provider 工厂（API key 进 SDK 客户端的请求头，不进请求体）、插件与 MCP 的环境注入、脱敏本身、控制平面令牌、离线回放转交 API key（只在内存里）。会话、上下文、记忆与 Fork 的代码不接触秘密存储；守护进程只创建一个 Provider，并且所有模型请求都经过 `RedactingProvider`。新增读取点会让测试失败，必须审查后更新白名单。
+- [x] 静态检查：读取秘密值的代码只有这几处——Provider 工厂（各档案的 API key 进 HTTP 客户端的请求头，不进请求体；连接测试也在这里）、插件与 MCP 的环境注入、脱敏本身、控制平面令牌与设置码、离线回放转交 API key（只在内存里）。会话、上下文、记忆与 Fork 的代码不接触秘密存储；守护进程只创建一个 Provider，并且所有模型请求都经过 `RedactingProvider`。新增读取点会让测试失败，必须审查后更新白名单。
 - [x] 渗透用例：
   - 伪造的主人：用 Telegram 主人的 senderKey 从别的插件发 L1 interrupt → 降为 L2、发送者 `unknown`；
   - 低等级来源在回合进行中申请 interrupt（L0 请求）→ 降到来源上限 L3、改为 flush，没有发生抢占；

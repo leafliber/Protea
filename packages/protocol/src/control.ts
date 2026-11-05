@@ -125,7 +125,10 @@ export interface StatusResponse {
   phase: RunPhase;
   batchId: string | null;
   pending: Record<Level, number>;
-  provider: { id: string; mainModel: string; ready: boolean; problem?: string };
+  /** `id`: the default provider profile ("none" before one is configured). */
+  provider: { id: string; protocol?: ProviderProtocolName; mainModel: string; ready: boolean; problem?: string };
+  /** True until the first admin account exists (the console shows the setup page). */
+  setupRequired?: boolean;
   plugins: PluginStatus[];
   mcp: McpServerStatus[];
   skills: { listed: number; rejected: number };
@@ -306,4 +309,89 @@ export interface SecretInfo {
   source: 'env' | 'file';
   /** A file exists but the environment value wins. */
   shadowedFile: boolean;
+}
+
+/** Wire protocols of model providers (docs/10-architecture/12-model-providers.md §3). */
+export type ProviderProtocolName = 'anthropic' | 'openai-chat' | 'openai-responses' | 'echo';
+
+/** A provider profile as the console shows it: its settings (never the key) and its state. */
+export interface ProviderProfileInfo {
+  id: string;
+  /** The complete settings (config.yaml providers.profiles.<id> with defaults filled in). */
+  profile: Record<string, unknown> & {
+    label: string | null;
+    protocol: ProviderProtocolName;
+    baseUrl: string | null;
+    apiKeySecret: string | null;
+    models: Record<ModelRole, string>;
+  };
+  /** The endpoint actually used (baseUrl or the protocol's default). */
+  endpoint: string | null;
+  /** Roles this profile serves now. */
+  roles: ModelRole[];
+  /** Whether the key secret has a value, and where it comes from. */
+  key: { required: boolean; set: boolean; source: 'env' | 'file' | null };
+  ready: boolean;
+  problem?: string;
+}
+
+export interface ProviderPresetInfo {
+  id: string;
+  label: string;
+  protocol: ProviderProtocolName;
+  baseUrl: string | null;
+  noKey?: boolean;
+  models?: Partial<Record<ModelRole, string>>;
+  anthropic?: Record<string, unknown>;
+  openai?: Record<string, unknown>;
+  note?: string;
+}
+
+export interface ProvidersResponse {
+  default: string | null;
+  roles: Partial<Record<ModelRole, string>>;
+  profiles: ProviderProfileInfo[];
+  presets: ProviderPresetInfo[];
+  protocols: Array<{ id: ProviderProtocolName; label: string; defaultUrl: string | null }>;
+  /** A new profile's complete defaults per protocol (for the console's form). */
+  defaults: Record<ProviderProtocolName, Record<string, unknown>>;
+  /** Overall readiness (what /api/status reports). */
+  ready: boolean;
+  problem?: string;
+}
+
+/** PUT /api/providers/:id. `apiKey`: a string stores it, null removes the stored key, absent keeps it. */
+export interface PutProviderRequest {
+  profile: Record<string, unknown>;
+  apiKey?: string | null;
+  /** Make this profile the default (the first profile always becomes the default). */
+  makeDefault?: boolean;
+}
+
+/** POST /api/providers/test and /api/providers/models: a saved profile (`id`) or an unsaved one (`profile`). */
+export interface ProbeProviderRequest {
+  id: string;
+  profile?: Record<string, unknown>;
+  apiKey?: string;
+  role?: ModelRole;
+}
+
+export type ProbeProviderResponse =
+  | { ok: true; ms: number; model: string; reply?: string; stopReason?: string; models?: string[] }
+  | { ok: false; ms: number; kind: string; error: string; status?: number };
+
+/** A console account (never its password). */
+export interface AccountInfo {
+  id: number;
+  username: string;
+  role: ControlRole;
+  createdAt: string;
+  updatedAt: string;
+  lastLoginAt: string | null;
+}
+
+export interface WhoAmIResponse {
+  role: ControlRole;
+  via: 'bearer' | 'cookie';
+  username?: string;
 }

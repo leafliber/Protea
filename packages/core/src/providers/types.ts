@@ -37,6 +37,8 @@ export interface ProviderResponse {
   usage: ProviderUsage;
   /** Model that produced the final content (differs from the requested one after a fallback). */
   model: string;
+  /** Provider profile that served the request (set by the router). */
+  provider?: string;
   requestedModel: string;
   costUsd?: number;
   stopDetails?: unknown;
@@ -73,6 +75,8 @@ export interface Provider {
   contextWindow?(role: ModelRole): number | undefined;
   /** Exact input tokens of a request, when the provider can count them; undefined otherwise. */
   countTokens?(req: ProviderRequest, opts: { signal: AbortSignal }): Promise<number | undefined>;
+  /** Model names the endpoint offers (for the console's model picker), when it can list them. */
+  listModels?(signal: AbortSignal): Promise<string[]>;
   /** Streams internally; resolves with the complete message. Throws ProviderError or an abort error. */
   generate(req: ProviderRequest, opts: { signal: AbortSignal; onText?: (delta: string) => void }): Promise<ProviderResponse>;
 }

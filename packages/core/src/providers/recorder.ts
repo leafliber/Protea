@@ -20,7 +20,7 @@ export interface RecordedCall {
 export type RecordMode = 'responses' | 'full';
 
 /**
- * Records every model call of a run (docs/10-architecture/12-model-providers.md §8): responses
+ * Records every model call of a run (docs/10-architecture/12-model-providers.md §9): responses
  * always, the requests too in `full` mode (large: every request carries the whole context).
  * Replays and test fixtures read it back with RecordedProvider.
  */

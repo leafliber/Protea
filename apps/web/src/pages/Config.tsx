@@ -1,7 +1,7 @@
 import { useMemo, useState, type FormEvent } from 'react';
-import type { BudgetStatus, ConfigResponse, SecretInfo } from '@protea/protocol';
+import type { AccountInfo, BudgetStatus, ConfigResponse, SecretInfo } from '@protea/protocol';
 import { api, enc, post, useAction, useApi } from '../api';
-import { Badge, Bar, Button, Card, ErrorText, Field, LevelBadge, Tabs, usd } from '../components/ui';
+import { Badge, Bar, Button, Card, ErrorText, Field, LevelBadge, Tabs, dateTime, usd } from '../components/ui';
 import { go, useSession } from '../session';
 
 function parseValue(raw: string): unknown {
@@ -511,14 +511,147 @@ function Scheduler() {
   );
 }
 
+/** The signed-in account's own password (every account may change it). */
+function MyPassword() {
+  const { username } = useSession();
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [again, setAgain] = useState('');
+  const [done, setDone] = useState(false);
+  const act = useAction();
+  if (!username) return <Card title="我的密码"><p className="muted small">你是用 API 令牌登录的，没有账号密码可改。</p></Card>;
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    setDone(false);
+    void act.run(async () => {
+      if (next !== again) throw new Error('两次输入的新密码不一样');
+      await post('/api/auth/password', { current, password: next });
+      setCurrent('');
+      setNext('');
+      setAgain('');
+      setDone(true);
+    });
+  };
+  return (
+    <Card title={`我的密码（${username}）`}>
+      <form className="form-grid" onSubmit={submit}>
+        <input type="password" autoComplete="current-password" placeholder="当前密码" value={current} onChange={(e) => setCurrent(e.target.value)} required />
+        <input type="password" autoComplete="new-password" placeholder="新密码（至少 8 个字符）" minLength={8} value={next} onChange={(e) => setNext(e.target.value)} required />
+        <input type="password" autoComplete="new-password" placeholder="再输一次新密码" minLength={8} value={again} onChange={(e) => setAgain(e.target.value)} required />
+        <div className="row">
+          <Button kind="primary" type="submit" busy={act.busy}>
+            修改密码
+          </Button>
+          {done && <Badge tone="good">已修改；其他设备上的登录已退出</Badge>}
+        </div>
+        <ErrorText error={act.error} />
+      </form>
+    </Card>
+  );
+}
+
+function Accounts() {
+  const { username: me } = useSession();
+  const r = useApi<{ accounts: AccountInfo[] }>('/api/accounts');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [role, setRole] = useState<'admin' | 'readonly'>('readonly');
+  const act = useAction();
+  const add = (e: FormEvent) => {
+    e.preventDefault();
+    void act.run(async () => {
+      await post('/api/accounts', { username, password, role });
+      setUsername('');
+      setPassword('');
+      r.reload();
+    });
+  };
+  const reset = (u: string) => {
+    const pw = prompt(`给 ${u} 设一个新密码（至少 8 个字符）。它的登录会全部退出。`);
+    if (pw) void act.run(async () => api('PATCH', `/api/accounts/${enc(u)}`, { password: pw }));
+  };
+  return (
+    <div className="grid">
+      <Card title="账号">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>用户名</th>
+              <th>角色</th>
+              <th>上次登录</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {(r.data?.accounts ?? []).map((a) => (
+              <tr key={a.id}>
+                <td>
+                  {a.username} {a.username === me && <Badge tone="info">我</Badge>}
+                </td>
+                <td>{a.role === 'admin' ? '管理员' : '只读'}</td>
+                <td className="muted small">{a.lastLoginAt ? dateTime(a.lastLoginAt) : '从未'}</td>
+                <td className="row-actions">
+                  <Button small onClick={() => reset(a.username)}>
+                    重设密码
+                  </Button>
+                  <Button
+                    small
+                    onClick={() => void act.run(async () => {
+                      await api('PATCH', `/api/accounts/${enc(a.username)}`, { role: a.role === 'admin' ? 'readonly' : 'admin' });
+                      r.reload();
+                    })}
+                  >
+                    改为{a.role === 'admin' ? '只读' : '管理员'}
+                  </Button>
+                  {a.username !== me && (
+                    <Button
+                      small
+                      kind="danger"
+                      onClick={() => {
+                        if (confirm(`删除账号 ${a.username}？`))
+                          void act.run(async () => {
+                            await api('DELETE', `/api/accounts/${enc(a.username)}`);
+                            r.reload();
+                          });
+                      }}
+                    >
+                      删除
+                    </Button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <ErrorText error={r.error ?? act.error} />
+      </Card>
+      <Card title="添加账号">
+        <form className="form-grid" onSubmit={add}>
+          <input placeholder="用户名" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" required />
+          <input type="password" placeholder="初始密码（至少 8 个字符）" minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" required />
+          <select value={role} onChange={(e) => setRole(e.target.value as 'admin' | 'readonly')}>
+            <option value="readonly">只读（只能看）</option>
+            <option value="admin">管理员</option>
+          </select>
+          <Button kind="primary" type="submit" busy={act.busy}>
+            添加
+          </Button>
+        </form>
+      </Card>
+      <MyPassword />
+    </div>
+  );
+}
+
 export function Config() {
   const params = new URLSearchParams(location.hash.split('?')[1] ?? '');
-  const tab = (params.get('tab') ?? 'config') as 'config' | 'secrets' | 'permissions' | 'budget' | 'scheduler' | 'backups';
+  const tab = (params.get('tab') ?? 'config') as 'config' | 'accounts' | 'password' | 'secrets' | 'permissions' | 'budget' | 'scheduler' | 'backups';
   const { canWrite } = useSession();
   // Secrets are managed only over TLS or from this machine (docs/10-architecture/14-security-and-permissions.md §8).
   const secure = location.protocol === 'https:' || ['localhost', '127.0.0.1', '[::1]', '::1'].includes(location.hostname);
   const tabs: Array<[typeof tab, string]> = [
     ['config', '生效配置'],
+    ...(canWrite ? ([['accounts', '账号']] as Array<[typeof tab, string]>) : ([['password', '我的密码']] as Array<[typeof tab, string]>)),
     ...(canWrite && secure ? ([['secrets', '秘密']] as Array<[typeof tab, string]>) : []),
     ['permissions', '权限'],
     ['budget', '预算'],
@@ -529,6 +662,8 @@ export function Config() {
     <div className="page">
       <Tabs tabs={tabs} value={tab} onChange={(t) => go('config', { tab: t })} />
       {tab === 'config' && <Effective />}
+      {tab === 'accounts' && <Accounts />}
+      {tab === 'password' && <MyPassword />}
       {tab === 'secrets' && (secure ? <Secrets /> : <div className="banner banner-warn">秘密只能在 HTTPS 或本机访问时管理（也可以用 protea secrets set）。</div>)}
       {tab === 'permissions' && <Permissions />}
       {tab === 'budget' && <Budget />}

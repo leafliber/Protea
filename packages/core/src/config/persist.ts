@@ -20,6 +20,24 @@ export function setConfigValue(dataDir: string, keyPath: Array<string | number>,
   fs.renameSync(tmp, file);
 }
 
+/**
+ * Replace (or with `undefined`, delete) one value of config.yaml as a whole, unlike a merge
+ * patch, after validating the resulting file with the environment layer. Comments elsewhere are kept.
+ */
+export function replaceConfigValue(dataDir: string, keyPath: Array<string | number>, value: unknown, env: NodeJS.ProcessEnv = process.env): ProteaConfig {
+  const file = path.join(dataDir, 'config.yaml');
+  const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  const doc = YAML.parseDocument(text);
+  if (doc.errors.length > 0) throw new Error(`${file}: ${doc.errors[0]?.message ?? 'invalid YAML'}`);
+  if (value === undefined) doc.deleteIn(keyPath);
+  else doc.setIn(keyPath, value);
+  const { config } = loadConfig(dataDir, env, { fileDoc: doc.toJS() as unknown });
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, doc.toString());
+  fs.renameSync(tmp, file);
+  return config;
+}
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }

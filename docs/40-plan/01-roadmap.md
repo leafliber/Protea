@@ -48,12 +48,12 @@ gantt
 - `daemon.started` 是 L4 piggyback、`daemon.stopping` 是 L4 store：启动和停机都不单独唤醒模型。
 - 管理员令牌只写入秘密文件，不打印到日志。
 
-**真实 API 验收步骤**（需要 `ANTHROPIC_API_KEY`，约 200 次 Opus 5.5 调用，预计花费数美元）：
+**真实 API 验收步骤**（需要 Anthropic 的 API key，约 200 次 Opus 5.5 调用，预计花费数美元；2026-11-05 起 key 在控制台的「模型」页或 `protea providers set anthropic --key-stdin` 里设置）：
 
 先在一个终端启动守护进程：
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-... pnpm dev
+PROTEA_PROVIDERS__DEFAULT=anthropic PROTEA_PROVIDERS__PROFILES__ANTHROPIC__PROTOCOL=anthropic PROVIDER_ANTHROPIC_API_KEY=sk-ant-... pnpm dev
 ```
 
 再在另一个终端连续推送 100 条并查看状态（`usage 24h` 一行给出缓存命中率）：
@@ -278,13 +278,23 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 - `scripts/soak.mjs --rate 0`：只采样不推事件，用来观察实际部署。
 - 修正：几条日志用 `level` 字段表示事件或预算等级，覆盖了 pino 的日志级别（"event held by the budget"、"budget threshold crossed"、"fork spawned"），改为 `eventLevel` / `budgetLevel` / `forkLevel`。
 
+### 账号、初始化与可选的模型供应商（2026-11-05，M6 之后）
+
+主人的要求：供应商可以选，模型、接口地址与协议都能指定；不依赖环境变量，首次通过网页建账号（用启动时打印的设置码鉴权），登录后在网页里配置供应商。设计见 [ADR-0010](../20-decisions/ADR-0010-accounts-and-provider-profiles.md)。
+- 供应商档案 `providers.profiles.<id>`：协议 `anthropic`（含给其他厂商兼容接口用的 `features: basic`）、`openai-chat`、`openai-responses`、`echo`；地址、密钥秘密（默认 `PROVIDER_<ID>_API_KEY`）、每个角色的模型、effort、输出上限、上下文窗口、价格表。`providers.default` 与按角色的 `providers.roles`；热更新，存密钥后立即生效。默认没有任何档案（不再默认 Claude + `ANTHROPIC_API_KEY`）；旧写法与旧密钥文件在启动时自动迁移。
+- 原计划 M7 的 `openai-compat` Provider 插件改为内置的两种 OpenAI 协议（[12-model-providers.md](../10-architecture/12-model-providers.md) §3、§8）。
+- 账号：scrypt 密码、服务端会话（可单独注销）、管理员与只读两种角色、最后一个管理员保护；设置码 `PROTEA_SETUP_CODE` 打印到标准输出（不进日志文件与诊断包），建好第一个管理员即作废。API 令牌留给 CLI、脚本与监控，也可在登录页恢复时使用。
+- 控制台：初始化向导（设置码与账号 → 供应商 → 完成）、账号密码登录、「模型」页（预设、测试连接、模型列表、默认与按角色选择）、配置页的"账号"标签。CLI：`protea setup`、`protea accounts …`、`protea providers …`。
+- API：`/api/setup`、`/api/auth/password`、`/api/accounts*`、`/api/providers*`；迁移 5 `accounts`。测试 +30（协议的假服务器测试、档案与迁移、账号与会话、端到端的初始化与供应商流程），共 289 个通过。
+- 实际测试新增 T10（首次设置与多供应商）；T5（CI 首次运行）已通过。
+
 **v1.0 发布点**。
 
 ## M7 · 扩展与生态（4 周，v1.x）
 
 - Claude Agent SDK Fork 执行器插件。
 - Protea 作为 MCP 服务器。
-- `openai-compat` Provider 插件。
+- ~~`openai-compat` Provider 插件~~：已内置为 `openai-chat` 与 `openai-responses` 协议（2026-11-05）。
 - 向量记忆（sqlite-vec）。
 - 更多连接器（Slack、Discord、CalDAV）。
 - Cortico World 适配器（探索）。

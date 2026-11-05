@@ -5,8 +5,10 @@ import { useReloadOn } from './live';
 
 export interface ConsoleSession {
   role: ControlRole;
-  /** Admin may change things; the read-only token may only look. */
+  /** Admin may change things; a read-only account or token may only look. */
   canWrite: boolean;
+  /** The signed-in account (absent for a token sign-in). */
+  username?: string;
 }
 
 export const SessionContext = createContext<ConsoleSession>({ role: 'readonly', canWrite: false });

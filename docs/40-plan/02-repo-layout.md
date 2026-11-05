@@ -33,21 +33,22 @@ Protea/
 │   │   │   ├── session/         主会话循环、转录与修复（含 thinking 截止标记）、启动对账、容量交接（handoff.ts）、回放的数据读取（replay-source.ts）
 │   │   │   ├── context/         系统分段、运行时说明、环境提示模板、请求装配、工具搜索（tool-search.ts）、前缀指纹（prefix.ts）
 │   │   │   ├── tools/           工具注册表、分发器、内核工具、外发限速（outbound.ts）
-│   │   │   ├── providers/       Provider 接口、anthropic、echo、scripted、价格表、秘密扫描包装（redact.ts）、录制与回放（recorder.ts）
+│   │   │   ├── providers/       Provider 接口、按角色路由（router.ts）、供应商档案与预设（profiles.ts）、工厂与连接测试（factory.ts）、anthropic、OpenAI Chat / Responses（openai.ts、http.ts）、echo、scripted、价格表、秘密扫描包装（redact.ts）、录制与回放（recorder.ts）
 │   │   │   ├── plugins/         PluginHost（生命周期、监督、事件网关）、清单与发现、子进程运行时、一致性检查、开发加载器
 │   │   │   ├── permissions/     权限策略、审批、审计、权限守卫、approval_request 工具
 │   │   │   ├── mcp/             MCP 客户端管理器（连接、监督、工具命名与注册、资源与 prompts、OAuth）
 │   │   │   ├── skills/          SKILL.md 解析、Skills 注册表与目录段、skill_load / skill_read
 │   │   │   ├── persona/         人格文件加载与热重载、可选钩子（hooks.*）
 │   │   │   ├── memory/          记忆存储（memory 工具命令面）、FTS5 索引、memory / memory_search / memory_recent
-│   │   │   ├── config/          默认值、层叠加载、环境变量映射、秘密
+│   │   │   ├── config/          默认值、层叠加载、环境变量映射、秘密、旧供应商写法的迁移（legacy.ts）
+│   │   │   ├── auth/            控制台账号（scrypt）、会话、设置码（accounts.ts）
 │   │   │   ├── db/              SQLite 打开与内嵌迁移（含迁移前快照）、仓储（batches/usage/kv/sessions/tool_stats）
 │   │   │   ├── observability/   pino 日志（TTY 美化 + 运行目录 JSON）、内存日志缓冲与查询（logs.ts）、Prometheus 指标（metrics.ts）、关停记录与崩溃报告（run-dir.ts）、追踪日志（trace.ts）
 │   │   │   ├── backup.ts        在线备份、Git 备份、恢复（M6）
 │   │   │   ├── diagnostics.ts   诊断包：日志、事件库元数据、用量、实时状态（protea diag）
 │   │   │   └── util/            时间与时区、id、中止、错误、CIDR（cidr.ts）、子进程环境与资源上限（child-process.ts）
 │   │   └── test/                单元、组件、属性测试与测试夹具（含可编排的 MCP 测试服务器与假 OAuth 服务器）
-│   └── control/                 @protea/control：Hono HTTP API（app.ts、ops.ts）、鉴权与会话 cookie（auth.ts）、地址白名单（allow.ts）、SSE/WS 共用的总线投影（stream.ts）、WebSocket（ws.ts）、控制台托管（static.ts）
+│   └── control/                 @protea/control：Hono HTTP API（app.ts、ops.ts）、鉴权、账号、初始化与会话 cookie（auth.ts）、供应商（providers.ts）、地址白名单（allow.ts）、SSE/WS 共用的总线投影（stream.ts）、WebSocket（ws.ts）、控制台托管（static.ts）
 ├── plugins/
 │   ├── console/                 进程内连接器：控制台输入、con_send 输出、审批请求显示
 │   ├── cron/                    进程内来源：日程与 sleep_until

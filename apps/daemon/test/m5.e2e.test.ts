@@ -111,7 +111,7 @@ describe('M5: auth roles, console session and audit', () => {
     const login = await anon<{ role: string }>('POST', '/api/auth/login', { token: d.adminToken });
     expect(login.json.role).toBe('admin');
     const cookie = login.headers.get('set-cookie') ?? '';
-    expect(cookie).toMatch(/^protea_session=v1\.admin\./);
+    expect(cookie).toMatch(/^protea_session=v2\./); // a random session key; the database keeps its hash
     expect(cookie).toMatch(/HttpOnly/i);
     expect(cookie).toMatch(/SameSite=Strict/i);
     expect(cookie).not.toContain(d.adminToken);

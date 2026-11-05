@@ -56,7 +56,7 @@
 
 - 工具定义按"内核 → 插件（按 ID）→ MCP（按 server、tool；资源工具 `mcp_resource_*` 在最前）"排序后序列化，保证字节稳定。
 - 工具表只在**回合边界**生效：插件/MCP 的增删直接改工具表，而每个模型请求都在回合边界（批开始或工具结果之后）组装，所以变化总在下一回合出现，进行中的请求不受影响（M3 实现；没有单独的"待应用"队列）。
-- 工具数量超过 `context.toolSearch.threshold`（默认 40）时，启用 Provider 的**工具搜索**：MCP 工具标记 `defer_loading: true`（每个服务器最常用的 `keepPerServer` 个除外），模型按需搜索加载。工具搜索是追加式的，不破坏缓存前缀（[12-model-providers.md](12-model-providers.md) §4）。实现：`packages/core/src/context/tool-search.ts`。
+- 工具数量超过 `context.toolSearch.threshold`（默认 40）时，启用 Provider 的**工具搜索**：MCP 工具标记 `defer_loading: true`（每个服务器最常用的 `keepPerServer` 个除外），模型按需搜索加载。工具搜索是追加式的，不破坏缓存前缀（[12-model-providers.md](12-model-providers.md) §5）。实现：`packages/core/src/context/tool-search.ts`。
 - 工具描述由插件/MCP 提供；Core 只加命名空间前缀，不改写描述。
 
 ## 5. 事件渲染
@@ -77,7 +77,7 @@
 
 - 断点 #1：system 最后一段之后（显式 `cache_control`）。
 - 断点 #2：顶层自动缓存（请求顶层的 `cache_control`）覆盖对话尾部；不支持的平台改为手动放在上一批最后一条消息。
-- TTL 默认 `1h`（`providers.anthropic.cacheTtl`）：个人助理的批次之间常隔 5–60 分钟，5 分钟 TTL 会频繁冷启动。两个断点使用同一 TTL。
+- TTL 默认 `1h`（Claude 档案的 `anthropic.cacheTtl`）：个人助理的批次之间常隔 5–60 分钟，5 分钟 TTL 会频繁冷启动。两个断点使用同一 TTL。
 - 稳定性有自动化测试：连续 100 次推送中，每个请求的 system 与 tools 字节相同，消息序列（按内容块展开）是上一个请求的严格前缀（`invariants.test.ts`）。
 - 验证：`usage.cache_read_input_tokens` 连续为 0 → 控制台告警"缓存未命中"，并列出最近一次前缀 diff（哪一段变了）。
 

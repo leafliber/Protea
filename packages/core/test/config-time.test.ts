@@ -10,11 +10,11 @@ describe('config', () => {
       envOverlay({
         PROTEA_SCHEDULER__LEVELS__1__DEBOUNCE_MS: '500',
         PROTEA_PROVIDERS__DEFAULT: 'echo',
-        PROTEA_PROVIDERS__ANTHROPIC__FALLBACKS: 'null',
+        PROTEA_PROVIDERS__PROFILES__CLAUDE__ANTHROPIC__FALLBACKS: 'null',
         PROTEA_ADMIN_TOKEN: 'not-a-path',
         PROTEA_SECRET__X: 'never',
       }),
-    ).toEqual({ scheduler: { levels: { '1': { debounceMs: 500 } } }, providers: { default: 'echo', anthropic: { fallbacks: null } } });
+    ).toEqual({ scheduler: { levels: { '1': { debounceMs: 500 } } }, providers: { default: 'echo', profiles: { claude: { anthropic: { fallbacks: null } } } } });
   });
 
   it('merges objects and replaces arrays', () => {
@@ -25,7 +25,7 @@ describe('config', () => {
     const dir = tmpDir();
     const first = loadConfig(dir, {});
     expect(fs.existsSync(path.join(dir, 'config.yaml'))).toBe(true);
-    expect(first.config.providers.anthropic.models.main).toBe('claude-opus-5-5');
+    expect(first.config.providers).toEqual({ default: null, roles: {}, profiles: {} });
     fs.writeFileSync(path.join(dir, 'config.yaml'), 'daemon:\n  timezone: Asia/Shanghai\nsession:\n  rounds: { soft: 3 }\n');
     const second = loadConfig(dir, { PROTEA_SESSION__ROUNDS__HARD: '4' });
     expect(second.config.daemon.timezone).toBe('Asia/Shanghai');

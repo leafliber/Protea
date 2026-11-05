@@ -125,7 +125,31 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(path UNINDEXED, body, tokenize = 'tri
 
 `path` 相对 `/data/memory`。`blobs/` 与隐藏文件、超过 1 MB 或含 NUL 的文件不进索引。启动时按 `(mtime_ms, size)` 与目录比对；记忆工具的写入立即更新；目录监视补上外部改动。
 
-### 1.5 后续迁移（计划）
+### 1.5 迁移 5：`accounts`（2026-11-05）
+
+```sql
+CREATE TABLE accounts (                                 -- 控制台账号
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  password TEXT NOT NULL,                               -- "scrypt$N$r$p$<盐>$<哈希>"（base64url）
+  role TEXT NOT NULL CHECK (role IN ('admin','readonly')),
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_login_at TEXT
+);
+CREATE TABLE auth_sessions (                            -- 控制台会话
+  id TEXT PRIMARY KEY,                                  -- cookie 值的 SHA-256（hex），cookie 本身不存
+  account_id INTEGER REFERENCES accounts(id) ON DELETE CASCADE,   -- 用令牌登录的会话为 NULL
+  role TEXT NOT NULL CHECK (role IN ('admin','readonly')),
+  via TEXT NOT NULL CHECK (via IN ('password','token')),
+  token_fp TEXT,                                        -- 令牌登录：令牌指纹，令牌换了会话即失效
+  created_at TEXT NOT NULL, expires_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,   -- 30 天
+  address TEXT, user_agent TEXT
+);
+CREATE INDEX auth_sessions_account ON auth_sessions(account_id);
+```
+
+没有管理员账号时控制台进入初始化（[../10-architecture/13-control-plane.md](../10-architecture/13-control-plane.md) §2）。过期会话在创建新会话时顺带清理（至多每小时一次）。诊断包不导出这两张表；备份会带上它们（密码只有哈希）。
+
+### 1.6 后续迁移（计划）
 
 | 表 | 用途 | 里程碑 |
 |---|---|---|
@@ -156,7 +180,7 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(path UNINDEXED, body, tokenize = 'tri
 | `backups/pre-restore-<time>/` | 目录 | `protea restore --force` 移开的旧文件（M6） |
 | `replays/<time>/` | 目录 | `protea replay` 的离线数据目录（`data/`）与日志（M6） |
 | `cache/` | 目录 | npm/uv/pip 缓存与 `backup-git/<hash>/`（Git 备份的工作副本）；可以清空（M6） |
-| `secrets/<NAME>` | 文本，0600 | 秘密 |
+| `secrets/<NAME>` | 文本，0600 | 秘密（API 令牌 `PROTEA_ADMIN_TOKEN`、供应商密钥 `PROVIDER_<ID>_API_KEY`、初始化前的设置码 `PROTEA_SETUP_CODE` 等） |
 | `secrets/mcp-oauth/<id>.json` | JSON，0600 | MCP 服务器的 OAuth 客户端注册、令牌与 PKCE verifier |
 | `persona/*.md` | Markdown | 人格文件，首次启动从默认人格复制；`persona/hooks.{ts,mts,mjs,js}` 为可选钩子（M4） |
 | `memory/` | 目录（0700），文件 0600 | 记忆（M4）：`INDEX.md`（进系统前缀）、`journal/`、`notes/`、`tasks.md`、`handoff/<UTC>Z.md`（交接笔记）、`blobs/`；首次启动从 `personas/default/memory/` 创建 |

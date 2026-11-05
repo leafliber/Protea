@@ -1,22 +1,49 @@
 # 规范：控制 API
 
-> 状态：Accepted（M6）· 更新：2026-11-04 · 设计：[../10-architecture/13-control-plane.md](../10-architecture/13-control-plane.md)
+> 状态：Accepted（M6）· 更新：2026-11-05 · 设计：[../10-architecture/13-control-plane.md](../10-architecture/13-control-plane.md)
 
-基址 `http://host:7788`。JSON；错误形态 `{ error: { code, message, details? } }`。鉴权 `Authorization: Bearer <token>` 或控制台会话 cookie（见"鉴权"）。分页：事件用 `?cursor=&limit=`（返回 `nextCursor`），批用 `?before=&limit=`。类型定义在 `@protea/protocol`（`control.ts`）。
+基址 `http://host:7788`。JSON；错误形态 `{ error: { code, message, details? } }`。鉴权 `Authorization: Bearer <token>`（API 令牌，CLI 与脚本用）或控制台会话 cookie（账号登录，见"鉴权"）。分页：事件用 `?cursor=&limit=`（返回 `nextCursor`），批用 `?before=&limit=`。类型定义在 `@protea/protocol`（`control.ts`）。
 
 ## 鉴权
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/auth/login` | `{ token }`（管理员或只读令牌）→ `{ role }`，并设置 cookie `protea_session`（HttpOnly、SameSite=Strict、Path=/、HTTPS 下 Secure、30 天）。失败 401；同一地址 1 分钟内失败 10 次后 429。**不需要令牌** |
-| POST | `/api/auth/logout` | 清除 cookie |
-| GET | `/api/auth/whoami` | `{ role: admin\|readonly, via: bearer\|cookie }`；未登录 401 |
+| GET | `/api/setup` | `{ required }`：还没有管理员账号时为 true（控制台显示初始化页）。**不需要令牌** |
+| POST | `/api/setup` | `{ code, username, password }`：用设置码创建第一个管理员账号并登录（设置 cookie）→ 201 `{ role: admin, via: cookie, username }`。设置码不对 401 `bad_code`；用户名或密码不合规 400；已有管理员 409 `done`。与登录共用失败限流。**不需要令牌** |
+| POST | `/api/auth/login` | `{ username, password }` → `{ role, via: cookie, username }`；或 `{ token }`（管理员或只读 API 令牌）→ `{ role, via: cookie }`。成功都设置 cookie `protea_session`（HttpOnly、SameSite=Strict、Path=/、HTTPS 下 Secure、30 天）。失败 401；同一地址 1 分钟内失败 10 次后 429。**不需要令牌** |
+| POST | `/api/auth/logout` | 结束这个会话（服务端删除）并清除 cookie |
+| GET | `/api/auth/whoami` | `WhoAmIResponse`：`{ role: admin\|readonly, via: bearer\|cookie, username? }`；未登录 401 |
+| POST | `/api/auth/password` | `{ current, password }`：改自己的密码（只读账号也可以）；该账号的其他会话全部结束。只接受用密码登录的会话；需要 CSRF 头 |
 
-- `admin`：全部操作。`readonly`（秘密 `PROTEA_READONLY_TOKEN` 存在时）：只有 GET 与 WS 订阅，且 `/api/memory*`、`/api/persona*`、`/api/secrets*` 返回 403。
+- 角色：`admin` 可以做一切；`readonly`（只读账号，或秘密 `PROTEA_READONLY_TOKEN` 存在时的只读令牌）只有 GET 与 WS 订阅，且 `/api/memory*`、`/api/persona*`、`/api/secrets*`、`/api/diagnostics*`、`/api/accounts*` 返回 403。
+- 会话存在数据库 `auth_sessions`（只存 cookie 值的 SHA-256）。cookie 值形如 `v2.<随机 32 字节>`。用令牌登录的会话记着令牌指纹：令牌一换，这些会话就失效。
 - 用 cookie 鉴权的非 GET 请求必须带 `x-protea-csrf: 1`，否则 403 `csrf`。
-- 所有非 GET 请求（鉴权通过之后）记审计 `control_write`：`summary` 为 `METHOD /path`，`owner` 为 `api:<role>` 或 `console:<role>`，`outcome` 为状态码。
+- 所有非 GET 请求（鉴权通过之后）记审计 `control_write`：`summary` 为 `METHOD /path`，`owner` 为 `api:<role>`（令牌）、`console:<用户名>`（账号）或 `console:<role>`（用令牌登录的控制台会话），`outcome` 为状态码。
 - `control.allowCidrs` 非空时（M6），客户端地址不在其中且不是回环地址的请求一律 403 `forbidden`（在鉴权之前，`/healthz` 也一样）；`/hooks/*` 不受限。WebSocket 升级同样检查，被拒时直接回 `403`。
 
+## 账号（管理员）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/accounts` | `{ accounts: AccountInfo[] }`：`{ id, username, role, createdAt, updatedAt, lastLoginAt }`（没有密码哈希） |
+| POST | `/api/accounts` | `{ username, password, role? }`（role 默认 `admin`）→ 201 `{ account }`；重名 409 |
+| PATCH | `/api/accounts/:username` | `{ role?, password? }`：改角色或重设密码（重设会结束该账号的全部会话，管理员给自己改时保留当前会话）→ `{ account }` |
+| DELETE | `/api/accounts/:username` | 删除账号与它的会话 |
+
+用户名 1–32 个字母、数字、`.`、`_`、`-`（不区分大小写）；密码至少 8 个字符。最后一个管理员不能删除，也不能降为只读（409 `last_admin`）。
+
+## 模型供应商
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/providers` | `ProvidersResponse`：`{ default, roles, profiles: ProviderProfileInfo[], presets, protocols, defaults, ready, problem? }`。每个档案带完整设置（默认值已填入）、实际使用的地址 `endpoint`、服务的角色、密钥状态 `key: { required, set, source: env\|file\|null }`（从不含密钥值）、`ready` 与 `problem`。只读角色可看 |
+| PUT | `/api/providers/:id` | `PutProviderRequest`：`{ profile, apiKey?, makeDefault? }`。校验后把档案写进 `config.yaml` 的 `providers.profiles.<id>`（只写与默认值不同的键，外加 protocol 与 models）；`apiKey` 为字符串时存为该档案的秘密（默认 `PROVIDER_<ID>_API_KEY`），为 null 时删除，省略则不变。第一个档案自动成为默认。立即生效（下一次模型请求起）→ 新的 `ProvidersResponse`；无效 400 |
+| DELETE | `/api/providers/:id` | 删除档案；它若是默认，换成下一个已配置的档案（没有则为 null）；指向它的角色恢复跟随默认；默认名字的密钥秘密一并删除 |
+| PATCH | `/api/providers` | `{ default?, roles? }`：换默认档案，或按角色指定（`{ roles: { cheap: "local" } }`；值为 null 恢复跟随默认） |
+| POST | `/api/providers/test` | `ProbeProviderRequest`：`{ id, profile?, apiKey?, role? }`。对档案（已保存的，或表单里尚未保存的 `profile`，可带刚输入的 `apiKey`）的模型发一个很小的请求（最多 256 个输出 token）→ `{ ok: true, ms, model, reply?, stopReason? }` 或 `{ ok: false, ms, kind, error, status? }`。不重试、60 s 超时；`apiKey` 只在内存里用一次 |
+| POST | `/api/providers/models` | 同上的请求体；返回该接口的模型名（`GET /v1/models`）→ `{ ok: true, models }` |
+
+## 状态
 ## 状态
 
 | 方法 | 路径 | 说明 |
@@ -24,7 +51,7 @@
 | GET | `/healthz` | 存活。不需要令牌 |
 | GET | `/readyz` | `{ ready, reasons }`，不就绪 503：Provider 未就绪、已启用但 failed 的插件或 MCP 服务器、`observability.requiredPlugins` 中没有 running 的插件、SQLite 拿不到写锁、投递被暂停。不需要令牌 |
 | GET | `/metrics` | Prometheus 文本格式（[15-observability.md](../10-architecture/15-observability.md) §3）；需要令牌（只读即可），`control.publicMetrics: true` 时不需要 |
-| GET | `/api/status` | `StatusResponse`：`{ runId, version, startedAt, uptimeSec, phase, batchId, pending: {0..4}, provider, plugins, mcp, skills, tools, context, memory, persona, usage24h, scheduler: { paused, cooldowns }, forks: ForkInfo[], budget: { enforced, dailyUsd, levels: {0..4: { spentUsd, tokens, limitUsd, usedRatio }} } }` |
+| GET | `/api/status` | `StatusResponse`：`{ runId, version, startedAt, uptimeSec, phase, batchId, pending: {0..4}, provider: { id（主会话的供应商档案，未配置为 none）, protocol?, mainModel, ready, problem? }, setupRequired, plugins, mcp, skills, tools, context, memory, persona, usage24h, scheduler: { paused, cooldowns }, forks: ForkInfo[], budget: { enforced, dailyUsd, levels: {0..4: { spentUsd, tokens, limitUsd, usedRatio }} } }` |
 
 ## 事件与批
 
@@ -32,7 +59,7 @@
 |---|---|---|
 | GET | `/api/events?level=&source=&state=&type=&since=&until=&cursor=&limit=&order=` | `{ events, nextCursor }`。默认新的在前；`cursor` 取比它旧的一页，`nextCursor` 为 null 表示没有更多。`level` 是最大等级，`state` 可逗号分隔，`limit` ≤ 1000 |
 | GET | `/api/events/:cursor` | `{ event, delivery }`（信封 + 投递记录） |
-| POST | `/api/events` | 推送 `{ text, level?, trigger?, tags? }`（来源固定为 `console`，senderKey 为 `api:admin` 或 `console:admin`）→ 201 `PushEventResponse` |
+| POST | `/api/events` | 推送 `{ text, level?, trigger?, tags? }`（来源固定为 `console`，senderKey 为 `api:admin`、`console:<用户名>` 或 `console:admin`）→ 201 `PushEventResponse` |
 | POST | `/api/events/:cursor/promote` | `{ trigger }`（默认 `flush`，不接受 `store`）→ `{ event }`；只对 pending/archived 事件，否则 409 |
 | POST | `/api/events/:cursor/withdraw` | → `{ event }`（状态 `withdrawn`）；在途或已结束的事件 409 |
 | GET | `/api/batches?limit=&before=&session=` | `{ batches: BatchInfo[] }`，新的在前；`BatchInfo`：`{ id, level, reason, sessionId, startedAt, endedAt, rounds, endReason }` |
@@ -170,4 +197,5 @@ SSE 与 WS 的消息都按总线记录的因果顺序发出：事件先于为它
 - M4：`POST /api/sessions/main/handoff`、`/api/memory/*`；`/api/status` 增加 `context`、`memory`、`persona`。
 - M5：其余全部（本页各表），`/api/status` 增加 `scheduler`；`/ws`、`/metrics`、控制台托管。
 - 实际测试支持（M6 之后）：`/api/diagnostics`。
+- 账号与供应商档案（M6 之后，2026-11-05）：`/api/setup`、`/api/auth/login` 的账号密码方式、`/api/auth/password`、`/api/accounts*`、`/api/providers*`；会话改为服务端存储（`v2.` cookie）；`/api/status` 增加 `setupRequired` 与 `provider.protocol`。
 - M6：`POST /api/budget/release`、`/api/backups`；`BudgetStatus` 增加硬上限、扣住数与放行；`control.allowCidrs`；`/api/status` 的插件与 MCP 状态增加 `memoryBytes`。

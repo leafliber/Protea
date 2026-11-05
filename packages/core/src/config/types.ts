@@ -54,26 +54,76 @@ export interface OwnerIdentity {
   senderKey: string;
 }
 
-export interface AnthropicSettings {
-  apiKeySecret: string;
-  baseUrl: string | null;
-  models: Record<ModelRole, string>;
-  effort: { main: Record<Level, Effort>; fork: Effort; cheap: Effort };
+/** Wire protocols a provider profile can speak (docs/10-architecture/12-model-providers.md §3). */
+export const PROVIDER_PROTOCOLS = ['anthropic', 'openai-chat', 'openai-responses', 'echo'] as const;
+export type ProviderProtocol = (typeof PROVIDER_PROTOCOLS)[number];
+
+/** Options only the Anthropic Messages protocol uses. */
+export interface AnthropicOptions {
+  /**
+   * `full`: Claude's API features (adaptive thinking, effort, betas, tool search, token counting).
+   * `basic`: plain Messages requests for Anthropic-compatible endpoints of other vendors.
+   */
+  features: 'full' | 'basic';
   /** Server-side refusal fallback ("default" routes by refusal category); null disables. */
   fallbacks: 'default' | null;
   thinkingDisplay: 'omitted' | 'summarized';
   /** Prompt cache TTL. Events arrive minutes apart, so 1h is the default. */
   cacheTtl: '5m' | '1h';
-  maxOutputTokens: number;
   /**
    * What the API does with a thinking block whose conversation prefix changed (beta
    * thinking-binding-controls-2026-08-01): drop_block degrades instead of failing; error
    * fails the request; null sends nothing (the account's default applies).
    */
   thinkingMismatch: 'drop_block' | 'error' | null;
+}
+
+/** Options the OpenAI-style protocols (Chat Completions, Responses) use. */
+export interface OpenAiOptions {
+  /** Send the effort as reasoning effort (reasoning models only; others reject the parameter). */
+  reasoningEffort: boolean;
+  /** Chat Completions: the output limit field (`max_completion_tokens` for OpenAI's own API). */
+  maxTokensField: 'max_tokens' | 'max_completion_tokens';
+}
+
+/**
+ * One model provider: which protocol, which endpoint, which key and which model per role.
+ * Lives in config.yaml (providers.profiles.<id>); the key itself is a secret.
+ */
+export interface ProviderProfile {
+  /** Shown in the console; null shows the id. */
+  label: string | null;
+  protocol: ProviderProtocol;
+  /**
+   * Endpoint; null uses the protocol's default. Anthropic: the API root (the SDK adds /v1/messages);
+   * OpenAI-style: the root that /chat/completions or /responses is appended to, usually ending in /v1.
+   */
+  baseUrl: string | null;
+  /** Secret holding the API key; null for endpoints without one (a local model server). */
+  apiKeySecret: string | null;
+  models: Record<ModelRole, string>;
+  effort: { main: Record<Level, Effort>; fork: Effort; cheap: Effort };
+  maxOutputTokens: number;
+  /** Input tokens the models accept; null: known for Claude models, 128000 otherwise. */
+  contextWindow: number | null;
   timeoutMs: number;
+  /** Retries of connection errors, 429 and 5xx before the session's own backoff. */
   maxRetries: number;
+  /** Extra HTTP headers sent with every request (not secret: they are shown in the console). */
+  headers: Record<string, string>;
+  /** USD per million tokens by model; overrides the built-in table (Claude models only). */
   pricing: Record<string, ModelPricing>;
+  anthropic: AnthropicOptions;
+  openai: OpenAiOptions;
+  echo: { delayMs: number };
+}
+
+export interface ProvidersSettings {
+  /** Profile used for every role without its own entry in `roles`; null: no provider configured yet. */
+  default: string | null;
+  /** Per-role profile, e.g. { cheap: local } runs handoff notes on a local model. */
+  roles: Partial<Record<ModelRole, string>>;
+  profiles: Record<string, ProviderProfile>;
 }
 
 export interface ModelPricing {
@@ -135,11 +185,7 @@ export interface ProteaConfig {
   scheduler: { levels: Record<Level, LevelSettings>; preemptStorm: PreemptStormSettings; forks: ForkSchedulerSettings };
   budget: BudgetSettings;
   session: { rounds: { soft: number; hard: number }; backoffMs: number[] };
-  providers: {
-    default: string;
-    anthropic: AnthropicSettings;
-    echo: { delayMs: number };
-  };
+  providers: ProvidersSettings;
   plugins: Record<string, PluginSettings>;
   pluginHost: PluginHostSettings;
   permissions: PermissionSettings;

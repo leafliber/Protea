@@ -174,4 +174,32 @@ CREATE TABLE memory_files (
 CREATE VIRTUAL TABLE memory_fts USING fts5(path UNINDEXED, body, tokenize = 'trigram');
 `,
   },
+  {
+    version: 5,
+    name: 'accounts',
+    sql: `
+CREATE TABLE accounts (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  username       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  password       TEXT NOT NULL,
+  role           TEXT NOT NULL CHECK (role IN ('admin','readonly')),
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL,
+  last_login_at  TEXT
+);
+CREATE TABLE auth_sessions (
+  id             TEXT PRIMARY KEY,
+  account_id     INTEGER REFERENCES accounts(id) ON DELETE CASCADE,
+  role           TEXT NOT NULL CHECK (role IN ('admin','readonly')),
+  via            TEXT NOT NULL CHECK (via IN ('password','token')),
+  token_fp       TEXT,
+  created_at     TEXT NOT NULL,
+  expires_at     TEXT NOT NULL,
+  last_seen_at   TEXT NOT NULL,
+  address        TEXT,
+  user_agent     TEXT
+);
+CREATE INDEX auth_sessions_account ON auth_sessions(account_id);
+`,
+  },
 ];

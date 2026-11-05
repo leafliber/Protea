@@ -4,7 +4,8 @@
 #   PROTEA_DOMAIN=protea.example.com docker compose --profile tls up -d
 #                                                     # + Caddy with an automatic certificate on :443
 #
-# Secrets: put them in ./secrets.env (ANTHROPIC_API_KEY=…, PROTEA_ADMIN_TOKEN=…, TELEGRAM_BOT_TOKEN=…)
+# Secrets (optional): ./secrets.env (PROVIDER_<ID>_API_KEY=…, PROTEA_ADMIN_TOKEN=…, TELEGRAM_BOT_TOKEN=…); usually
+# simpler: create the admin account with the setup code in "docker compose logs" and add providers in the console
 # or write them later with `docker compose exec protea protea secrets set NAME`.
 name: protea
 

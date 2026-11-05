@@ -1,6 +1,6 @@
 # 模型提供方
 
-> 状态：Draft · 更新：2026-11-03
+> 状态：Draft · 更新：2026-11-05
 
 ## 1. 抽象
 
@@ -14,26 +14,55 @@ interface Provider {
   supportsToolSearch?(role): boolean;                // M3
   contextWindow?(role): number | undefined;          // M4：输入上限
   countTokens?(req, { signal }): Promise<number | undefined>;   // M4：精确输入 token
+  listModels?(signal): Promise<string[]>;            // 控制台的模型列表
 }
 
 type ModelRole = 'main' | 'fork' | 'cheap';
 ```
 
-`ProviderRequest` 是 Provider 无关的中间表示（系统分段、消息、工具、effort）；每个 Provider 把它映射到自家 API，并自行决定缓存断点的位置。消息内容块采用 **Anthropic Messages 的块形态作为规范形态**：转录按原样存储并回传（思考块、未来的新块类型都能原样往返），其他 Provider 从这一形态映射。Core 只依赖这个接口（P2：模型可换）。
+`ProviderRequest` 是 Provider 无关的中间表示（系统分段、消息、工具、effort）；每个 Provider 把它映射到自家 API，并自行决定缓存断点的位置。消息内容块采用 **Anthropic Messages 的块形态作为规范形态**：转录按原样存储并回传（思考块、未来的新块类型都能原样往返），其他协议从这一形态映射。Core 只依赖这个接口（P2：模型可换）。
 
-内置实现：`anthropic`（默认）、`echo`（离线开发：对 console 消息调用 `con_send` 回显，`providers.default: echo` 开启）、`ScriptedProvider`（测试用）。
+守护进程只有一个 Provider：`ProviderRouter`（`packages/core/src/providers/router.ts`）。它按请求的角色找到供应商档案（`providers.roles.<role>`，否则 `providers.default`），把请求交给那个档案的实现，并在响应里标上 `provider`（档案 id，"model call" 日志行里可见）。档案的实现在第一次用到时创建；档案设置变了就重建，存入或删除密钥后 `refresh()` 全部重建，所以改供应商不用重启，进行中的请求用旧实例跑完。路由器外面依次包着录制、脱敏（I-7）与追踪（[15-observability.md](15-observability.md) §2.1）。
+
+实现：`AnthropicProvider`（`anthropic` 协议）、`OpenAiChatProvider` 与 `OpenAiResponsesProvider`（`openai.ts`）、`EchoProvider`（离线开发：对 console 消息调用 `con_send` 回显）、`ScriptedProvider`（测试用）。工厂 `providerForProfile()` 按协议选择；密钥由 `createProvider()` 从秘密存储读出，只进 HTTP 客户端的请求头。
 
 ## 2. 模型角色分配
 
-| 角色 | 默认模型 | 用途 | 思考 / 努力 |
+| 角色 | Claude 档案的默认模型 | 用途 | 思考 / 努力 |
 |---|---|---|---|
 | `main` | `claude-opus-5-5` | 主会话 | 自适应思考；effort 按批等级：L1 `medium`（延迟优先）、L2 `high`、L3 `high` |
 | `fork` | `claude-sonnet-5-5` | 后台 Fork、例程 | 自适应；effort `high` |
 | `cheap` | `claude-haiku-5-5` | 交接笔记、候选事件压缩、分类 | effort `low`/`medium` |
 
-全部可在 `providers.anthropic.models.<role>` 覆盖。主人想要最强模型时把 `main` 换成 `claude-fable-5-1`（注意其定价与"思考始终开启"的差异）。
+每个档案有自己的 `models.<role>` 与 `effort`；角色还可以整体换到另一个档案（`providers.roles`），例如主会话用 Claude、轻量任务用本机模型。主人想要最强模型时把 Claude 档案的 `main` 换成 `claude-fable-5-1`（注意其定价与"思考始终开启"的差异）。
 
-## 3. Anthropic 实现要点
+## 3. 供应商档案与协议
+
+档案在 `config.yaml` 的 `providers.profiles.<id>`（完整键见 [../30-specs/04-config-reference.md](../30-specs/04-config-reference.md)）；密钥是秘密，默认名 `PROVIDER_<ID>_API_KEY`，不写进配置文件。推荐在控制台的「模型」页（或 `protea providers set`）管理：选厂商预设 → 填地址、密钥、模型 → "测试连接"（一个最多 256 个输出 token 的小请求）→ 保存。
+
+| 协议 | 端点 | 适用 | 支持的特性 |
+|---|---|---|---|
+| `anthropic` | `{baseUrl}/v1/messages`（官方 SDK） | Claude；其他厂商的"Anthropic 兼容"接口用 `anthropic.features: basic` | `full`：自适应思考、effort、提示缓存、拒答回退、工具搜索、精确计数、服务端压缩（§4）；`basic`：只发标准字段，历史里的思考块不回传 |
+| `openai-chat` | `{baseUrl}/chat/completions`，SSE | OpenAI、DeepSeek、通义千问、Kimi、GLM、OpenRouter、Ollama、vLLM、LM Studio 等 | 工具即 function calling；服务端的自动前缀缓存（`cached_tokens` / `prompt_cache_hit_tokens` 记为缓存读）；可选推理强度 |
+| `openai-responses` | `{baseUrl}/responses`，SSE，`store: false` | OpenAI 的新接口 | 同上；系统分段合成 `instructions`；服务端不保留任何东西，之前的推理项不回传 |
+| `echo` | 无 | 离线开发、长稳测试 | 无（用量按长度估算） |
+
+OpenAI 风格协议的映射（`toChatMessages` / `toResponsesInput`）：
+
+- 系统分段拼成一条 system 消息（Responses 为 `instructions`）。
+- `tool_result` 块变成 `role: tool` 消息（Responses 为 `function_call_output`），排在同一条用户消息的文本前面；内容是纯文本，出错的结果前缀 `Error: `。
+- 助手的 `tool_use` 变成 `tool_calls`（Responses 为 `function_call`），参数是 JSON 文本；`thinking`、`redacted_thinking`、服务端工具块不发送；Claude 的 `compaction` 块转成一段"之前对话的摘要"文本。
+- 回复里的文本与工具调用转回规范块；参数不是 JSON 对象时变成 `{ _raw }`，由执行前的 schema 校验拒绝（模型看到错误后重试）。
+- 停止原因：`tool_calls` → `tool_use`、`length` / `max_output_tokens` → `max_tokens`、`content_filter` → `refusal`，其余 `end_turn`。
+- 用量：`prompt_tokens` 含缓存部分，所以输入 = prompt − cached，缓存读 = cached；服务端不报用量时按长度估算（预算与交接仍有依据）。费用只在档案配置了 `pricing` 时计算。
+- 不声明工具搜索（`supportsToolSearch` 为假，所有工具直接发送）、不做精确计数（交接按估算）、`req.compaction` 被忽略。上下文窗口取 `contextWindow`，默认 128000。
+- 错误：401/403 → `config`，404 → `fatal`，429 与 5xx/408/409、连接错误、超时 → `retryable`（先按 `maxRetries` 退避重试，尊重 `Retry-After`），400/413/422 且消息像"超出上下文" → `overflow`。
+
+**预设**（`PROVIDER_PRESETS`）：Anthropic、OpenAI（Responses）、DeepSeek、通义千问（阿里云百炼兼容模式）、Kimi（Moonshot）、智谱 GLM、OpenRouter、Ollama（本机，无密钥）、Anthropic 兼容接口、自定义。预设只给协议与地址（Claude 另给模型）；地址是写作时各厂商文档的默认值，以厂商文档为准。其他厂商的模型名不预设（会过时），用"获取模型列表"（`GET {baseUrl}/models`）选。
+
+**没有供应商时**：默认配置里没有档案（`providers.default: null`）。守护进程照常启动，`/readyz` 与总览页报告"no model provider is configured"，批次以 `model_error` 结束；配置好后从下一次请求起生效。旧写法（`providers.anthropic`、秘密 `ANTHROPIC_API_KEY`）在启动时迁移成 `anthropic` 档案（`config/legacy.ts`）。
+
+## 4. Anthropic 实现要点
 
 基于官方 `@anthropic-ai/sdk`（TypeScript，当前 1.3.x，使用 beta 命名空间以便传 `fallbacks`）。
 
@@ -52,10 +81,10 @@ type ModelRole = 'main' | 'fork' | 'cheap';
 | 输出上限 | `ProviderRequest.maxOutputTokens` 覆盖 `maxOutputTokens`（交接笔记用） |
 | 上下文编辑 | 可选 `context-management-2025-06-27` 的 `clear_tool_uses_20250919` 清理旧工具结果（只对 Fork 默认开启；主会话默认关，因为它改变了"只追加"的字节前缀会影响缓存命中的推理，需实测） |
 | 错误 | 最具体优先：`NotFoundError` → `RateLimitError`（退避、让渡 Fork 容量）→ `APIStatusError` → `APIConnectionError`；进入 `backoff` 阶段 |
-| 认证 | 秘密 `ANTHROPIC_API_KEY`（环境变量或 `/data/secrets/`）；缺失时守护进程照常启动，`/readyz` 报告原因，批次以 `model_error` 结束 |
+| 认证 | 档案的密钥秘密（默认 `PROVIDER_<ID>_API_KEY`，环境变量或 `/data/secrets/`）；缺失时守护进程照常启动，`/readyz` 报告原因，批次以 `model_error` 结束 |
 | 超时 | 主会话单次请求 10 min（TS SDK 单位毫秒）；Fork 可更长 |
 
-## 4. 工具搜索与缓存的配合
+## 5. 工具搜索与缓存的配合
 
 工具搜索把"加载工具定义"变成追加动作，因此 MCP 服务器增删造成的工具表变化对缓存前缀的影响被限制在"非延迟工具集合"内。策略：
 
@@ -67,13 +96,13 @@ type ModelRole = 'main' | 'fork' | 'cheap';
 - `Provider.supportsToolSearch(role)` 报告能力：Anthropic Provider 对 Claude 4.5 及以后的模型为真；echo 与不支持的模型不延迟任何工具。Fork 的请求同样适用，只是工具集合是该 Fork 允许的子集。
 - 验收用的缓存模拟见 `packages/core/test/tool-search.test.ts`：按"工具 → system → messages 的最长公共前缀、延迟工具不进前缀"计算，100 次推送、78 个 MCP 工具时为无 MCP 时的 98%。
 
-## 5. 用量与成本
+## 6. 用量与成本
 
 每次调用记录 `usage` 表：`input / output / cache_read / cache_write / thinking`（若有）token、模型、角色、会话、批等级、估算费用（按配置的价格表）。调度器用它做预算；控制台画"今日花费按等级"。
 
-价格表随镜像发布并可覆盖（`providers.anthropic.pricing`），避免硬编码过期。
+Claude 的价格表随镜像发布，可在档案的 `pricing` 覆盖，避免硬编码过期；其他模型的价格由主人在档案里填写（不填则没有费用估算）。
 
-## 6. 拒答与安全分类器
+## 7. 拒答与安全分类器
 
 Claude 5 系列可能以 `stop_reason: 'refusal'` 结束（HTTP 200）。处理：
 
@@ -81,12 +110,13 @@ Claude 5 系列可能以 `stop_reason: 'refusal'` 结束（HTTP 200）。处理�
 2. 仍然拒答：追加一条 `internal` 事件 `model.refused {category}`，结束本回合；不自动重试同一请求。
 3. 控制台显示拒答计数；连续拒答触发告警。
 
-## 7. 其他 Provider（插件）
+## 8. 其他 Provider（插件）
 
-`openai-compat`（Responses 或 Chat Completions 协议）作为 `kind: provider` 插件在 M7 提供，用于接入本地或第三方模型。它不保证思考/缓存/工具搜索等特性；`facts()` 如实报告，Core 据此关闭相应优化（P2：妥协是回退，不是语义）。
+原计划在 M7 以 `kind: provider` 插件提供 `openai-compat`；现在 OpenAI Chat Completions 与 Responses 两种协议已内置（§3），因为它们只是 HTTP + SSE，放进进程外插件反而要把流式与取消再转一层协议。插件形式的 Provider 留给真正需要自带 SDK 或私有协议的情况。
 
-## 8. 测试
+## 9. 测试
 
 - 录制/回放 Provider 层（M6，`packages/core/src/providers/recorder.ts`）：`ProviderRecorder` 包在真实 Provider 外、`RedactingProvider` 内，把每次调用的响应（`full` 模式还有请求）写到 `runs/<id>/provider.jsonl`；`RecordedProvider` 按角色依次回放这些响应，用于 `protea replay` 与不打网络的测试夹具。
-- 契约测试：对每个 Provider 实现跑同一组用例（流式、工具、取消、错误分类、计数）。
+- 协议测试：`packages/core/test/openai.test.ts` 用本地假服务器检查两种 OpenAI 协议的请求形态、流式拼接（分块的工具调用参数）、缓存用量、停止原因、重试与错误分类、模型列表与连接测试；`anthropic.test.ts` 同样覆盖 Anthropic。
+- 档案与路由：`providers-accounts.test.ts`（默认值、校验、精简写回、旧写法迁移、按角色路由与重建）；端到端 `apps/daemon/test/setup-providers.e2e.test.ts` 在控制台 API 上建档案、存密钥，让一条消息经假的 OpenAI 兼容服务器得到回复。
 - 每周一次的"真网"冒烟测试（CI 可选），覆盖新模型 ID 与 beta 头是否仍有效。

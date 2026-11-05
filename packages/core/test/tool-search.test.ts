@@ -8,6 +8,7 @@ import {
   ToolExposure,
   ToolRegistry,
   defaultConfig,
+  defaultProfile,
   normalizeMcpServer,
   reply,
   silentLogger,
@@ -119,7 +120,7 @@ describe('tool search exposure', () => {
   });
 
   it('declares the regex search tool and defer_loading in Anthropic requests', () => {
-    const cfg = defaultConfig().providers.anthropic;
+    const cfg = defaultProfile('anthropic');
     const p = new AnthropicProvider(cfg, 'sk-test');
     expect(p.supportsToolSearch('main')).toBe(true);
     const params = p.buildParams({

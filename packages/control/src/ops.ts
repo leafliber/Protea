@@ -21,7 +21,7 @@ import {
 import fs from 'node:fs';
 import { Readable } from 'node:stream';
 import path from 'node:path';
-import { principal } from './auth.js';
+import { actorOf, principal } from './auth.js';
 
 /** What the M5 operations need from the daemon; every part is optional (tests wire a subset). */
 export interface OpsDeps {
@@ -267,7 +267,7 @@ export function registerOpsRoutes(app: Hono, d: OpsDeps): void {
         ...(levels !== undefined ? { levels: levels as number[] } : {}),
         ...(b['hardCap'] !== undefined ? { hardCap: b['hardCap'] as boolean } : {}),
         ...(b['hours'] !== undefined ? { hours: b['hours'] as number } : {}),
-        by: principal(c).via === 'cookie' ? 'console:admin' : 'api:admin',
+        by: actorOf(principal(c)),
       });
       return c.json({ ...r, until: new Date(r.untilMs).toISOString() });
     } catch (err) {
@@ -364,12 +364,12 @@ export function registerOpsRoutes(app: Hono, d: OpsDeps): void {
   });
   app.post('/api/scheduler/pause', (c) => {
     if (!d.scheduler) return notFound(c, 'no scheduler');
-    const changed = d.scheduler.pause(principal(c).via === 'cookie' ? 'console:admin' : 'api:admin');
+    const changed = d.scheduler.pause(actorOf(principal(c)));
     return c.json({ paused: d.scheduler.paused, changed });
   });
   app.post('/api/scheduler/resume', (c) => {
     if (!d.scheduler) return notFound(c, 'no scheduler');
-    const changed = d.scheduler.resume(principal(c).via === 'cookie' ? 'console:admin' : 'api:admin');
+    const changed = d.scheduler.resume(actorOf(principal(c)));
     return c.json({ paused: d.scheduler.paused, changed });
   });
   app.post('/api/scheduler/discard', async (c) => {
@@ -379,7 +379,7 @@ export function registerOpsRoutes(app: Hono, d: OpsDeps): void {
     if (!Array.isArray(levels) || levels.length === 0 || !levels.every((l) => isLevel(l) && l >= 2)) {
       return bad(c, 'levels must be a non-empty list of levels 2–4 (L0/L1 events are never discarded in bulk)');
     }
-    const cursors = d.scheduler.discard(levels as number[], principal(c).via === 'cookie' ? 'console:admin' : 'api:admin');
+    const cursors = d.scheduler.discard(levels as number[], actorOf(principal(c)));
     return c.json({ discarded: cursors.length, cursors });
   });
 

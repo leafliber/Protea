@@ -18,6 +18,7 @@ import {
 import { api, defaultDataDir, resolveClient, stream, type ClientOptions } from './client.js';
 import { backupCommand, diagCommand, dropPrivileges, healthcheckCommand, migrateCommand, replayCommand, restoreCommand } from './admin.js';
 import { devPlugin } from './dev-plugin.js';
+import { accountsCommand } from './accounts.js';
 import { opsCommand } from './ops.js';
 import { bold, dim, formatApproval, formatEvent, formatFork, formatMcp, formatMcpTool, formatPlugin, formatSkill, formatStatus, green, red, yellow } from './format.js';
 
@@ -36,6 +37,25 @@ Usage:
   protea diag [--since 72h] [--runs 5] [--content] [--transcripts] [--recordings] [--out FILE|DIR] [--offline]
                                                 diagnostics bundle (.tar.gz in <data>/exports): logs, crash records, event
                                                 metadata, usage and cache shares, audit, live status and metrics; no secrets
+  protea setup [--user NAME]                    first run: show the setup code, or create the admin account here
+                                                (the password is read without echo, or from stdin)
+  protea accounts [ls]                          console accounts
+  protea accounts add <user> [--readonly]       add an account (password from the terminal or stdin)
+  protea accounts passwd <user>                 set a new password (signs the account out everywhere)
+  protea accounts role <user> admin|readonly
+  protea accounts rm <user>
+  protea providers [ls]                         model provider profiles, the default, per-role choices
+  protea providers presets                      vendors with their protocol and endpoint
+  protea providers set <id> [--preset P] [--protocol anthropic|openai-chat|openai-responses|echo]
+                         [--base-url URL] [--model M | --main M --fork M --cheap M] [--key-stdin] [--no-key]
+                         [--label TEXT] [--default]
+                                                add or change a provider (the first one becomes the default),
+                                                e.g. protea providers set deepseek --model deepseek-chat --key-stdin
+  protea providers use <id>                     make it the default
+  protea providers role main|fork|cheap <id|default>
+                                                a different provider for one role
+  protea providers test <id> | models <id>      a tiny test request, or the endpoint's model names
+  protea providers rm <id>
   protea status [--json]                        show runtime status
   protea events push <text…> [--level N] [--trigger T] [--no-wait] [--timeout SEC]
                                                 send a console message and print the replies
@@ -101,7 +121,8 @@ Usage:
 
 Common options:
   --url URL        control API (default $PROTEA_URL or http://127.0.0.1:7788)
-  --token TOKEN    admin token (default $PROTEA_ADMIN_TOKEN or <data-dir>/secrets/PROTEA_ADMIN_TOKEN)
+  --token TOKEN    API token (default $PROTEA_ADMIN_TOKEN or <data-dir>/secrets/PROTEA_ADMIN_TOKEN);
+                   the web console signs in with an account instead
   --data-dir DIR   data directory (default $PROTEA_DATA_DIR, /data, or ./protea-data)
 `;
 
@@ -164,6 +185,18 @@ const { values, positionals } = parseArgs({
     json: { type: 'boolean' },
     sources: { type: 'boolean' },
     all: { type: 'boolean' },
+    user: { type: 'string' },
+    readonly: { type: 'boolean' },
+    preset: { type: 'string' },
+    protocol: { type: 'string' },
+    'base-url': { type: 'string' },
+    main: { type: 'string' },
+    fork: { type: 'string' },
+    cheap: { type: 'string' },
+    label: { type: 'string' },
+    'key-stdin': { type: 'boolean' },
+    'no-key': { type: 'boolean' },
+    default: { type: 'boolean' },
     help: { type: 'boolean', short: 'h' },
     version: { type: 'boolean', short: 'v' },
   },
@@ -528,7 +561,7 @@ async function main(): Promise<number> {
     console.log(HELP);
     return cmd ? 0 : 1;
   }
-  const handled = await opsCommand(cmd, sub, rest, values, client);
+  const handled = (await accountsCommand(cmd, sub, rest, values, client)) ?? (await opsCommand(cmd, sub, rest, values, client));
   if (handled !== null) return handled;
   switch (cmd) {
     case 'serve':

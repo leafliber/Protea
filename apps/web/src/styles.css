@@ -1117,3 +1117,28 @@ textarea:focus {
   flex-direction: column;
   gap: 10px;
 }
+
+/* —— Setup —— */
+.setup-card {
+  width: min(560px, 100%);
+}
+
+.steps {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.step {
+  color: var(--muted);
+}
+
+.step-on {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.step-done {
+  color: var(--good, var(--muted));
+}

@@ -3,9 +3,11 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { LEVELS, type Level } from '@protea/protocol';
 import { normalizeMcpServer } from '../mcp/settings.js';
+import { normalizeProviders } from '../providers/profiles.js';
 import { parseCidr } from '../util/cidr.js';
 import { isValidTimeZone } from '../util/time.js';
 import { defaultConfig, STARTER_CONFIG_YAML } from './defaults.js';
+import { upgradeLegacyProviders } from './legacy.js';
 import type { ProteaConfig } from './types.js';
 
 export interface LoadedConfig {
@@ -62,6 +64,15 @@ export function envOverlay(env: NodeJS.ProcessEnv): Record<string, unknown> {
     });
   }
   return out;
+}
+
+/** A config.yaml document with an old providers section read in the profile layout. */
+function fileLayer(doc: Record<string, unknown>, warnings: string[]): Record<string, unknown> {
+  if (!('providers' in doc)) return doc;
+  const up = upgradeLegacyProviders(doc['providers']);
+  if (!up.upgraded) return doc;
+  warnings.push('config.yaml: providers uses the layout before provider profiles; it is read as providers.profiles (the daemon rewrites it at start)');
+  return { ...doc, providers: up.providers };
 }
 
 function validate(cfg: ProteaConfig, warnings: string[]): void {
@@ -129,7 +140,6 @@ function validate(cfg: ProteaConfig, warnings: string[]): void {
   const { soft, hard } = cfg.session.rounds;
   if (!(soft > 0 && hard >= soft)) throw new Error('session.rounds requires 0 < soft <= hard');
   if (!Array.isArray(cfg.owner.identities)) throw new Error('owner.identities must be a list');
-  if (!['5m', '1h'].includes(cfg.providers.anthropic.cacheTtl)) throw new Error('providers.anthropic.cacheTtl must be 5m or 1h');
   if (cfg.control.publicUrl !== null) {
     try {
       new URL(cfg.control.publicUrl);
@@ -186,8 +196,9 @@ function validate(cfg: ProteaConfig, warnings: string[]): void {
   if (c.instructions !== null && typeof c.instructions !== 'string') throw new Error('context.compaction.instructions must be text or null');
   if (typeof cfg.memory.nativeTool !== 'boolean') throw new Error('memory.nativeTool must be a boolean');
   if (typeof cfg.persona.dir !== 'string' || cfg.persona.dir.trim() === '') throw new Error('persona.dir must be a path');
-  const mm = cfg.providers.anthropic.thinkingMismatch;
-  if (mm !== null && mm !== 'drop_block' && mm !== 'error') throw new Error('providers.anthropic.thinkingMismatch must be drop_block, error or null');
+  const legacy = ['anthropic', 'echo'].filter((k) => k in (cfg.providers as unknown as Record<string, unknown>));
+  if (legacy.length > 0) warnings.push(`providers.${legacy.join(' and providers.')} (environment): the old layout is ignored; use providers.profiles`);
+  cfg.providers = normalizeProviders(cfg.providers);
   for (const [id, p] of Object.entries(cfg.plugins)) {
     if (p.enabled === undefined) p.enabled = false; // plugins without built-in defaults start disabled
     if (typeof p.enabled !== 'boolean') throw new Error(`plugins.${id}.enabled must be a boolean`);
@@ -209,14 +220,14 @@ export function loadConfig(dataDir: string, env: NodeJS.ProcessEnv = process.env
     const doc = opts.fileDoc;
     if (doc !== null && doc !== undefined) {
       if (!isPlainObject(doc)) throw new Error('config: top level must be a mapping');
-      config = deepMerge(config, doc);
+      config = deepMerge(config, fileLayer(doc, warnings));
     }
     sources.push(file);
   } else if (fs.existsSync(file)) {
     const doc = YAML.parse(fs.readFileSync(file, 'utf8')) as unknown;
     if (doc !== null && doc !== undefined) {
       if (!isPlainObject(doc)) throw new Error(`${file}: top level must be a mapping`);
-      config = deepMerge(config, doc);
+      config = deepMerge(config, fileLayer(doc, warnings));
     }
     sources.push(file);
   } else {

@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { ControlRole, StatusResponse } from '@protea/protocol';
+import type { ControlRole, StatusResponse, WhoAmIResponse } from '@protea/protocol';
 import { ApiError, api, onUnauthorized, post } from './api';
 import { Button, ErrorText, cx } from './components/ui';
 import { live, useLiveState } from './live';
@@ -12,6 +12,8 @@ import { Mcp } from './pages/Mcp';
 import { Memory } from './pages/Memory';
 import { Overview } from './pages/Overview';
 import { Plugins } from './pages/Plugins';
+import { Providers } from './pages/Providers';
+import { Setup } from './pages/Setup';
 import { Sessions } from './pages/Sessions';
 import { Skills } from './pages/Skills';
 
@@ -20,6 +22,7 @@ const PAGES: Array<[string, string]> = [
   ['events', '事件流'],
   ['sessions', '会话'],
   ['plugins', '插件'],
+  ['providers', '模型'],
   ['mcp', 'MCP'],
   ['skills', 'Skills'],
   ['approvals', '审批'],
@@ -28,7 +31,10 @@ const PAGES: Array<[string, string]> = [
   ['logs', '日志'],
 ];
 
-function Login({ onDone }: { onDone: (role: ControlRole) => void }) {
+function Login({ onDone }: { onDone: (me: WhoAmIResponse) => void }) {
+  const [withToken, setWithToken] = useState(false);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [token, setToken] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -37,11 +43,22 @@ function Login({ onDone }: { onDone: (role: ControlRole) => void }) {
     setBusy(true);
     setError(null);
     try {
-      const r = await api<{ role: ControlRole }>('POST', '/api/auth/login', { token });
+      const r = await api<WhoAmIResponse>('POST', '/api/auth/login', withToken ? { token } : { username, password });
       setToken('');
-      onDone(r.role);
+      setPassword('');
+      onDone(r);
     } catch (err) {
-      setError(err instanceof ApiError && err.status === 401 ? '令牌不对' : err instanceof Error ? err.message : String(err));
+      setError(
+        err instanceof ApiError && err.status === 401
+          ? withToken
+            ? '令牌不对'
+            : '用户名或密码不对'
+          : err instanceof ApiError && err.status === 429
+            ? '失败次数太多，请一分钟后再试'
+            : err instanceof Error
+              ? err.message
+              : String(err),
+      );
     } finally {
       setBusy(false);
     }
@@ -52,15 +69,32 @@ function Login({ onDone }: { onDone: (role: ControlRole) => void }) {
         <h1>
           <img src="./favicon.svg" alt="" width="28" height="28" /> Protea
         </h1>
-        <p className="muted">
-          输入管理员令牌登录。令牌在数据卷的 <code>secrets/PROTEA_ADMIN_TOKEN</code>，或环境变量 <code>PROTEA_ADMIN_TOKEN</code>。
-          也可以用只读令牌（<code>PROTEA_READONLY_TOKEN</code>）只看不改。
-        </p>
-        <input type="password" autoFocus autoComplete="current-password" placeholder="令牌" value={token} onChange={(e) => setToken(e.target.value)} />
-        <Button kind="primary" type="submit" busy={busy} disabled={!token.trim()}>
+        {withToken ? (
+          <>
+            <p className="muted">
+              用 API 令牌登录：管理员令牌在数据卷的 <code>secrets/PROTEA_ADMIN_TOKEN</code>，只读令牌是 <code>PROTEA_READONLY_TOKEN</code>。
+            </p>
+            <input type="password" autoFocus autoComplete="off" placeholder="令牌" value={token} onChange={(e) => setToken(e.target.value)} />
+          </>
+        ) : (
+          <>
+            <input autoFocus autoComplete="username" placeholder="用户名" value={username} onChange={(e) => setUsername(e.target.value)} />
+            <input type="password" autoComplete="current-password" placeholder="密码" value={password} onChange={(e) => setPassword(e.target.value)} />
+          </>
+        )}
+        <Button kind="primary" type="submit" busy={busy} disabled={withToken ? !token.trim() : !username.trim() || !password}>
           登录
         </Button>
         <ErrorText error={error} />
+        <div className="row small">
+          <button type="button" className="link" onClick={() => setWithToken(!withToken)}>
+            {withToken ? '用账号密码登录' : '改用 API 令牌登录'}
+          </button>
+          <span className="spacer" />
+          <span className="muted" title="在服务器上重设密码">
+            忘记密码：<code>protea accounts passwd 用户名</code>
+          </span>
+        </div>
       </form>
     </div>
   );
@@ -68,7 +102,7 @@ function Login({ onDone }: { onDone: (role: ControlRole) => void }) {
 
 const PHASE_LABEL: Record<string, string> = { idle: '空闲', model: '思考中', tools: '运行工具', backoff: '模型不可用，重试中', draining: '收尾中' };
 
-function Header({ status, role, onLogout }: { status: StatusResponse | undefined; role: ControlRole; onLogout: () => void }) {
+function Header({ status, me, onLogout }: { status: StatusResponse | undefined; me: WhoAmIResponse; onLogout: () => void }) {
   const ws = useLiveState();
   const phase = status?.phase ?? 'idle';
   return (
@@ -87,7 +121,9 @@ function Header({ status, role, onLogout }: { status: StatusResponse | undefined
         {ws === 'open' ? '实时' : ws === 'connecting' ? '连接中' : '已断开'}
       </span>
       {status && <span className="muted small">{status.version} · run {status.runId.slice(-6)}</span>}
-      <span className="badge badge-muted">{role === 'admin' ? '管理员' : '只读'}</span>
+      <span className="badge badge-muted" title={me.username ? `账号 ${me.username}` : '用 API 令牌登录'}>
+        {me.username ?? (me.role === 'admin' ? '管理员令牌' : '只读令牌')} · {me.role === 'admin' ? '管理员' : '只读'}
+      </span>
       <Button kind="ghost" small onClick={onLogout}>
         退出
       </Button>
@@ -106,7 +142,8 @@ function RiskBanner() {
   );
 }
 
-function Shell({ role, onLogout }: { role: ControlRole; onLogout: () => void }) {
+function Shell({ me, onLogout }: { me: WhoAmIResponse; onLogout: () => void }) {
+  const role: ControlRole = me.role;
   const { page, params } = useRoute();
   const { status, reload } = useStatus();
   useEffect(() => {
@@ -115,8 +152,8 @@ function Shell({ role, onLogout }: { role: ControlRole; onLogout: () => void }) 
   }, []);
   const pending = status ? Object.values(status.pending).reduce((a, b) => a + b, 0) : 0;
   return (
-    <SessionContext.Provider value={{ role, canWrite: role === 'admin' }}>
-      <Header status={status} role={role} onLogout={onLogout} />
+    <SessionContext.Provider value={{ role, canWrite: role === 'admin', ...(me.username ? { username: me.username } : {}) }}>
+      <Header status={status} me={me} onLogout={onLogout} />
       <RiskBanner />
       <div className="layout">
         <nav className="nav">
@@ -132,6 +169,7 @@ function Shell({ role, onLogout }: { role: ControlRole; onLogout: () => void }) 
           {page === 'events' && <Events params={params} />}
           {page === 'sessions' && <Sessions status={status} params={params} />}
           {page === 'plugins' && <Plugins params={params} />}
+          {page === 'providers' && <Providers />}
           {page === 'mcp' && <Mcp />}
           {page === 'skills' && <Skills />}
           {page === 'approvals' && <Approvals />}
@@ -146,22 +184,40 @@ function Shell({ role, onLogout }: { role: ControlRole; onLogout: () => void }) 
 }
 
 export function App() {
-  const [role, setRole] = useState<ControlRole | null | undefined>(undefined);
+  // undefined: loading; null: signed out (the setup page when no admin account exists yet).
+  const [me, setMe] = useState<WhoAmIResponse | null | undefined>(undefined);
+  const [setup, setSetup] = useState(false);
   useEffect(() => {
-    api<{ role: ControlRole }>('GET', '/api/auth/whoami').then(
-      (r) => setRole(r.role),
-      () => setRole(null),
+    api<WhoAmIResponse>('GET', '/api/auth/whoami').then(
+      (r) => setMe(r),
+      () => {
+        api<{ required: boolean }>('GET', '/api/setup').then(
+          (s) => setSetup(s.required),
+          () => setSetup(false),
+        );
+        setMe(null);
+      },
     );
-    return onUnauthorized(() => setRole(null));
+    return onUnauthorized(() => setMe(null));
   }, []);
-  if (role === undefined) return <div className="empty">加载中…</div>;
-  if (role === null) return <Login onDone={setRole} />;
+  if (me === undefined) return <div className="empty">加载中…</div>;
+  if (setup)
+    return (
+      <Setup
+        onDone={(m) => {
+          setSetup(false);
+          setMe(m);
+          go('overview');
+        }}
+      />
+    );
+  if (me === null) return <Login onDone={setMe} />;
   return (
     <Shell
-      role={role}
+      me={me}
       onLogout={() => {
         live.stop();
-        void post('/api/auth/logout').finally(() => setRole(null));
+        void post('/api/auth/logout').finally(() => setMe(null));
       }}
     />
   );

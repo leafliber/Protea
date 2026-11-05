@@ -1,6 +1,6 @@
 # 实际测试指南
 
-> 状态：Draft · 更新：2026-11-04
+> 状态：Draft · 更新：2026-11-05
 
 M0–M6 的验收里，有几项必须用真实条件才能复核：真实 API key、真实网络、真实账号，或长时间运行。它们统一放到实际使用场景里做。本文给出每一项的步骤、通过标准，以及要记录和导出什么，方便事后对照日志分析。
 
@@ -18,21 +18,27 @@ pnpm docker:build          # = scripts/docker-build.sh full；slim 用 pnpm dock
 docker run -d --name protea -v protea-data:/data -p 127.0.0.1:7788:7788 --stop-timeout 40 --restart unless-stopped protea:latest
 ```
 
-### 1.2 API key 与管理员令牌
+### 1.2 管理员账号与模型供应商
 
-API key 存为秘密（不进环境变量，`docker inspect` 看不到）：
-
-```bash
-docker exec -i protea protea secrets set ANTHROPIC_API_KEY
-```
-
-从标准输入读取，粘贴后按 Ctrl-D。Provider 在启动时读取 key，设置后重启一次：
+第一次启动时守护进程在容器日志里打印一次性设置码：
 
 ```bash
-docker restart protea
+docker logs protea
 ```
 
-`docker exec protea protea status` 的 provider 一行不再显示 `not ready` 即可。管理员令牌在 `/data/secrets/PROTEA_ADMIN_TOKEN`，控制台在 http://127.0.0.1:7788/ 。
+打开 http://127.0.0.1:7788/ ，用设置码创建管理员账号，接着在引导里选供应商、填接口地址、API Key 与模型，点"测试连接"，保存后立即生效（不用重启）。API Key 存为秘密 `PROVIDER_<ID>_API_KEY`，不进配置文件、环境变量与日志。
+
+只用命令行也可以（密码与 Key 不回显）：
+
+```bash
+docker exec -it protea protea setup --user admin
+```
+
+```bash
+docker exec -it protea protea providers set anthropic --key-stdin
+```
+
+`docker exec protea protea providers` 显示各档案是否就绪；`protea status` 的 provider 一行不再显示 `not ready` 即可。CLI 用的 API 令牌在 `/data/secrets/PROTEA_ADMIN_TOKEN`（容器里的 CLI 自动读取）。
 
 ### 1.3 实际测试期间建议的记录设置
 
@@ -64,13 +70,16 @@ docker cp protea:/data/exports/<名字> .
 | T2 | M3 | 真实 MCP 服务器：≤ 10 s 可调用；fetch 的调用结果 | 正常网络（本机 fake-IP DNS 不跑） |
 | T3 | M4 | 多次交接后仍能答对"我们昨天说好的三件事" | API key，跨天使用 |
 | T4 | M5 | Prometheus 抓取与 Grafana 面板 | Docker |
-| T5 | M6 | GitHub Actions 首次运行 | GitHub |
+| T5 | M6 | GitHub Actions 首次运行（**已通过**：2026-11-04，run 41873125001，check 与两个镜像任务全绿） | GitHub |
 | T6 | M2 | Telegram 真实机器人 | 机器人令牌 |
 | T7 | M2 | IMAP 真实邮箱 | 邮箱与应用专用密码 |
 | T8 | M6 | 长时间运行：内存是否封顶（风险 R10）、存储增长 | 实际使用数天到 30 天 |
 | T9 | M0/M6 | 真实模型下的重启恢复：回合中途 `docker restart`，批续跑、副作用不重复 | API key |
+| T10 | 账号与供应商 | 首次设置、账号登录；Anthropic 以外的供应商（OpenAI 兼容）跑通对话与工具调用；按角色分配 | 至少一个第三方 API key（或本机 Ollama） |
 
 ### T1 · 缓存命中率
+
+用 Anthropic 档案（Claude）测；其他供应商的缓存由服务端自动决定，命中率只作记录。
 
 ```bash
 for i in $(seq 1 100); do docker exec protea protea events push "第 $i 条：请只回复收到" --timeout 120; done
@@ -174,6 +183,19 @@ node scripts/soak.mjs --url http://127.0.0.1:7788 --token-file protea-token --ho
 
 - **通过**：重启后同一个批续跑并给出回复；已经执行过的副作用（例如已发出的消息）不重复；上一个运行目录有 `shutdown.json`，里面记着关停时有一个没跑完的批。
 - **导出**：`protea diag --since 1h --runs 2`。
+
+### T10 · 首次设置与多供应商
+
+1. 新的数据卷启动：`docker logs protea` 里有设置码；控制台显示初始化页。用错的设置码应被拒绝；正确的建好账号后，设置码作废（`secrets/PROTEA_SETUP_CODE` 消失），重启不再打印。
+2. 退出后用账号密码登录；输错 10 次后被限流一分钟。
+3. 在「模型」页添加一个 OpenAI 兼容供应商（例如 DeepSeek、通义千问、Kimi、GLM，或本机 Ollama：地址 `http://host.docker.internal:11434/v1`、勾"无需密钥"）。先"获取模型列表"，再"测试连接"，保存并设为默认。
+4. 推一条需要工具的消息（例如"记住我喜欢喝乌龙茶，然后告诉我你记下了"）：应当调用记忆工具并回复。
+5. 把"轻量"角色指到另一个档案（例如本机模型），让上下文交接发生一次（同 T3 调低 `softTokens`），确认交接笔记由那个档案生成（`logq --q "model call"` 的 `provider` 字段）。
+6. 换回 Claude 作为默认，继续对话：之前由其他模型产生的历史应当照常工作。
+
+- **通过**：以上都成立；日志里没有 API Key 与设置码（`docker logs protea` 的设置码横幅除外）。
+- **看日志**：`protea logq --q "model call"`（每行有 `provider`、`model`、token 与 `cacheHit`）；`protea logq --q "provider"`（档案保存、连接测试）；`protea logq --level warn`。
+- **导出**：`protea diag --since 2h`；对话质量相关的问题加 `--content`。
 
 ## 3. 日志在哪里、怎么查
 

@@ -149,7 +149,7 @@ stateDiagram-v2
 
 对应接口：`POST /api/plugins`、`POST /api/plugins/:id/enable|disable|reload|restart`、`PATCH /api/plugins/:id/config`、`DELETE /api/plugins/:id`；CLI `protea plugins install|enable|disable|reload|restart|config|uninstall`。
 
-**秘密与环境**：子进程只拿到最小环境（`PATH`、`HOME`、`LANG`、`TZ`、`PROTEA_PLUGIN_ID`、`PROTEA_PLUGIN_DATA_DIR`、清单 `runtime.env`）加上清单声明的秘密；守护进程自己的环境（例如 `ANTHROPIC_API_KEY`）不会传给插件。插件配置里的 `${secret:NAME}` 只在发给插件的那一刻解析。
+**秘密与环境**：子进程只拿到最小环境（`PATH`、`HOME`、`LANG`、`TZ`、`PROTEA_PLUGIN_ID`、`PROTEA_PLUGIN_DATA_DIR`、清单 `runtime.env`）加上清单声明的秘密；守护进程自己的环境（例如供应商密钥 `PROVIDER_<ID>_API_KEY`）不会传给插件。插件配置里的 `${secret:NAME}` 只在发给插件的那一刻解析。
 
 **工具表与环境提示的变化**在下一个回合边界生效（[06-context-assembly.md](06-context-assembly.md) §4）。禁用一个插件时，它的工具从表中移除；若模型随后仍调用了旧工具名，回执为 `failed: tool not available (plugin disabled)`。
 

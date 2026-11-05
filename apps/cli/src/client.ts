@@ -102,3 +102,53 @@ export async function readStdin(): Promise<string> {
   for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk as Uint8Array));
   return Buffer.concat(chunks).toString('utf8');
 }
+
+/**
+ * A password or key: typed without echo on a terminal, or the first line of piped stdin
+ * (`echo … | protea …`, `docker exec -i`).
+ */
+export async function readHidden(prompt: string): Promise<string> {
+  const stdin = process.stdin;
+  if (!stdin.isTTY) return (await readStdin()).split(/\r?\n/)[0] ?? '';
+  process.stderr.write(prompt);
+  return new Promise((resolve, reject) => {
+    let buf = '';
+    const cleanup = (): void => {
+      stdin.setRawMode(false);
+      stdin.pause();
+      stdin.removeListener('data', onData);
+      process.stderr.write('\n');
+    };
+    const onData = (chunk: string): void => {
+      for (const c of chunk) {
+        if (c === '\r' || c === '\n' || c === '\u0004') {
+          cleanup();
+          resolve(buf);
+          return;
+        }
+        if (c === '\u0003') {
+          cleanup();
+          reject(new Error('cancelled'));
+          return;
+        }
+        if (c === '\u007f' || c === '\b') buf = buf.slice(0, -1);
+        else buf += c;
+      }
+    };
+    stdin.setRawMode(true);
+    stdin.setEncoding('utf8');
+    stdin.resume();
+    stdin.on('data', onData);
+  });
+}
+
+/** A new password: asked twice on a terminal. */
+export async function readNewPassword(what: string): Promise<string> {
+  const pw = await readHidden(`${what}: `);
+  if (process.stdin.isTTY) {
+    const again = await readHidden('again: ');
+    if (again !== pw) throw new Error('the two passwords differ');
+  }
+  if (!pw) throw new Error('empty password');
+  return pw;
+}

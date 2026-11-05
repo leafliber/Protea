@@ -31,7 +31,7 @@ export interface ToolExposureOptions {
 }
 
 /**
- * Decides which tool definitions load up front (docs/10-architecture/12-model-providers.md §4).
+ * Decides which tool definitions load up front (docs/10-architecture/12-model-providers.md §5).
  * Kernel and plugin tools always load; MCP tools are deferred once there are many tools,
  * except each server's most-used few. The plan only changes when the tool set or the
  * settings change, so the loaded set — part of the cached prefix — stays byte-stable.

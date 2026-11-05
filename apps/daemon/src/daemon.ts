@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  AccountStore,
   ApprovalService,
   AuditLog,
   Bus,
@@ -48,7 +49,19 @@ import {
   createLogger,
   createMetrics,
   contextLimits,
+  PROTOCOL_DEFAULT_URL,
+  PROVIDER_PRESETS,
+  PROVIDER_PROTOCOLS,
+  compactProfile,
   createProvider,
+  defaultProfile,
+  isProfileId,
+  migrateLegacyProviders,
+  newSetupCode,
+  normalizeProviderProfile,
+  probeProfile,
+  providerKeySecretName,
+  replaceConfigValue,
   ensureMemoryDir,
   estimateMessagesTokens,
   ensurePersona,
@@ -86,15 +99,47 @@ import {
   type PluginSettings,
   type ProteaConfig,
   type Provider,
+  type ProviderProfile,
+  type ProviderRouter,
   type ToolGuard,
 } from '@protea/core';
-import { createControlApp, createWebSocketEndpoint, startControlServer, type ControlServer } from '@protea/control';
+import { authenticate, createControlApp, createWebSocketEndpoint, startControlServer, type AuthDeps, type ControlServer, type ProviderOps } from '@protea/control';
 import { ConsolePlugin } from '@protea/plugin-console';
 import { CronPlugin } from '@protea/plugin-cron';
-import type { Level, StatusResponse } from '@protea/protocol';
+import type { Level, ModelRole, ProviderProtocolName, ProvidersResponse, StatusResponse } from '@protea/protocol';
 import { acquireLock } from './lock.js';
 
 export const VERSION = '0.1.0';
+
+/** The one-time code that authorizes creating the first admin account (secrets/PROTEA_SETUP_CODE). */
+export const SETUP_SECRET = 'PROTEA_SETUP_CODE';
+
+const PROTOCOL_LABELS: Record<ProviderProtocolName, string> = {
+  anthropic: 'Anthropic Messages',
+  'openai-chat': 'OpenAI Chat Completions',
+  'openai-responses': 'OpenAI Responses',
+  echo: 'Echo（离线开发）',
+};
+
+/** First-run banner on stdout (not through the logger, so the code stays out of every log file). */
+function setupBanner(url: string, code: string): string {
+  const line = '='.repeat(64);
+  return [
+    '',
+    line,
+    '  Protea first-run setup / 首次设置',
+    `  Open ${url}/ and create the admin account with this setup code:`,
+    `  打开 ${url}/ ，用下面的设置码创建管理员账号：`,
+    '',
+    `      ${code}`,
+    '',
+    '  Also stored in secrets/PROTEA_SETUP_CODE; it stops working once the account exists.',
+    '  同时保存在 secrets/PROTEA_SETUP_CODE；账号建好后作废。',
+    line,
+    '',
+    '',
+  ].join('\n');
+}
 
 export interface DaemonOptions {
   dataDir: string;
@@ -108,6 +153,11 @@ export interface DaemonOptions {
   toolGuard?: ToolGuard;
   /** Node.js process metrics on /metrics (default on; tests that start many daemons turn it off). */
   processMetrics?: boolean;
+  /**
+   * Where the first-run setup banner (with the setup code) goes; default stdout unless
+   * observability.logLevel is silent. It bypasses the logger, so the code is in no log file.
+   */
+  announce?: (text: string) => void;
   clock?: Clock;
 }
 
@@ -115,6 +165,10 @@ export interface Daemon {
   runId: string;
   url: string;
   adminToken: string;
+  /** Console accounts and sign-in sessions. */
+  accounts: AccountStore;
+  /** The provider router (null when the options supplied a provider). */
+  providers: ProviderRouter | null;
   dataDir: string;
   config: ProteaConfig;
   db: Db;
@@ -185,6 +239,14 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const runId = newId();
   const runDir = path.join(dataDir, 'runs', runId);
   fs.mkdirSync(runDir, { recursive: true });
+  // Provider settings of the layout before profiles move to providers.profiles (logged below).
+  let migratedProviders: string[] = [];
+  let migrationError: string | null = null;
+  try {
+    migratedProviders = migrateLegacyProviders(dataDir, path.join(dataDir, 'secrets'));
+  } catch (err) {
+    migrationError = errorMessage(err);
+  }
   const loadedConfig = loadConfig(dataDir, env);
   const { sources, warnings } = loadedConfig;
   let config = loadedConfig.config;
@@ -205,6 +267,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       redact: redactLine,
     });
   for (const w of warnings) log.warn(w);
+  if (migratedProviders.length > 0) log.warn({ changes: migratedProviders }, 'provider settings migrated to provider profiles');
+  if (migrationError) log.error({ err: migrationError }, 'could not migrate the old provider settings');
   const prunedRuns = pruneRuns(path.join(dataDir, 'runs'), config.observability.keepRuns, runId);
   if (prunedRuns.length > 0) log.info({ removed: prunedRuns.length }, 'old run directories removed');
   const clock = opts.clock ?? systemClock;
@@ -246,7 +310,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   // Invariant I-7: no request carries a secret value, whatever path it took into the context.
   const redactedNames = new Set<string>();
   let pushInternalLater: ((input: Parameters<PluginHost['pushInternal']>[0]) => void) | null = null;
-  const baseProvider = opts.provider ?? createProvider(config, secrets);
+  // Profiles per role (providers.*); rebuilt when their settings or keys change, no restart needed.
+  const router: ProviderRouter | null = opts.provider ? null : createProvider(() => config.providers, secrets);
+  const baseProvider: Provider = opts.provider ?? (router as ProviderRouter);
+  const fallbackProfile = defaultProfile('anthropic');
+  const effortOf = (role: ModelRole, level: Level = 2) =>
+    router ? router.effort(role, level) : role === 'main' ? fallbackProfile.effort.main[level] : fallbackProfile.effort[role];
   // Recording sits inside the redaction, so provider.jsonl never holds a secret value.
   const recordMode = config.observability.recordProvider;
   const recorded = recordMode === 'off' ? baseProvider : new ProviderRecorder(baseProvider, path.join(runDir, 'provider.jsonl'), recordMode);
@@ -453,7 +522,6 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     usage: (name) => toolStats.calls(name),
     supported: (role) => provider.supportsToolSearch?.(role) ?? false,
   });
-  const effort = config.providers.anthropic.effort;
   const forks = new ForkManager({
     dir: path.join(dataDir, 'sessions', 'forks'),
     dataDir,
@@ -468,7 +536,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     clock,
     settings: config.scheduler.forks,
     backoffMs: config.session.backoffMs,
-    effortFor: (role) => (role === 'main' ? effort.main[2] : effort[role]),
+    effortFor: (role) => effortOf(role),
     system: () => segments.forkSegments(),
     prefixSalt: () => secretsEpoch(secrets),
     pushInternal,
@@ -500,13 +568,18 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       log.warn({ err: errorMessage(err) }, 'persona reload failed');
     }
   };
-  const limits = () => contextLimits(config.context.handoff, provider.contextWindow('main'), config.providers.anthropic.maxOutputTokens);
+  const limits = () => contextLimits(config.context.handoff, provider.contextWindow('main'), router ? router.maxOutputTokens('main') : fallbackProfile.maxOutputTokens);
   let main: MainSession;
   const contextTokens = (): number => {
     const t = main.currentTranscript;
     const base = t.sinceLastUsage();
     return base ? base.tokens + estimateMessagesTokens(base.after) : estimateMessagesTokens(t.messages);
   };
+  const mainProtocol = (): string | null => {
+    const id = router?.profileFor('main');
+    return id ? (config.providers.profiles[id]?.protocol ?? null) : null;
+  };
+  const accounts = new AccountStore(db, () => clock.now());
   const status = (): StatusResponse => {
     const h = provider.health();
     return {
@@ -518,11 +591,13 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       batchId: main.currentBatchId,
       pending: store.pendingCounts(),
       provider: {
-        id: provider.id,
+        id: router?.profileFor('main') ?? provider.id,
+        ...(mainProtocol() ? { protocol: mainProtocol() as ProviderProtocolName } : {}),
         mainModel: provider.modelFor('main'),
         ready: h.ready,
         ...(h.problem !== undefined ? { problem: h.problem } : {}),
       },
+      setupRequired: accounts.setupRequired(),
       plugins: plugins.status(),
       mcp: mcp.status(),
       skills: { listed: skills.listedNames().length, rejected: skills.list().filter((k) => k.errors.length > 0).length },
@@ -578,7 +653,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       },
     },
     backoffMs: config.session.backoffMs,
-    effortFor: (level: Level) => effort.main[level],
+    effortFor: (level: Level) => effortOf('main', level),
     status: () => ({
       now: isoInZone(clock.now(), tz),
       phase: main.phase,
@@ -597,7 +672,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       timezone: tz,
       settings: () => config.context.handoff,
       hooks: () => persona.hooks,
-      cheapEffort: () => effort.cheap,
+      cheapEffort: () => effortOf('cheap'),
     }),
     limits,
     prefixSalt: () => secretsEpoch(secrets),
@@ -695,7 +770,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   };
 
   // Hot configuration (docs/30-specs/04-config-reference.md §4).
-  const HOT_SECTIONS = new Set(['owner', 'permissions', 'plugins', 'mcp', 'skills', 'context', 'budget']);
+  const HOT_SECTIONS = new Set(['owner', 'permissions', 'plugins', 'mcp', 'skills', 'context', 'budget', 'providers']);
   const reloadConfig = async (): Promise<void> => {
     let next: ProteaConfig;
     try {
@@ -725,6 +800,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       log.error({ err: errorMessage(err) }, 'MCP settings not applied');
     }
     skills.rescan();
+    if (JSON.stringify(prev.providers) !== JSON.stringify(next.providers)) {
+      router?.refresh();
+      log.info({ default: next.providers.default, roles: next.providers.roles, profiles: Object.keys(next.providers.profiles) }, 'model providers changed; they apply from the next request');
+    }
     const cold = (Object.keys(next) as Array<keyof ProteaConfig>).filter(
       (k) => !HOT_SECTIONS.has(k) && JSON.stringify(prev[k]) !== JSON.stringify(next[k]),
     );
@@ -780,27 +859,129 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     list: () => secrets.list(),
     set: (name: string, value: string) => {
       secrets.set(name, value);
+      router?.refresh();
       log.info({ secret: name }, 'secret written through the control API');
     },
     delete: (name: string) => {
       if (name === config.control.adminTokenSecret) throw new Error('the admin token cannot be deleted through the API; replace it instead');
       const r = secrets.delete(name);
+      router?.refresh();
       if (r.removed) log.info({ secret: name }, 'secret deleted through the control API');
       return r;
     },
   };
+  // Model providers for the control API (/api/providers): profiles in config.yaml, keys as secrets.
+  const providerOperations = (): ProviderOps | undefined => {
+    const r = router;
+    if (!r) return undefined;
+    const keyOf = (p: ProviderProfile) => {
+      if (p.apiKeySecret === null) return { required: false, set: false, source: null };
+      const e = secrets.list().find((x) => x.name === p.apiKeySecret);
+      return { required: true, set: !!e, source: e?.source ?? null };
+    };
+    const view = (): ProvidersResponse => {
+      const states = r.states();
+      const h = r.health();
+      return {
+        default: config.providers.default,
+        roles: config.providers.roles,
+        profiles: states.map((st) => ({
+          id: st.id,
+          profile: st.profile as unknown as ProvidersResponse['profiles'][number]['profile'],
+          endpoint: st.profile.protocol === 'echo' ? null : (st.profile.baseUrl ?? PROTOCOL_DEFAULT_URL[st.profile.protocol]),
+          roles: st.roles,
+          key: keyOf(st.profile),
+          ready: st.health.ready,
+          ...(st.health.problem !== undefined ? { problem: st.health.problem } : {}),
+        })),
+        presets: PROVIDER_PRESETS.map((x) => ({ ...x })),
+        protocols: PROVIDER_PROTOCOLS.map((id) => ({ id, label: PROTOCOL_LABELS[id], defaultUrl: PROTOCOL_DEFAULT_URL[id] })),
+        defaults: Object.fromEntries(PROVIDER_PROTOCOLS.map((id) => [id, defaultProfile(id, 'new')])) as unknown as ProvidersResponse['defaults'],
+        ready: h.ready,
+        ...(h.problem !== undefined ? { problem: h.problem } : {}),
+      };
+    };
+    const apply = async (what: string, fields: Record<string, unknown>): Promise<ProvidersResponse> => {
+      await reloadConfig();
+      r.refresh();
+      log.info(fields, what);
+      return view();
+    };
+    return {
+      view,
+      put: async (id, req) => {
+        if (!isProfileId(id)) throw new Error('a provider id is lower-case letters, digits and "-" (at most 32), starting with a letter');
+        const full = normalizeProviderProfile(id, req.profile);
+        replaceConfigValue(dataDir, ['providers', 'profiles', id], compactProfile(id, full), env);
+        if (req.makeDefault || config.providers.default === null) replaceConfigValue(dataDir, ['providers', 'default'], id, env);
+        let key: 'stored' | 'removed' | 'kept' = 'kept';
+        if (full.apiKeySecret && typeof req.apiKey === 'string' && req.apiKey.trim() !== '') {
+          secrets.set(full.apiKeySecret, req.apiKey.trim());
+          key = 'stored';
+        } else if (full.apiKeySecret && req.apiKey === null) {
+          secrets.delete(full.apiKeySecret);
+          key = 'removed';
+        }
+        return apply('provider profile saved', { provider: id, protocol: full.protocol, models: full.models, key });
+      },
+      remove: async (id) => {
+        const p = config.providers.profiles[id];
+        if (!p) throw new Error(`no provider "${id}"`);
+        const others = Object.keys(config.providers.profiles).filter((x) => x !== id);
+        // The next configured profile takes over as the default (never the built-in echo by itself).
+        if (config.providers.default === id) replaceConfigValue(dataDir, ['providers', 'default'], others.find((x) => x !== 'echo') ?? null, env);
+        for (const [role, pid] of Object.entries(config.providers.roles)) if (pid === id) replaceConfigValue(dataDir, ['providers', 'roles', role], undefined, env);
+        replaceConfigValue(dataDir, ['providers', 'profiles', id], undefined, env);
+        const shared = others.some((x) => config.providers.profiles[x]?.apiKeySecret === p.apiKeySecret);
+        if (p.apiKeySecret === providerKeySecretName(id) && !shared) secrets.delete(p.apiKeySecret);
+        return apply('provider profile removed', { provider: id });
+      },
+      select: async (req) => {
+        if (req.default !== undefined) replaceConfigValue(dataDir, ['providers', 'default'], req.default, env);
+        for (const [role, id] of Object.entries(req.roles ?? {})) replaceConfigValue(dataDir, ['providers', 'roles', role], id ?? undefined, env);
+        return apply('provider selection changed', { ...(req.default !== undefined ? { default: req.default } : {}), ...(req.roles ? { roles: req.roles } : {}) });
+      },
+      probe: async (req, what) => {
+        const saved = config.providers.profiles[req.id];
+        const p = req.profile ? normalizeProviderProfile(isProfileId(req.id) ? req.id : 'new', req.profile) : saved;
+        if (!p) throw new Error(`no provider "${req.id}"`);
+        const res = await probeProfile(req.id, p, secrets, { what, ...(req.apiKey ? { apiKey: req.apiKey } : {}), ...(req.role ? { role: req.role } : {}) });
+        log.info({ provider: req.id, protocol: p.protocol, what, ok: res.ok, ms: res.ms, ...(res.ok ? { model: res.model } : { kind: res.kind, status: res.status }) }, 'provider probe');
+        return res;
+      },
+    };
+  };
+
+  // Console accounts. Until the first admin account exists, a one-time setup code (printed at
+  // start, kept in secrets/PROTEA_SETUP_CODE) lets the console create it.
+  const setupPending = accounts.setupRequired();
+  if (setupPending && !secrets.get(SETUP_SECRET)) secrets.set(SETUP_SECRET, newSetupCode());
+  if (!setupPending && secrets.list().some((x) => x.name === SETUP_SECRET && x.source === 'file')) secrets.delete(SETUP_SECRET);
+  const authDeps: AuthDeps = {
+    tokens: () => ({ adminToken: token.value, readonlyToken: secrets.get(startControl.readonlyTokenSecret) ?? null }),
+    accounts,
+    setup: {
+      code: () => (accounts.setupRequired() ? (secrets.get(SETUP_SECRET) ?? null) : null),
+      complete: (username) => {
+        secrets.delete(SETUP_SECRET);
+        audit.record({ kind: 'control_write', summary: `setup: admin account ${username} created`, owner: `console:${username}`, outcome: '201' });
+        log.info({ username }, 'admin account created with the setup code; the code is no longer valid');
+      },
+    },
+  };
+  const providerOps = providerOperations();
   const wsEndpoint = createWebSocketEndpoint({
     bus,
     store,
     log: log.child({ component: 'ws' }),
-    auth: () => ({ adminToken: token.value, readonlyToken: secrets.get(startControl.readonlyTokenSecret) ?? null }),
+    authenticate: (authorization, cookie) => authenticate(authDeps, authorization, cookie),
     runId: () => runId,
     logs: logRing,
     allowCidrs: () => allowCidrs,
   });
   const app = createControlApp({
-    adminToken: token.value,
-    readonlyToken: () => secrets.get(startControl.readonlyTokenSecret) ?? null,
+    auth: authDeps,
+    ...(providerOps ? { providers: providerOps } : {}),
     audit,
     metrics,
     // control is a cold section: these keep their start-up values until a restart.
@@ -909,6 +1090,14 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     throw err;
   }
 
+  if (setupPending) {
+    const code = secrets.get(SETUP_SECRET) ?? '';
+    const where = config.control.publicUrl ?? server.url.replace('//0.0.0.0:', '//127.0.0.1:').replace('//[::]:', '//127.0.0.1:');
+    const announce = opts.announce ?? (config.observability.logLevel === 'silent' ? null : (text: string) => void process.stdout.write(text));
+    announce?.(setupBanner(where, code));
+    log.warn({ file: path.join(dataDir, 'secrets', SETUP_SECRET) }, 'no admin account yet: open the console and create one with the setup code (printed once at start, also in the file)');
+  }
+
   const waiting = Object.values(store.pendingCounts()).reduce((a, b) => a + b, 0);
   plugins.pushInternal({
     type: 'daemon.started',
@@ -948,7 +1137,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const expiry = setInterval(() => approvals.expireDue(), 60_000);
   expiry.unref();
   log.info(
-    { url: server.url, dataDir, provider: provider.id, model: provider.modelFor('main'), config: sources, providerReady: provider.health().ready },
+    { url: server.url, dataDir, provider: router?.profileFor('main') ?? provider.id, model: provider.modelFor('main'), config: sources, providerReady: provider.health().ready },
     'daemon started',
   );
 
@@ -1012,6 +1201,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     runId,
     url: server.url,
     adminToken: token.value,
+    accounts,
+    providers: router,
     dataDir,
     get config() {
       return config;

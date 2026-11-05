@@ -1,6 +1,6 @@
 # 规范：配置参考
 
-> 状态：Accepted（M0–M6）· 更新：2026-11-04 · 设计：[../10-architecture/16-deployment.md](../10-architecture/16-deployment.md) §4
+> 状态：Accepted（M0–M6）· 更新：2026-11-05 · 设计：[../10-architecture/16-deployment.md](../10-architecture/16-deployment.md) §4
 
 配置文件 `/data/config.yaml`，首次启动时写入一份带注释的模板。所有键都有默认值。层叠顺序（后者覆盖前者）：内置默认 → `config.yaml` → `PROTEA_*` 环境变量。对象逐层合并，数组与标量整体替换。
 
@@ -14,7 +14,8 @@ daemon:
 
 control:
   listen: 0.0.0.0:7788                 # "host:port"；端口 0 表示随机
-  adminTokenSecret: PROTEA_ADMIN_TOKEN # 秘密名；缺失时自动生成
+  adminTokenSecret: PROTEA_ADMIN_TOKEN # API 令牌（CLI、脚本）的秘密名；缺失时自动生成。控制台用账号登录，第一个管理员账号用
+                                       # 启动时打印的设置码创建（秘密 PROTEA_SETUP_CODE，建好后作废；13-control-plane.md §2）
   readonlyTokenSecret: PROTEA_READONLY_TOKEN # 这个秘密存在时，它的值是只读令牌（GET 与 WS 订阅；M5）
   publicUrl: null                      # 浏览器访问控制平面的地址（MCP OAuth 回调）；null 时取实际监听地址
   publicMetrics: false                 # true：/metrics 不需要令牌（只用于私有网络；M5）
@@ -54,27 +55,52 @@ session:
   rounds: { soft: 12, hard: 30 }       # 每批模型回合数：软上限发提醒事件，硬上限结束批
   backoffMs: [5000, 15000, 45000]      # SDK 自身重试之后，可重试错误的额外退避
 
-providers:
-  default: anthropic                   # anthropic | echo（离线开发）
-  anthropic:
-    apiKeySecret: ANTHROPIC_API_KEY
-    baseUrl: null
-    models: { main: claude-opus-5-5, fork: claude-sonnet-5-5, cheap: claude-haiku-5-5 }
-    effort:
-      main: { 0: high, 1: medium, 2: high, 3: high, 4: high }   # 按批等级
-      fork: high
-      cheap: low
-    fallbacks: default                 # 服务端拒答回退（beta server-side-fallback-2026-07-01）；null 关闭
-    thinkingMismatch: drop_block       # thinking 块前缀不匹配时：drop_block | error | null（beta thinking-binding-controls-2026-08-01；M4）
-    thinkingDisplay: omitted           # omitted | summarized
-    cacheTtl: 1h                       # 5m | 1h
-    maxOutputTokens: 64000
-    timeoutMs: 600000
-    maxRetries: 2                      # SDK 内部重试次数
-    pricing: {}                        # 覆盖内置价格表：{ <model>: { input, output, cacheRead } }，美元/百万 token
-  echo:
-    delayMs: 0                         # 每次回复前的延迟（用于崩溃测试与长稳测试）
-                                       # 用量按请求与回复的长度估算（M6），所以离线时上下文交接也会照常发生
+providers:                             # 模型供应商（12-model-providers.md §3）；热更新，下一次模型请求生效。
+                                       # 推荐在控制台「模型」页或用 protea providers set 管理
+  default: null                        # 各角色默认用的档案 id；null = 还没配置（守护进程照常启动，/readyz 报告原因）。
+                                       # "echo" 是内置的离线开发档案，不用写在 profiles 里
+  roles: {}                            # 按角色换档案，如 { cheap: local }（角色：main、fork、cheap）
+  profiles:
+    claude:                            # id：小写字母、数字和 -，以字母开头，最长 32
+      label: null                      # 控制台里显示的名字；null 显示 id
+      protocol: anthropic              # anthropic | openai-chat | openai-responses | echo
+      baseUrl: null                    # null = 协议的默认地址：anthropic → https://api.anthropic.com（SDK 自己加 /v1/messages）；
+                                       # openai-* → https://api.openai.com/v1（后面加 /chat/completions 或 /responses）
+      apiKeySecret: PROVIDER_CLAUDE_API_KEY   # 默认 PROVIDER_<ID>_API_KEY；null = 接口不要密钥（本机模型服务）
+      models: { main: claude-opus-5-5, fork: claude-sonnet-5-5, cheap: claude-haiku-5-5 }
+                                       # anthropic 的默认值如上；其他协议没有默认，fork 与 cheap 缺省时用 main 的模型
+      effort:
+        main: { 0: high, 1: medium, 2: high, 3: high, 4: high }   # 按批等级
+        fork: high
+        cheap: low
+      maxOutputTokens: 64000           # anthropic 默认 64000，其他协议 8192
+      contextWindow: null              # 输入上限；null：Claude 模型按型号（1M 或 200k），其他 128000
+      timeoutMs: 600000
+      maxRetries: 2                    # 连接错误、429、5xx 的重试次数（会话自己的退避之外）
+      headers: {}                      # 每个请求附加的 HTTP 头（不是秘密：控制台会显示）
+      pricing: {}                      # { <model>: { input, output, cacheRead } }，美元/百万 token；Claude 有内置价格表，
+                                       # 其他模型不填就没有费用估算（预算按 0 计）
+      anthropic:                       # 只对 protocol: anthropic 生效
+        features: full                 # full：自适应思考、effort、缓存、beta 功能（官方 API）；basic：只发标准 Messages 字段，
+                                       # 给其他厂商的 Anthropic 兼容接口用（没有思考、工具搜索、精确计数）
+        fallbacks: default             # 服务端拒答回退（beta server-side-fallback-2026-07-01）；null 关闭
+        thinkingMismatch: drop_block   # thinking 块前缀不匹配时：drop_block | error | null（beta thinking-binding-controls-2026-08-01；M4）
+        thinkingDisplay: omitted       # omitted | summarized
+        cacheTtl: 1h                   # 5m | 1h
+      openai:                          # 只对 openai-chat / openai-responses 生效
+        reasoningEffort: false         # true：把 effort 作为推理强度发送（只对推理模型开启，其他模型会拒绝该参数）
+        maxTokensField: max_tokens     # openai-chat 的输出上限字段；OpenAI 官方接口用 max_completion_tokens
+      echo:
+        delayMs: 0                     # protocol: echo 每次回复前的延迟（崩溃测试与长稳测试）；用量按长度估算（M6）
+    local:                             # 例：本机 Ollama，只做轻量任务（roles: { cheap: local }）
+      protocol: openai-chat
+      baseUrl: http://host.docker.internal:11434/v1
+      apiKeySecret: null
+      models: { main: qwen3:8b }
+
+# 2026-11-05 之前的写法（providers.anthropic {…}、providers.echo {…}、秘密 ANTHROPIC_API_KEY）在启动时自动迁移：
+# config.yaml 改写成 providers.profiles.anthropic（其他部分与注释保留），secrets/ANTHROPIC_API_KEY 改名为
+# PROVIDER_ANTHROPIC_API_KEY；只有旧密钥文件、没有 providers 配置的数据卷也会得到一个 anthropic 档案。
 
 plugins:                             # 每个插件一组：enabled（未列出的插件默认 false）+ config（按插件的 configSchema 校验）
   console: { enabled: true, config: {} }
@@ -196,6 +222,8 @@ plugins:
 
 `PROTEA_<PATH>`，路径段以双下划线分隔，每段由大写下划线转成小驼峰：`PROTEA_SCHEDULER__LEVELS__1__DEBOUNCE_MS=500` → `scheduler.levels.1.debounceMs`。值先按 JSON 解析（数字、布尔、`null`、数组），失败则作为字符串。不含 `__` 的变量（如 `PROTEA_DATA_DIR`、`PROTEA_URL`、`PROTEA_ADMIN_TOKEN`）不是配置路径。
 
+供应商也可以只用环境变量配置（不需要控制台），例如 DeepSeek：`PROTEA_PROVIDERS__DEFAULT=deepseek`、`PROTEA_PROVIDERS__PROFILES__DEEPSEEK__PROTOCOL=openai-chat`、`PROTEA_PROVIDERS__PROFILES__DEEPSEEK__BASE_URL=https://api.deepseek.com/v1`、`PROTEA_PROVIDERS__PROFILES__DEEPSEEK__MODELS__MAIN=deepseek-chat`，密钥 `PROVIDER_DEEPSEEK_API_KEY=…`（或 `PROTEA_SECRET_PROVIDER_DEEPSEEK_API_KEY`）。环境变量里的档案 id 会被转成小驼峰，所以只能用不含 `-` 的 id；环境变量设置的值在控制台里改不掉（环境层优先）。
+
 秘密的解析顺序：`PROTEA_SECRET_<NAME>` → `<NAME>` → `/data/secrets/<NAME>` 文件。
 
 ## 4. 热更新（M2）
@@ -212,6 +240,7 @@ plugins:
 | `skills` | 立即重扫，目录在下一个回合边界更新 |
 | `context.toolSearch`、`context.handoff`、`context.compaction` | 下一次模型请求生效 |
 | `budget` | 立即（M5 起；下一次状态查询与阈值检查用新值） |
+| `providers` | 下一次模型请求生效（2026-11-05 起；进行中的请求用旧设置跑完）。存进秘密的密钥同样立即生效 |
 | `persona/` 目录里的文件（不是配置键） | 下一次模型请求生效（目录监视） |
 | 其他部分（包括 `control`） | 需要重启，日志会列出改动了哪些部分；`PATCH /api/config` 在 `restartRequired` 里返回它们 |
 

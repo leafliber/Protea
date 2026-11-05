@@ -58,7 +58,7 @@ Core 暴露给所有会话的 `memory` 工具采用与 Anthropic **memory tool�
 
 容量交接时（[05-sessions-and-agent-loop.md](05-sessions-and-agent-loop.md) §8）：
 
-1. 默认策略：用 `cheap` 模型（effort 取 `providers.anthropic.effort.cheap`，输出上限 `context.handoff.notesMaxTokens`）对即将丢弃的历史生成 `handoff/<UTC 时间>Z.md`。输入是丢弃部分的纯文本渲染（工具结果截断、thinking 不进入，超过 `notesInputTokens` 时先丢最早的部分）**加上一份交接笔记**，要求保留其中仍然有效的条目，因此多次交接后早先的约定不会丢。笔记分节：In progress、Commitments、Owner's recent instructions、Pending、Facts worth keeping。模型失败或拒答时写"机械笔记"（最后 20 条文本原样）。文件开头记录来源转录、丢弃与保留的消息数和上一份笔记的路径。路径加到 `INDEX.md` 末尾的 `## Recent handoffs` 列表（保留最近 `recentInIndex` 条，默认 5）。
+1. 默认策略：用 `cheap` 模型（effort 取 `cheap` 角色所在档案的 `effort.cheap`，输出上限 `context.handoff.notesMaxTokens`）对即将丢弃的历史生成 `handoff/<UTC 时间>Z.md`。输入是丢弃部分的纯文本渲染（工具结果截断、thinking 不进入，超过 `notesInputTokens` 时先丢最早的部分）**加上一份交接笔记**，要求保留其中仍然有效的条目，因此多次交接后早先的约定不会丢。笔记分节：In progress、Commitments、Owner's recent instructions、Pending、Facts worth keeping。模型失败或拒答时写"机械笔记"（最后 20 条文本原样）。文件开头记录来源转录、丢弃与保留的消息数和上一份笔记的路径。路径加到 `INDEX.md` 末尾的 `## Recent handoffs` 列表（保留最近 `recentInIndex` 条，默认 5）。
 2. 保留尾部：从一个"事件消息"（不含工具结果的 user 消息）开始，取最近不超过 `keepRatio × softTokens`（默认 1/3）的消息；正在运行的批总是完整保留。尾部消息**去掉 thinking 块**后复制（thinking 块绑定原对话，见 [05-sessions-and-agent-loop.md](05-sessions-and-agent-loop.md) §8）。手动交接和 Provider 报"输入过长"后的交接只保留正在运行的批（或最近一批）。
 3. 新会话的首条 user 消息是 `internal` 事件 `session.handoff`（`store` 模式记入事件库，正文说明丢弃了多少条、笔记在哪），其后才是尾部，模型据此决定是否读取笔记。
 

@@ -30,24 +30,8 @@ export function defaultConfig(): ProteaConfig {
     },
     budget: { dailyUsd: null, shares: { 0: null, 1: 0.6, 2: 0.2, 3: 0.15, 4: 0.05 }, warnAt: 0.9, enforce: true, hardDailyUsd: null },
     session: { rounds: { soft: 12, hard: 30 }, backoffMs: [5_000, 15_000, 45_000] },
-    providers: {
-      default: 'anthropic',
-      anthropic: {
-        apiKeySecret: 'ANTHROPIC_API_KEY',
-        baseUrl: null,
-        models: { main: 'claude-opus-5-5', fork: 'claude-sonnet-5-5', cheap: 'claude-haiku-5-5' },
-        effort: { main: { 0: 'high', 1: 'medium', 2: 'high', 3: 'high', 4: 'high' }, fork: 'high', cheap: 'low' },
-        fallbacks: 'default',
-        thinkingDisplay: 'omitted',
-        cacheTtl: '1h',
-        maxOutputTokens: 64_000,
-        thinkingMismatch: 'drop_block',
-        timeoutMs: 600_000,
-        maxRetries: 2,
-        pricing: {},
-      },
-      echo: { delayMs: 0 },
-    },
+    // No provider until the owner adds one (console → 模型, `protea providers set`, or config.yaml).
+    providers: { default: null, roles: {}, profiles: {} },
     plugins: {
       console: { enabled: true, config: {} },
       cron: { enabled: true, config: {} },
@@ -87,10 +71,20 @@ export const STARTER_CONFIG_YAML = `# Protea configuration. Every key is optiona
 #                            # an exhausted L2 pool turns new L2 events into piggyback, L3/L4 into store
 #   hardDailyUsd: 10         # global cap: once reached only L0/L1 events are delivered
 
-# providers:
-#   default: anthropic        # or "echo" for offline development
-#   anthropic:
-#     models: { main: claude-opus-5-5 }
+# providers:                  # model providers; easiest from the console (模型 page) or "protea providers set"
+#   default: claude             # the profile every role uses unless roles says otherwise ("echo": offline development)
+#   roles: { cheap: local }     # optional: a different profile per role (main, fork, cheap)
+#   profiles:
+#     claude:
+#       protocol: anthropic     # anthropic | openai-chat | openai-responses | echo
+#       # baseUrl: null         # null = the protocol's default endpoint
+#       # apiKeySecret: PROVIDER_CLAUDE_API_KEY   # default PROVIDER_<ID>_API_KEY ("protea secrets set" or the console)
+#       models: { main: claude-opus-5-5, fork: claude-sonnet-5-5, cheap: claude-haiku-5-5 }
+#     local:
+#       protocol: openai-chat
+#       baseUrl: http://host.docker.internal:11434/v1
+#       apiKeySecret: null      # no key
+#       models: { main: qwen3:8b }   # fork and cheap default to main
 
 # plugins:
 #   cron:
@@ -118,7 +112,8 @@ export const STARTER_CONFIG_YAML = `# Protea configuration. Every key is optiona
 #     hardTokens: null        # before any request above this (null: context window - max output - 5 %)
 
 # control:
-#   listen: 0.0.0.0:7788      # the web console is at http://<host>:7788/ (sign in with the admin token)
+#   listen: 0.0.0.0:7788      # the web console is at http://<host>:7788/ (first visit: create the admin account
+#                             # with the setup code the daemon prints at start)
 #   publicMetrics: false      # true serves /metrics without a token (private networks only)
 #                             # a secret PROTEA_READONLY_TOKEN enables a read-only token for dashboards
 #   allowCidrs: []            # e.g. [10.0.0.0/8, 192.168.0.0/16]; empty allows any address (loopback always)

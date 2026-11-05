@@ -30,15 +30,17 @@ import {
   type Transcript,
 } from '@protea/core';
 import { addressGate } from './allow.js';
-import { principal, registerAuthRoutes, requireAuth, type AuthSettings } from './auth.js';
+import { actorOf, principal, registerAccountRoutes, registerAuthRoutes, requireAuth, type AuthDeps } from './auth.js';
 import { installFrom, registerOpsRoutes, type OpsDeps } from './ops.js';
+import { registerProviderRoutes, type ProviderOps } from './providers.js';
 import { registerConsole } from './static.js';
 import { subscribeStream } from './stream.js';
 
 export interface ControlDeps extends Omit<OpsDeps, 'store' | 'audit'> {
-  adminToken: string;
-  /** Optional read-only token (GET and WebSocket only); read on every request so it can change. */
-  readonlyToken?: () => string | null;
+  /** API tokens, console accounts and sessions, and the first-run setup code. */
+  auth: AuthDeps;
+  /** Model provider profiles (/api/providers). */
+  providers?: ProviderOps;
   bus: Bus;
   store: EventStore;
   log: Logger;
@@ -99,7 +101,6 @@ const THINKING_TYPES = new Set(['thinking', 'redacted_thinking']);
  */
 export function createControlApp(d: ControlDeps): Hono {
   const app = new Hono();
-  const auth = (): AuthSettings => ({ adminToken: d.adminToken, readonlyToken: d.readonlyToken?.() ?? null });
   const clientAddress = (c: Context): string => {
     try {
       return getConnInfo(c).remote.address ?? 'unknown';
@@ -169,16 +170,17 @@ export function createControlApp(d: ControlDeps): Hono {
     }
   });
 
-  registerAuthRoutes(app, auth, clientAddress);
-  const guard = requireAuth(auth);
+  registerAuthRoutes(app, d.auth, clientAddress);
+  const guard = requireAuth(d.auth);
   app.use('/api/*', guard);
   // Every state-changing request is audited (memory writes also get their own record).
   app.use('/api/*', async (c, next) => {
     await next();
     if (!d.audit || c.req.method === 'GET' || c.req.method === 'HEAD') return;
-    const p = principal(c);
-    d.audit.record({ kind: 'control_write', summary: `${c.req.method} ${c.req.path}`, owner: `${p.via === 'cookie' ? 'console' : 'api'}:${p.role}`, outcome: String(c.res.status) });
+    d.audit.record({ kind: 'control_write', summary: `${c.req.method} ${c.req.path}`, owner: actorOf(principal(c)), outcome: String(c.res.status) });
   });
+  registerAccountRoutes(app, d.auth);
+  registerProviderRoutes(app, d.providers);
 
   app.get('/metrics', async (c, next) => {
     if (!d.publicMetrics?.()) return guard(c, next);
@@ -212,7 +214,7 @@ export function createControlApp(d: ControlDeps): Hono {
       ...(b.trigger !== undefined ? { trigger: b.trigger } : {}),
       ...(Array.isArray(b.tags) ? { tags: b.tags } : {}),
     };
-    const r = d.pushConsole(req, principal(c).via === 'cookie' ? 'console:admin' : 'api:admin');
+    const r = d.pushConsole(req, actorOf(principal(c)));
     if (!r.ok || r.cursor === undefined) {
       return c.json({ error: { code: 'rejected', message: 'event rejected', details: r.errors ?? [] } }, 422);
     }

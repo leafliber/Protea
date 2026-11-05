@@ -8,7 +8,7 @@ import type {
   BetaToolUnion,
 } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import type { ContentBlock, ModelRole } from '@protea/protocol';
-import type { AnthropicSettings } from '../config/types.js';
+import type { ProviderProfile } from '../config/types.js';
 import { AbortedError } from '../util/abort.js';
 import { DEFAULT_PRICING, estimateCost } from './pricing.js';
 import { ProviderError, type Provider, type ProviderHealth, type ProviderRequest, type ProviderResponse } from './types.js';
@@ -63,21 +63,27 @@ function supportsFallbacks(model: string): boolean {
  * Claude via the Messages API (beta namespace, for `fallbacks`). Always streams;
  * adaptive thinking; effort per request; one explicit cache breakpoint at the end of
  * the system prefix plus top-level automatic caching for the conversation tail.
+ * With `anthropic.features: basic` (other vendors' Anthropic-compatible endpoints) only the
+ * plain Messages fields are sent: no thinking or effort, no betas, a block-level cache mark.
  */
 export class AnthropicProvider implements Provider {
-  readonly id = 'anthropic';
   private readonly client: Anthropic | null;
+  private readonly full: boolean;
 
   constructor(
-    private readonly settings: AnthropicSettings,
+    private readonly settings: ProviderProfile,
     apiKey: string | undefined,
+    readonly id = 'anthropic',
   ) {
-    this.client = apiKey
+    this.full = settings.anthropic.features === 'full';
+    const key = apiKey ?? (settings.apiKeySecret === null ? 'none' : undefined);
+    this.client = key
       ? new Anthropic({
-          apiKey,
+          apiKey: key,
           maxRetries: settings.maxRetries,
           timeout: settings.timeoutMs,
           ...(settings.baseUrl ? { baseURL: settings.baseUrl } : {}),
+          ...(Object.keys(settings.headers).length > 0 ? { defaultHeaders: settings.headers } : {}),
         })
       : null;
   }
@@ -87,15 +93,15 @@ export class AnthropicProvider implements Provider {
   }
 
   supportsToolSearch(role: ModelRole): boolean {
-    return supportsToolSearchModel(this.modelFor(role));
+    return this.full && supportsToolSearchModel(this.modelFor(role));
   }
 
   contextWindow(role: ModelRole): number {
-    return contextWindowOf(this.modelFor(role));
+    return this.settings.contextWindow ?? contextWindowOf(this.modelFor(role));
   }
 
   async countTokens(req: ProviderRequest, opts: { signal: AbortSignal }): Promise<number | undefined> {
-    if (!this.client) return undefined;
+    if (!this.client || !this.full) return undefined;
     const p = this.buildParams(req);
     try {
       const res = await this.client.beta.messages.countTokens(
@@ -120,9 +126,22 @@ export class AnthropicProvider implements Provider {
     return this.client ? { ready: true } : { ready: false, problem: `secret ${this.settings.apiKeySecret} is not set` };
   }
 
+  async listModels(signal: AbortSignal): Promise<string[]> {
+    if (!this.client) throw new ProviderError('config', this.health().problem ?? 'provider not configured');
+    const out: string[] = [];
+    try {
+      for await (const m of this.client.models.list({ limit: 100 }, { signal })) out.push(m.id);
+    } catch (err) {
+      throw classifyAnthropicError(err, signal);
+    }
+    return out.sort();
+  }
+
   buildParams(req: ProviderRequest): BetaMessageStreamParams {
+    if (!this.full) return this.basicParams(req);
+    const opt = this.settings.anthropic;
     const model = this.modelFor(req.role);
-    const cache = { type: 'ephemeral' as const, ttl: this.settings.cacheTtl };
+    const cache = { type: 'ephemeral' as const, ttl: opt.cacheTtl };
     const system: BetaTextBlockParam[] = req.system.map((s, i, all) =>
       i === all.length - 1 ? { type: 'text', text: s.text, cache_control: cache } : { type: 'text', text: s.text },
     );
@@ -147,14 +166,14 @@ export class AnthropicProvider implements Provider {
       messages: req.messages as unknown as BetaMessageParam[],
       thinking: {
         type: 'adaptive',
-        display: this.settings.thinkingDisplay,
-        ...(this.settings.thinkingMismatch ? { block_binding: { prefix_mismatch_behavior: this.settings.thinkingMismatch } } : {}),
+        display: opt.thinkingDisplay,
+        ...(opt.thinkingMismatch ? { block_binding: { prefix_mismatch_behavior: opt.thinkingMismatch } } : {}),
       },
       output_config: { effort: req.effort },
       cache_control: cache,
     };
     if (tools.length > 0) params.tools = tools;
-    if (this.settings.thinkingMismatch) betas.push(BINDING_BETA);
+    if (opt.thinkingMismatch) betas.push(BINDING_BETA);
     if (req.compaction) {
       params.context_management = {
         edits: [
@@ -167,11 +186,32 @@ export class AnthropicProvider implements Provider {
       };
       betas.push(COMPACT_BETA);
     }
-    if (this.settings.fallbacks && supportsFallbacks(model)) {
-      params.fallbacks = this.settings.fallbacks;
+    if (opt.fallbacks && supportsFallbacks(model)) {
+      params.fallbacks = opt.fallbacks;
       betas.push(FALLBACK_BETA);
     }
     if (betas.length > 0) params.betas = betas;
+    return params;
+  }
+
+  /** Plain Messages fields only; thinking blocks of earlier turns stay out (they belong to Claude). */
+  private basicParams(req: ProviderRequest): BetaMessageStreamParams {
+    const system: BetaTextBlockParam[] = req.system.map((s, i, all) =>
+      i === all.length - 1 ? { type: 'text', text: s.text, cache_control: { type: 'ephemeral' } } : { type: 'text', text: s.text },
+    );
+    const tools: BetaToolUnion[] = req.tools
+      .filter((t) => !t.providerType)
+      .map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema as BetaTool['input_schema'] }));
+    const messages = req.messages
+      .map((m) => ({ role: m.role, content: m.content.filter((b) => b.type === 'text' || b.type === 'tool_use' || b.type === 'tool_result' || b.type === 'image') }))
+      .filter((m) => m.content.length > 0);
+    const params: BetaMessageStreamParams = {
+      model: this.modelFor(req.role),
+      max_tokens: req.maxOutputTokens ?? this.settings.maxOutputTokens,
+      system,
+      messages: messages as unknown as BetaMessageParam[],
+    };
+    if (tools.length > 0) params.tools = tools;
     return params;
   }
 
@@ -224,7 +264,7 @@ export class AnthropicProvider implements Provider {
       const model = it.model ?? message.model;
       const pricing = this.settings.pricing[model] ?? DEFAULT_PRICING[model];
       const write = it.cache_creation_input_tokens ?? 0;
-      const oneHour = it.cache_creation?.ephemeral_1h_input_tokens ?? (this.settings.cacheTtl === '1h' ? write : 0);
+      const oneHour = it.cache_creation?.ephemeral_1h_input_tokens ?? (this.full && this.settings.anthropic.cacheTtl === '1h' ? write : 0);
       const c = estimateCost(
         pricing,
         { inputTokens: it.input_tokens ?? 0, outputTokens: it.output_tokens ?? 0, cacheReadTokens: it.cache_read_input_tokens ?? 0, cacheWriteTokens: write },

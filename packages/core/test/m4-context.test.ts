@@ -20,7 +20,8 @@ import {
   secretsEpoch,
   silentLogger,
   textReply,
-  type AnthropicSettings,
+  defaultProfile,
+  type ProviderProfile,
   type ProviderRequest,
 } from '../src/index.js';
 import { tmpDir } from './helpers.js';
@@ -150,7 +151,17 @@ describe('refusal fallback echo rules', () => {
 });
 
 describe('AnthropicProvider (M4 additions)', () => {
-  const settings = (over: Partial<AnthropicSettings> = {}): AnthropicSettings => ({ ...defaultConfig().providers.anthropic, maxRetries: 0, ...over });
+  const ANTHROPIC_OPTION_KEYS = ['features', 'fallbacks', 'thinkingDisplay', 'cacheTtl', 'thinkingMismatch'];
+  /** An Anthropic profile; option keys (fallbacks, thinkingMismatch, …) go to profile.anthropic. */
+  const settings = (over: Record<string, unknown> = {}): ProviderProfile => {
+    const base = defaultProfile('anthropic');
+    const out = { ...base, maxRetries: 0, anthropic: { ...base.anthropic } } as ProviderProfile & Record<string, unknown>;
+    for (const [k, v] of Object.entries(over)) {
+      if (ANTHROPIC_OPTION_KEYS.includes(k)) (out.anthropic as unknown as Record<string, unknown>)[k] = v;
+      else out[k] = v;
+    }
+    return out;
+  };
   const req: ProviderRequest = {
     role: 'main',
     effort: 'high',

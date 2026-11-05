@@ -7,16 +7,22 @@ import {
   AnthropicProvider,
   ProviderError,
   classifyAnthropicError,
-  defaultConfig,
-  type AnthropicSettings,
+  defaultProfile,
+  type ProviderProfile,
   type ProviderRequest,
 } from '../src/index.js';
 
-const settings = (over: Partial<AnthropicSettings> = {}): AnthropicSettings => ({
-  ...defaultConfig().providers.anthropic,
-  maxRetries: 0,
-  ...over,
-});
+const ANTHROPIC_OPTION_KEYS = ['features', 'fallbacks', 'thinkingDisplay', 'cacheTtl', 'thinkingMismatch'];
+/** An Anthropic profile; option keys (fallbacks, thinkingMismatch, …) go to profile.anthropic. */
+const settings = (over: Record<string, unknown> = {}): ProviderProfile => {
+  const base = defaultProfile('anthropic');
+  const out = { ...base, maxRetries: 0, anthropic: { ...base.anthropic } } as ProviderProfile & Record<string, unknown>;
+  for (const [k, v] of Object.entries(over)) {
+    if (ANTHROPIC_OPTION_KEYS.includes(k)) (out.anthropic as unknown as Record<string, unknown>)[k] = v;
+    else out[k] = v;
+  }
+  return out;
+};
 
 const request: ProviderRequest = {
   role: 'main',
@@ -57,7 +63,7 @@ describe('AnthropicProvider.buildParams', () => {
 
   it('reports missing credentials instead of calling the API', async () => {
     const p = new AnthropicProvider(settings(), undefined);
-    expect(p.health()).toEqual({ ready: false, problem: 'secret ANTHROPIC_API_KEY is not set' });
+    expect(p.health()).toEqual({ ready: false, problem: 'secret PROVIDER_ANTHROPIC_API_KEY is not set' });
     await expect(p.generate(request, { signal: new AbortController().signal })).rejects.toMatchObject({ kind: 'config' });
   });
 });

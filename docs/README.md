@@ -58,7 +58,8 @@ docs/
 │   ├── ADR-0006-sqlite-single-store.md
 │   ├── ADR-0007-single-image-with-node-and-python.md
 │   ├── ADR-0008-append-only-history-and-handoff.md
-│   └── ADR-0009-single-uid-with-process-limits.md
+│   ├── ADR-0009-single-uid-with-process-limits.md
+│   └── ADR-0010-accounts-and-provider-profiles.md
 ├── 30-specs/                          精确规范（Schema、协议、配置、API）
 │   ├── 01-event-envelope-schema.md
 │   ├── 02-plugin-manifest.md

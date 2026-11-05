@@ -190,7 +190,7 @@ Claude 5 系列的 thinking 块绑定产生它的对话前缀（system、工具�
 
 - 每次模型请求前计算前缀指纹（system 文本 + 已加载工具的定义，按名排序；延迟加载的工具不计，追加它们不算编辑；再加上秘密集合的指纹）。指纹变了而转录里还有未截止的 thinking 块时，追加 `{"t":"mark","kind":"prefix","hash":…,"floor":<记录数>}`：此后序号小于 `floor` 的消息发送时去掉 thinking 块（去掉对话"开头一段"的块不影响之后的块；只剩 thinking 的消息整条不发）。加载转录时按最大的 `floor` 重放，所以重启后请求字节不变。
 - 交接复制尾部时同样去掉 thinking 块。
-- Anthropic 请求带 `thinking.block_binding.prefix_mismatch_behavior`（`providers.anthropic.thinkingMismatch`，默认 `drop_block`，beta `thinking-binding-controls-2026-08-01`）作为兜底：万一仍有不匹配，API 丢弃这些块而不是拒绝请求；响应里的 `input_transformations` 记在 `ProviderResponse` 上。
+- Anthropic 请求带 `thinking.block_binding.prefix_mismatch_behavior`（Claude 档案的 `anthropic.thinkingMismatch`，默认 `drop_block`，beta `thinking-binding-controls-2026-08-01`）作为兜底：万一仍有不匹配，API 丢弃这些块而不是拒绝请求；响应里的 `input_transformations` 记在 `ProviderResponse` 上。
 - Fork 使用同样的截止标记（Fork 不做交接）。
 - 可选优化：开启 Provider 的服务端压缩（Anthropic `compact` beta）作为交接之前的第一道；但交接仍是最终保障，且保证 Provider 无关（[ADR-0008](../20-decisions/ADR-0008-append-only-history-and-handoff.md)）。
 

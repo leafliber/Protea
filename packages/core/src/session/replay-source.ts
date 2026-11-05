@@ -166,6 +166,9 @@ export function offlineConfigYaml(prodConfig: string | null, opts: { echo: boole
   doc.setIn(['observability', 'recordProvider'], 'off');
   doc.setIn(['observability', 'logLevel'], 'silent');
   doc.setIn(['budget', 'enforce'], false);
-  if (opts.echo) doc.setIn(['providers', 'default'], 'echo');
+  if (opts.echo) {
+    doc.setIn(['providers', 'default'], 'echo');
+    doc.setIn(['providers', 'roles'], doc.createNode({}));
+  }
   return doc.toString();
 }

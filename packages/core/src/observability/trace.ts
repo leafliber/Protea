@@ -61,6 +61,7 @@ export class TracingProvider implements Provider {
       this.log.info(
         {
           ...base,
+          ...(r.provider ? { provider: r.provider } : {}),
           model: r.model,
           ...(r.model !== r.requestedModel ? { requested: r.requestedModel } : {}),
           ms: Date.now() - t0,

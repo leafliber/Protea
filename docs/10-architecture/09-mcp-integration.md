@@ -64,7 +64,7 @@ mcp:
 ## 5. 工具表与缓存
 
 - 服务器连接/断开、`notifications/tools/list_changed` 直接更新工具表；模型请求总是在回合边界组装，所以变化在下一回合生效。`list_changed` 合并 `mcp.listChangedDebounceMs`（默认 500 ms）后重读列表。
-- 工具总数超过 `context.toolSearch.threshold`（默认 40）时，MCP 工具标记 `defer_loading: true`，由 Provider 的工具搜索按需加载；每个服务器调用次数最多的 `keepPerServer`（默认 3）个工具保持非延迟（调用次数记在 `tool_stats` 表，排名只在该服务器的工具列表变化时重算）。详见 [12-model-providers.md](12-model-providers.md) §4。
+- 工具总数超过 `context.toolSearch.threshold`（默认 40）时，MCP 工具标记 `defer_loading: true`，由 Provider 的工具搜索按需加载；每个服务器调用次数最多的 `keepPerServer`（默认 3）个工具保持非延迟（调用次数记在 `tool_stats` 表，排名只在该服务器的工具列表变化时重算）。详见 [12-model-providers.md](12-model-providers.md) §5。
 - Core 不改写描述（P1），但允许操作员用 `descriptionOverrides` 为单个工具替换描述。描述过长的提示在控制台（M5）。
 
 ## 6. 权限与信任
