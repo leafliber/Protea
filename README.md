@@ -41,6 +41,8 @@ docker logs protea
 
 打开 http://127.0.0.1:7788/ ，用设置码创建管理员账号，然后在引导里选择模型供应商：Anthropic、OpenAI、DeepSeek、通义千问、Kimi、GLM、OpenRouter、本机 Ollama，或任何 OpenAI / Anthropic 兼容接口。填好接口地址、API Key 和模型，测试连接后保存，立即生效。以后在「模型」页增加、切换供应商，或者给后台任务、轻量任务单独指定。
 
+之后打开网页就是和助理的对话窗口：你的消息和它的回复都会保存，刷新、重启后还在；没得到回复时会说明原因，可以重新发送；需要你批准的操作直接在对话里批准。运行状态、模型、插件、记忆和配置在右上角的「控制台」里。
+
 不开浏览器也可以在容器里完成（密码与 Key 不回显）：
 
 ```bash
@@ -51,7 +53,7 @@ docker exec -it protea protea setup --user admin
 docker exec -it protea protea providers set deepseek --model deepseek-chat --key-stdin
 ```
 
-容器里的 CLI 直接可用，例如 `docker exec protea protea status`、`docker exec protea protea backup --archive`。出问题时导出诊断包（日志、事件元数据、用量与缓存命中率、实时状态；不含秘密与对话内容）：`docker exec protea protea diag`，再 `docker cp protea:/data/exports/<名字> .`，或在控制台"日志 → 导出诊断包"下载。需要真实条件的测试项见 [docs/40-plan/06-real-world-testing.md](docs/40-plan/06-real-world-testing.md)。带 Caddy 自动证书的 compose 示例、备份与恢复、升级与回滚见 [docs/10-architecture/16-deployment.md](docs/10-architecture/16-deployment.md)。
+命令行同样能对话（等它回答并打印出来）：`docker exec protea protea events push "你好"`。容器里的 CLI 直接可用，例如 `docker exec protea protea status`、`docker exec protea protea backup --archive`。出问题时导出诊断包（日志、事件元数据、用量与缓存命中率、实时状态；不含秘密与对话内容）：`docker exec protea protea diag`，再 `docker cp protea:/data/exports/<名字> .`，或在控制台"日志 → 导出诊断包"下载。需要真实条件的测试项见 [docs/40-plan/06-real-world-testing.md](docs/40-plan/06-real-world-testing.md)。带 Caddy 自动证书的 compose 示例、备份与恢复、升级与回滚见 [docs/10-architecture/16-deployment.md](docs/10-architecture/16-deployment.md)。
 
 ## 本地开发运行
 
@@ -99,7 +101,7 @@ PROTEA_DATA_DIR=.dev-data pnpm protea forks
 pnpm build
 ```
 
-然后打开 http://127.0.0.1:7788/ ，用初始化时创建的账号登录（忘了密码可以改用 API 令牌登录，令牌在 `.dev-data/secrets/PROTEA_ADMIN_TOKEN`）。改控制台代码时用 Vite 开发服务器，它把 API 转给正在运行的守护进程：
+然后打开 http://127.0.0.1:7788/ ，用初始化时创建的账号登录（忘了密码可以改用 API 令牌登录，令牌在 `.dev-data/secrets/PROTEA_ADMIN_TOKEN`）。登录后是对话窗口，右上角的「控制台」进入运维页面（地址 `#/console/…`）。改控制台代码时用 Vite 开发服务器，它把 API 转给正在运行的守护进程：
 
 ```bash
 pnpm web

@@ -202,4 +202,23 @@ CREATE TABLE auth_sessions (
 CREATE INDEX auth_sessions_account ON auth_sessions(account_id);
 `,
   },
+  {
+    version: 6,
+    name: 'outputs',
+    sql: `
+CREATE TABLE outputs (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  at          TEXT NOT NULL,
+  plugin      TEXT NOT NULL,
+  channel     TEXT,
+  text        TEXT NOT NULL,
+  session_id  TEXT,
+  batch_id    TEXT
+);
+CREATE INDEX ix_outputs_plugin_at ON outputs(plugin, at);
+CREATE INDEX ix_outputs_batch ON outputs(batch_id) WHERE batch_id IS NOT NULL;
+CREATE INDEX ix_events_source_received ON events(source, received_at);
+CREATE INDEX ix_events_batch ON events(batch_id) WHERE batch_id IS NOT NULL;
+`,
+  },
 ];

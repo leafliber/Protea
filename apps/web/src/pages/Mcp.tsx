@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import type { McpServerStatus, McpToolInfo } from '@protea/protocol';
 import { api, enc, post, useAction, useApi } from '../api';
-import { Badge, Button, Card, Empty, ErrorText, Field, StateBadge, oneLine } from '../components/ui';
+import { Badge, Button, PageActions, Card, Empty, ErrorText, Field, StateBadge, oneLine } from '../components/ui';
 import { useReloadOn } from '../live';
 import { useSession } from '../session';
 
@@ -121,10 +121,7 @@ export function Mcp() {
   const action = (id: string, a: string) => void act.run(() => post(`/api/mcp/servers/${enc(id)}/${a}`)).then(r.reload);
   return (
     <div className="page">
-      <div className="row">
-        <h1 className="grow">MCP 服务器</h1>
-        {canWrite && <Button onClick={() => setAdding((x) => !x)}>{adding ? '收起' : '添加服务器'}</Button>}
-      </div>
+      <PageActions>{canWrite && <Button kind="primary" onClick={() => setAdding((x) => !x)}>{adding ? '收起' : '添加服务器'}</Button>}</PageActions>
       {adding && (
         <Card title="添加 MCP 服务器">
           <AddServer

@@ -35,7 +35,7 @@
 
 ## 5. 安全测试
 
-渗透用例固化为测试：伪造 owner、越权等级、注入指令的外部内容触发副作用、秘密出现在各出口（请求体、日志、工具回执）。账号与初始化（`apps/daemon/test/setup-providers.e2e.test.ts`）：错误的设置码被拒、设置码不进日志文件、建好后作废；只读账号不能改供应商与账号；重设密码结束会话；最后一个管理员受保护；供应商密钥不出现在配置文件、API 响应与日志里。M6 的实现在 `apps/daemon/test/m6-security.test.ts`，同一文件还有默认策略审查与"哪些代码能读秘密值"的静态检查（[../10-architecture/14-security-and-permissions.md](../10-architecture/14-security-and-permissions.md) §9）。
+渗透用例固化为测试：伪造 owner、越权等级、注入指令的外部内容触发副作用、秘密出现在各出口（请求体、日志、工具回执）。账号与初始化（`apps/daemon/test/setup-providers.e2e.test.ts`）：错误的设置码被拒、设置码不进日志文件、建好后作废；只读账号不能改供应商与账号；重设密码结束会话；最后一个管理员受保护；供应商密钥不出现在配置文件、API 响应与日志里。控制台对话（`apps/daemon/test/chat.e2e.test.ts`）：没有供应商时消息下给出失败原因，配好后回复入库并对应到批，分页，重启后历史还在。M6 的实现在 `apps/daemon/test/m6-security.test.ts`，同一文件还有默认策略审查与"哪些代码能读秘密值"的静态检查（[../10-architecture/14-security-and-permissions.md](../10-architecture/14-security-and-permissions.md) §9）。
 
 ## 6. 覆盖率与门禁
 

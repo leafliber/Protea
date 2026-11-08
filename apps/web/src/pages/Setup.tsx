@@ -3,6 +3,7 @@ import type { ProvidersResponse, WhoAmIResponse } from '@protea/protocol';
 import { ApiError, api, useApi } from '../api';
 import { Button, Empty, ErrorText, Field } from '../components/ui';
 import { ProviderEditor } from './Providers';
+import { go, goChat } from '../session';
 
 function Steps({ step }: { step: number }) {
   const names = ['创建管理员账号', '配置模型供应商', '完成'];
@@ -87,9 +88,11 @@ export function Setup({ onDone }: { onDone: (me: WhoAmIResponse) => void }) {
   return (
     <div className="login">
       <div className="card login-card setup-card">
-        <h1>
-          <img src="./favicon.svg" alt="" width="28" height="28" /> Protea 初始化
-        </h1>
+        <div className="login-brand">
+          <img src="./favicon.svg" alt="" width="40" height="40" />
+          <h1>欢迎使用 Protea</h1>
+          <p className="muted">先完成两步初始化</p>
+        </div>
         <Steps step={step} />
         {step === 1 && (
           <AccountStep
@@ -112,10 +115,26 @@ export function Setup({ onDone }: { onDone: (me: WhoAmIResponse) => void }) {
             <p>
               管理员账号 <b>{me.username}</b> 已创建{skipped ? '。模型供应商还没配置，Protea 暂时不能回答消息。' : '，模型供应商已配置。'}
             </p>
-            <p className="muted small">CLI 和脚本仍用 API 令牌（容器里的 protea 命令会自动读取），网页用账号登录。</p>
-            <Button kind="primary" onClick={() => onDone(me)}>
-              进入控制台
-            </Button>
+            <p className="muted small">打开网页就是和助理的对话窗口；运行状态、模型、插件和配置在右上角的「控制台」里。CLI 和脚本仍用 API 令牌（容器里的 protea 命令会自动读取）。</p>
+            <div className="row">
+              <Button
+                kind="primary"
+                onClick={() => {
+                  goChat();
+                  onDone(me);
+                }}
+              >
+                开始对话
+              </Button>
+              <Button
+                onClick={() => {
+                  go('overview');
+                  onDone(me);
+                }}
+              >
+                打开控制台
+              </Button>
+            </div>
           </div>
         )}
       </div>

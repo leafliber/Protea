@@ -24,6 +24,7 @@ import {
   type McpManager,
   type MemoryIndex,
   type MemoryStore,
+  type OutputLog,
   type PluginHost,
   type PushResult,
   type SkillRegistry,
@@ -43,6 +44,8 @@ export interface ControlDeps extends Omit<OpsDeps, 'store' | 'audit'> {
   providers?: ProviderOps;
   bus: Bus;
   store: EventStore;
+  /** The console conversation (GET /api/chat). */
+  chat?: OutputLog;
   log: Logger;
   transcript: () => Transcript;
   forks?: ForkManager;
@@ -253,6 +256,19 @@ export function createControlApp(d: ControlDeps): Hono {
     });
     const last = events[events.length - 1];
     return c.json({ events, nextCursor: order === 'desc' && events.length === limit && last ? last.cursor : null });
+  });
+
+  // The console conversation: console messages and replies, newest page first, items oldest first.
+  app.get('/api/chat', (c) => {
+    if (!d.chat) return c.json({ items: [], batches: [], before: null });
+    const before = c.req.query('before');
+    const limit = intParam(c, 'limit');
+    return c.json(d.chat.chat({ ...(before ? { before } : {}), ...(limit !== undefined ? { limit } : {}) }));
+  });
+
+  app.get('/api/chat/batches', (c) => {
+    const ids = (c.req.query('ids') ?? '').split(',').map((s) => s.trim()).filter(Boolean).slice(0, 100);
+    return c.json({ batches: d.chat?.batches(ids) ?? [] });
   });
 
   app.get('/api/events/:cursor', (c) => {

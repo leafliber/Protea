@@ -664,6 +664,7 @@ export class MainSession {
           level: 4,
           trigger: 'store',
           text: `Model call failed for batch ${batch.id} (${kind}): ${errorMessage(err)}`,
+          meta: { batchId: batch.id, kind },
         });
         return 'error';
       } finally {

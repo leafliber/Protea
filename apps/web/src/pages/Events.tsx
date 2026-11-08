@@ -68,7 +68,7 @@ function EventDetail({ cursor, onClose }: { cursor: number; onClose: () => void 
               ['等级 / 触发', <span key="l"><LevelBadge level={e.effLevel} /> {e.effTrigger}{e.level !== e.effLevel ? <span className="muted">（声明 L{e.level}）</span> : null}</span>],
               ['状态', <StateBadge key="s" state={e.state} />],
               ['收到', dateTime(e.receivedAt)],
-              ['批', e.batchId ? <a key="b" href={`#/sessions?tab=batches&batch=${enc(e.batchId)}`}>{e.batchId}</a> : '—'],
+              ['批', e.batchId ? <a key="b" href={`#/console/sessions?tab=batches&batch=${enc(e.batchId)}`}>{e.batchId}</a> : '—'],
               ['投递记录', data?.delivery ? `${data.delivery.outcome} · ${dateTime(data.delivery.at)}` : '—'],
             ]}
           />

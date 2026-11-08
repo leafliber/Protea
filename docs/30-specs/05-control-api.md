@@ -59,6 +59,8 @@
 |---|---|---|
 | GET | `/api/events?level=&source=&state=&type=&since=&until=&cursor=&limit=&order=` | `{ events, nextCursor }`。默认新的在前；`cursor` 取比它旧的一页，`nextCursor` 为 null 表示没有更多。`level` 是最大等级，`state` 可逗号分隔，`limit` ≤ 1000 |
 | GET | `/api/events/:cursor` | `{ event, delivery }`（信封 + 投递记录） |
+| GET | `/api/chat?before=&limit=` | 对话窗口的历史：`ChatHistoryResponse` `{ items, batches, before }`。`items` 由旧到新，是 `console.message` 事件（`kind: owner`，带 `cursor`、`state`、`sender`）与 console 插件的输出（`kind: reply`，审批提示等其他频道为 `notice`）；`batches` 是这些条目所在批的结局（`endReason`、`sources`、`replied`，`model_error` 时带 `error`）。`before` 取更早的一页（为 null 表示没有更多），`limit` ≤ 200，默认 50 |
+| GET | `/api/chat/batches?ids=a,b` | `{ batches }`：这些批的结局（同上；至多 100 个，未知的省略）。控制台在 `batch.ended` 后用它刷新状态 |
 | POST | `/api/events` | 推送 `{ text, level?, trigger?, tags? }`（来源固定为 `console`，senderKey 为 `api:admin`、`console:<用户名>` 或 `console:admin`）→ 201 `PushEventResponse` |
 | POST | `/api/events/:cursor/promote` | `{ trigger }`（默认 `flush`，不接受 `store`）→ `{ event }`；只对 pending/archived 事件，否则 409 |
 | POST | `/api/events/:cursor/withdraw` | → `{ event }`（状态 `withdrawn`）；在途或已结束的事件 409 |
@@ -176,7 +178,7 @@
 
 ## 实时流
 
-**SSE（M0 起）** `GET /api/stream?since=<cursor>`。连接后先发 `hello {runId}`；带 `since` 时先按游标补发之后的事件，再转为实时。事件名：`event`（id 为游标）、`settled`、`phase`、`batch.started`、`batch.extended`（M1 起带 `level`）、`batch.ended`、`output`（插件输出，如 `con_send`）、`scheduler`（M1：`preempt` / `interrupt` / `aged` / `storm_cooldown` / `fork_yield` / `fork_resume`；M5：`paused` / `resumed` / `discarded`）、`fork`（M1：`ForkInfo` 变化）、`plugin`（M2：`PluginStatus` 变化）、`approval`（M2：`ApprovalInfo` 变化）、`mcp`（M3：`McpServerStatus` 变化）、`skills`（M3：目录变化，`{ names }`）、`handoff`（M4：`{ from, to, notes, dropped, kept }`）、`ping`（15 s 保活）。载荷形态见 `@protea/protocol` 的 `StreamMessage` 与 `SchedulerAction`。
+**SSE（M0 起）** `GET /api/stream?since=<cursor>`。连接后先发 `hello {runId}`；带 `since` 时先按游标补发之后的事件，再转为实时。事件名：`event`（id 为游标）、`settled`、`phase`、`batch.started`、`batch.extended`（M1 起带 `level`）、`batch.ended`、`output`（插件输出，如 `con_send`；2026-11-05 起带存储的 `id` 与发出它的 `batchId`，与 `/api/chat` 的条目对应）、`scheduler`（M1：`preempt` / `interrupt` / `aged` / `storm_cooldown` / `fork_yield` / `fork_resume`；M5：`paused` / `resumed` / `discarded`）、`fork`（M1：`ForkInfo` 变化）、`plugin`（M2：`PluginStatus` 变化）、`approval`（M2：`ApprovalInfo` 变化）、`mcp`（M3：`McpServerStatus` 变化）、`skills`（M3：目录变化，`{ names }`）、`handoff`（M4：`{ from, to, notes, dropped, kept }`）、`ping`（15 s 保活）。载荷形态见 `@protea/protocol` 的 `StreamMessage` 与 `SchedulerAction`。
 
 **WebSocket（M5）** `GET /ws`（升级）。鉴权同 HTTP：`Authorization: Bearer` 或会话 cookie；用 cookie 时 `Origin` 的主机必须等于 `Host`，否则 403；没有凭据 401。
 

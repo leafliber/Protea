@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react';
 import type { LogRecord, PluginStatus } from '@protea/protocol';
 import { api, enc, post, qs, useAction, useApi } from '../api';
 import { SchemaForm } from '../components/SchemaForm';
-import { Badge, Button, Card, Empty, ErrorText, KV, StateBadge, Tabs, oneLine } from '../components/ui';
+import { Badge, Button, PageActions, Card, Empty, ErrorText, KV, StateBadge, Tabs, oneLine } from '../components/ui';
 import { useReloadOn } from '../live';
 import { go, useSession } from '../session';
 import { LogLines } from './Logs';
@@ -145,10 +145,7 @@ export function Plugins({ params }: { params: URLSearchParams }) {
   const selected = params.get('id');
   return (
     <div className="page">
-      <div className="row">
-        <h1 className="grow">插件</h1>
-        {canWrite && <Button onClick={() => setShowInstall((x) => !x)}>{showInstall ? '收起' : '安装插件'}</Button>}
-      </div>
+      <PageActions>{canWrite && <Button kind="primary" onClick={() => setShowInstall((x) => !x)}>{showInstall ? '收起' : '安装插件'}</Button>}</PageActions>
       {showInstall && (
         <Card title="安装插件">
           <InstallForm

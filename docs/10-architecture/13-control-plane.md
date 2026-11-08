@@ -2,7 +2,7 @@
 
 > 状态：Accepted（M6）· 更新：2026-11-05 · 规范：[../30-specs/05-control-api.md](../30-specs/05-control-api.md)
 
-> **实现状态（M6）**：HTTP API 与鉴权在 `packages/control/src/`（`app.ts`、`ops.ts`、`auth.ts`），地址白名单在 `allow.ts`，WebSocket 在 `ws.ts`，SSE/WS 共用的总线投影在 `stream.ts`，控制台托管在 `static.ts`；Web 控制台是 `apps/web`；CLI 在 `apps/cli/src/`（`main.ts`、`ops.ts`，以及在数据目录上直接工作的 `admin.ts`：migrate、healthcheck、backup、restore、replay）。M6 新增预算放行、备份 API 与 `control.allowCidrs`。2026-11-05 新增账号、设置码与供应商档案：账号与会话存储在 `packages/core/src/auth/accounts.ts`，路由在 `auth.ts` 与 `providers.ts`，控制台的 `pages/Setup.tsx`、`pages/Providers.tsx`，CLI 的 `accounts.ts`（`setup`、`accounts`、`providers`）。未实现：`/mcp` 服务端（M7）。
+> **实现状态（M6）**：HTTP API 与鉴权在 `packages/control/src/`（`app.ts`、`ops.ts`、`auth.ts`），地址白名单在 `allow.ts`，WebSocket 在 `ws.ts`，SSE/WS 共用的总线投影在 `stream.ts`，控制台托管在 `static.ts`；Web 控制台是 `apps/web`；CLI 在 `apps/cli/src/`（`main.ts`、`ops.ts`，以及在数据目录上直接工作的 `admin.ts`：migrate、healthcheck、backup、restore、replay）。M6 新增预算放行、备份 API 与 `control.allowCidrs`。2026-11-05 新增账号、设置码与供应商档案：账号与会话存储在 `packages/core/src/auth/accounts.ts`，路由在 `auth.ts` 与 `providers.ts`，控制台的 `pages/Setup.tsx`、`pages/Providers.tsx`，CLI 的 `accounts.ts`（`setup`、`accounts`、`providers`）。同日新增对话（`pages/Chat.tsx`）：回复存进 `outputs` 表（`packages/core/src/events/outputs.ts`），历史由 `GET /api/chat` 提供。2026-11-06 起网页分成两部分：对话窗口（`#/`）是入口，控制台（`#/console/…`，外壳在 `apps/web/src/Console.tsx`）从对话窗口右上角进入。未实现：`/mcp` 服务端（M7）。
 
 ## 1. 组成
 
@@ -73,18 +73,32 @@ WebSocket 客户端发 `{ subscribe: [...], since?, logFilter? }`，每条订阅
 | `events` | `event`、`settled`、`promoted` |
 | `phase` | `phase`、`batch.started`、`batch.extended`、`batch.ended` |
 | `scheduler` | `scheduler`（抢占、打断、老化、风暴冷却、Fork 让渡/恢复、暂停/恢复、清空） |
-| `output` | `output`（插件输出，如 `con_send`） |
+| `output` | `output`（插件输出，如 `con_send`；带存储的 `id` 与 `batchId`） |
 | `changes` | `fork`、`plugin`、`approval`、`mcp`、`skills`、`handoff`、`persona` |
 | `usage` | `usage`（每次模型调用） |
 | `logs` | `log`（按 `logFilter` 过滤） |
 
 带 `since` 时先按游标补发之后的事件，期间到达的实时消息暂存，补发完再放出，保证不漏不重。30 s 一次 ping；未缓冲完的数据超过 8 MB 的客户端被断开。
 
-## 5. 控制台页面（v1 最小集）
+## 5. 网页：对话窗口与控制台
+
+网页分成两种体验，共用登录与实时连接：
+
+- **对话窗口**（`#/`，登录后的默认页）：只做一件事——和助理说话。
+  - 布局：顶部只有助理名称与状态（在线 / 正在思考 / 正在使用工具 / 未配置模型 / 连接中断）、"控制台"入口和账号菜单；中间是居中的对话；底部是输入框。
+  - 消息：回复按正文排版（带头像，渲染常见 Markdown：代码块、列表、粗体、链接，可一键复制）；你的消息是气泡。同一方几分钟内的连续消息合成一组，只显示一次时间。按天分隔。
+  - 状态：处理中显示"正在思考…"等提示；消息下只在值得说时标出状态（等待处理、没有回复及原因、被打断、已读没有回复），失败的可以"重新发送"，模型问题附"检查模型设置"。由定时提醒等其他事件引起的回复注明来源。
+  - 输入：Enter 发送、Shift+Enter 换行（手机上 Enter 换行，用按钮发送）；助理忙时可"打断并发送"（`interrupt`）；空对话给出几个示例。
+  - 审批：待批准的操作以卡片出现在输入框上方，直接批准或拒绝；时间线里留一行说明。
+  - 其他：向上滚动自动加载更早的消息；离开底部时有"回到最新"按钮并提示新消息；断线重连后补齐。只读账号只能看。
+  - 对话窗口只是 `console` 连接器的视图：发出的仍是普通的 `console` 事件（和事件流页、`protea events push` 一样经调度器、等级与抢占），回复仍是 `con_send` 工具调用的输出，所以"一切皆事件"不变。
+- **控制台**（`#/console/<页面>`，旧的 `#/<页面>` 链接仍然有效）：运维与配置。左侧分组导航（运行：总览、事件流、会话、审批；能力：模型、插件、MCP、Skills、记忆与人格；系统：配置、日志），顶端是"返回对话"；顶栏有面包屑、运行阶段、实时连接状态与账号菜单；每页有统一的标题、说明与操作按钮区。窄屏时导航收进抽屉。
+
+控制台页面（v1 最小集）：
 
 | 页面 | 内容 |
 |---|---|
-| 总览 | 阶段呼吸灯、待处理、上下文占用环、24 h 用量、按等级的预算、进行中的 Fork、最近的内部事件；暂停/恢复投递、手动交接 |
+| 总览 | 阶段、待处理、上下文占用环、24 h 用量、按等级的预算、进行中的 Fork、最近的内部事件；暂停/恢复投递、手动交接 |
 | 事件流 | 实时 + 历史（按等级着色、分页），调度动作与内部事件高亮；点开看信封与投递记录，提升或撤回；顶部输入框即 `console` 来源 |
 | 会话 | 主会话转录（思考摘要开关）、上下文环、手动交接；批与每轮用量；Fork 列表、转录、派生、暂停/恢复/取消 |
 | 模型 | 供应商档案卡片（协议、地址、模型、密钥状态、服务的角色、就绪）；添加/编辑（厂商预设、协议、地址、API Key、按角色的模型、获取模型列表、测试连接、高级设置）；设为默认；按角色选择供应商 |
@@ -96,7 +110,7 @@ WebSocket 客户端发 `{ subscribe: [...], since?, logFilter? }`，每条订阅
 | 配置 | 生效配置与来源层、按路径或补丁修改；账号（添加、角色、重设密码、删除）与自己的密码；秘密名称管理；权限；预算；调度 |
 | 日志 | 实时尾随（WS）、检索（本次或历次运行）、运行目录的关停记录与崩溃报告 |
 
-首次访问（还没有管理员账号）时显示初始化页：设置码 + 管理员账号 → 模型供应商 → 完成。控制台不做"聊天"界面；与助理对话走 `console` 连接器（事件流页面的输入框即是），保持"一切皆事件"。只读账号或只读令牌登录时，所有修改控件隐藏。界面为中文；多语言在 M7。
+首次访问（还没有管理员账号）时显示初始化页：设置码 + 管理员账号 → 模型供应商 → 完成，之后进入对话窗口（也可以直接打开控制台）。只读账号或只读令牌登录时，所有修改控件隐藏。界面为中文；多语言在 M7。
 
 ## 6. CLI
 

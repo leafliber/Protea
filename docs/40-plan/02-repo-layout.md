@@ -27,7 +27,7 @@ Protea/
 │   ├── plugin-sdk/              @protea/plugin-sdk：definePlugin / runPlugin，测试用 FakeHost（@protea/plugin-sdk/testing）
 │   ├── core/                    @protea/core：内核
 │   │   ├── src/
-│   │   │   ├── events/          校验（ajv）、门禁、主人映射、事件库、渲染
+│   │   │   ├── events/          校验（ajv）、门禁、主人映射、事件库、输出记录与对话历史、渲染
 │   │   │   ├── scheduler/       批窗口与投递、抢占矩阵（preemption.ts）、风暴防护、老化、预算统计与强制执行（budget.ts）
 │   │   │   ├── forks/           Fork 管理器（排队、让渡/恢复、检查点、重启恢复）与 fork_* 工具
 │   │   │   ├── session/         主会话循环、转录与修复（含 thinking 截止标记）、启动对账、容量交接（handoff.ts）、回放的数据读取（replay-source.ts）
@@ -62,7 +62,7 @@ Protea/
 ├── apps/
 │   ├── daemon/                  组装 Core + 控制平面 + 内置插件；单实例锁；离线回放（replay.ts）；端到端与安全检查清单测试
 │   ├── cli/                     `protea` 命令（serve 直接启动守护进程；dev-plugin 本地运行插件；logq、migrate、healthcheck、backup、restore、replay 直接用数据目录（admin.ts）；其余经 HTTP API / SSE / WebSocket）
-│   └── web/                     @protea/web：Web 控制台（Vite + React；pages/ 每页一个文件，components/ 通用组件与 JSON Schema 表单，live.ts 是唯一的 WebSocket 连接）
+│   └── web/                     @protea/web：网页（Vite + React；App.tsx 登录与路由，pages/Chat.tsx 是对话窗口（#/），Console.tsx 是控制台外壳（#/console/…），pages/ 其余每页一个文件，components/ 通用组件、图标与 JSON Schema 表单，live.ts 是唯一的 WebSocket 连接）
 ├── sdks/python/protea_plugin/   Python 插件 SDK（宿主放进 Python 插件的 PYTHONPATH）
 ├── examples/plugins/            py-notes（Python）、ts-notes（TypeScript）示例插件与一致性探针
 └── docker/

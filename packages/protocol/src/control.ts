@@ -1,5 +1,5 @@
 /** Control API request/response shapes (docs/30-specs/05-control-api.md). */
-import type { EventEnvelope, Level, TerminalOutcome, Trigger } from './events.js';
+import type { EventEnvelope, EventState, Level, TerminalOutcome, Trigger } from './events.js';
 import type { PluginState } from './plugin.js';
 import type { BatchEndReason, BatchReason, CancelKind, ForkState, ModelRole, RunPhase } from './session.js';
 
@@ -19,6 +19,47 @@ export interface PushEventResponse {
   effectiveTrigger: Trigger;
   deduped: boolean;
   warnings: string[];
+}
+
+/**
+ * One line of the console conversation (GET /api/chat): an operator message (a console event),
+ * an assistant reply (`con_send`) or another console notice (approval requests).
+ */
+export interface ChatItem {
+  /** `e<cursor>` for a message, `o<id>` for a reply or notice. */
+  key: string;
+  kind: 'owner' | 'reply' | 'notice';
+  at: string;
+  text: string;
+  /** owner: the event. */
+  cursor?: number;
+  state?: EventState;
+  /** owner: who sent it (`console:<user>`, `api:admin`). */
+  sender?: string;
+  /** reply / notice: the output channel (`console`, `approvals`). */
+  channel?: string;
+  batchId?: string;
+}
+
+/** How a batch that a chat item belongs to went. */
+export interface ChatBatch {
+  id: string;
+  endReason: BatchEndReason | null;
+  endedAt: string | null;
+  /** Sources of the events it delivered (`console`, `cron`, …). */
+  sources: string[];
+  /** It sent at least one console reply. */
+  replied: boolean;
+  /** model_error: what failed. */
+  error?: string;
+}
+
+export interface ChatHistoryResponse {
+  /** Oldest first. */
+  items: ChatItem[];
+  batches: ChatBatch[];
+  /** Pass as `before` for the page of older items; null when there are none. */
+  before: string | null;
 }
 
 export interface UsageTotals {
@@ -215,7 +256,7 @@ export type StreamMessage =
   | { topic: 'batch.started'; data: BatchStartedData }
   | { topic: 'batch.extended'; data: { batchId: string; cursors: number[]; level: Level } }
   | { topic: 'batch.ended'; data: { batchId: string; endReason: BatchEndReason; rounds: number } }
-  | { topic: 'output'; data: { plugin: string; channel?: string; text: string; at: string } }
+  | { topic: 'output'; data: { plugin: string; channel?: string; text: string; at: string; id?: number; batchId?: string } }
   | { topic: 'scheduler'; data: SchedulerAction }
   | { topic: 'fork'; data: ForkInfo }
   | { topic: 'mcp'; data: McpServerStatus }

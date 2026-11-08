@@ -29,7 +29,8 @@ export interface BusTopics {
   'batch.started': { batchId: string; level: Level; reason: BatchReason; cursors: number[] };
   'batch.extended': { batchId: string; cursors: number[]; level: Level };
   'batch.ended': { batchId: string; endReason: BatchEndReason; rounds: number };
-  'plugin.output': { plugin: string; channel?: string; text: string; at: string };
+  /** `id`: the stored row (outputs table); `batchId`: the batch whose tool call sent it. */
+  'plugin.output': { plugin: string; channel?: string; text: string; at: string; id?: number; batchId?: string };
   'usage.recorded': UsageRecord;
   /** A model request is about to be sent (the latency metric measures up to here). */
   'model.request': { batchId: string; sessionId: string; attempt: number };

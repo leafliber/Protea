@@ -53,10 +53,10 @@ export class ConsolePlugin implements InprocPlugin {
         properties: { text: { type: 'string', minLength: 1, maxLength: 20_000 } },
       },
       flags: { sideEffect: true, barrierAfter: true },
-      handler: (input) => {
+      handler: (input, call) => {
         const ctx = this.ctx;
         if (!ctx) return { text: 'console is not running', failed: true };
-        ctx.emitOutput({ channel: 'console', text: input.text });
+        ctx.emitOutput({ channel: 'console', text: input.text, batchId: call.batchId, sessionId: call.sessionId });
         return `sent to the console (${input.text.length} characters)`;
       },
     };

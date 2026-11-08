@@ -29,23 +29,43 @@ export function useStatus(): { status: StatusResponse | undefined; reload: () =>
   return { status, reload };
 }
 
-/** The page in the URL hash: #/events?cursor=12 → { page: 'events', params }. */
-export function useRoute(): { page: string; params: URLSearchParams } {
-  const parse = () => {
-    const h = location.hash.replace(/^#\/?/, '');
-    const [page, query] = h.split('?');
-    return { page: page || 'overview', params: new URLSearchParams(query ?? '') };
-  };
-  const [route, setRoute] = useState(parse);
+export type RouteMode = 'chat' | 'console';
+
+/**
+ * The URL hash: `#/` (or `#/chat`) is the conversation; `#/console/<page>?…` a console page.
+ * Older links without the prefix (`#/events?cursor=12`) still open the console page.
+ */
+export function parseRoute(hash: string): { mode: RouteMode; page: string; params: URLSearchParams } {
+  const h = hash.replace(/^#\/?/, '');
+  const [path = '', query] = h.split('?');
+  const params = new URLSearchParams(query ?? '');
+  if (path === '' || path === 'chat') return { mode: 'chat', page: 'chat', params };
+  const page = path === 'console' ? 'overview' : path.startsWith('console/') ? path.slice(8) || 'overview' : path;
+  return { mode: 'console', page, params };
+}
+
+export function useRoute(): { mode: RouteMode; page: string; params: URLSearchParams } {
+  const [route, setRoute] = useState(() => parseRoute(location.hash));
   useEffect(() => {
-    const on = () => setRoute(parse());
+    const on = () => setRoute(parseRoute(location.hash));
     window.addEventListener('hashchange', on);
     return () => window.removeEventListener('hashchange', on);
   }, []);
   return route;
 }
 
-export function go(page: string, params: Record<string, string> = {}): void {
+/** Link to a console page. */
+export function consoleHref(page: string, params: Record<string, string> = {}): string {
   const q = new URLSearchParams(params).toString();
-  location.hash = `#/${page}${q ? `?${q}` : ''}`;
+  return `#/console/${page}${q ? `?${q}` : ''}`;
+}
+
+/** Open a console page. */
+export function go(page: string, params: Record<string, string> = {}): void {
+  location.hash = consoleHref(page, params);
+}
+
+/** Back to the conversation. */
+export function goChat(): void {
+  location.hash = '#/';
 }

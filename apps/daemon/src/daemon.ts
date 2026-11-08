@@ -22,6 +22,7 @@ import {
   PluginHost,
   ProviderRecorder,
   KvRepo,
+  OutputLog,
   LogRing,
   MainSession,
   OutboundLimiter,
@@ -284,6 +285,13 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const batches = new BatchRepo(db);
   const usage = new UsageRepo(db);
   const kv = new KvRepo(db);
+  const outputs = new OutputLog(db);
+  try {
+    const recovered = outputs.backfillFromTranscripts(path.join(dataDir, 'sessions'));
+    if (recovered > 0) log.info({ recovered }, 'console replies recovered from the transcripts for the chat page');
+  } catch (err) {
+    log.warn({ err: errorMessage(err) }, 'could not recover earlier console replies');
+  }
 
   // Transcript and recovery.
   const discarded = (rec: Record<string, unknown>): void =>
@@ -350,6 +358,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const plugins = new PluginHost({
     store,
     bus,
+    outputs,
     admit: (ev) => budgetRef?.admit(ev) ?? null,
     owner,
     kv,
@@ -1047,6 +1056,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     onPersonaWrite: () => void reloadPersona(),
     bus,
     store,
+    chat: outputs,
     log: log.child({ component: 'control' }),
     transcript: () => main.currentTranscript,
     handoff: (reason) => main.requestHandoff(reason),

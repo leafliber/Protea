@@ -28,6 +28,7 @@ import type { SecretStore } from '../config/secrets.js';
 import { kvNamespace, type KvRepo } from '../db/repos.js';
 import { gateEvent, type GatedEvent, type SourceCaps } from '../events/gate.js';
 import type { OwnerRegistry } from '../events/owner.js';
+import type { OutputLog } from '../events/outputs.js';
 import type { EventStore } from '../events/store.js';
 import type { Logger } from '../observability/logger.js';
 import type { ApprovalService } from '../permissions/approvals.js';
@@ -98,6 +99,8 @@ export interface PluginHostOptions {
   onEnabledChanged?: (id: string, enabled: boolean) => void;
   /** A data-volume plugin was uninstalled: drop its configuration group. */
   onUninstalled?: (id: string) => void;
+  /** Keeps what plugins send to the operator (the console conversation). */
+  outputs?: OutputLog;
 }
 
 interface Entry {
@@ -1059,13 +1062,30 @@ export class PluginHost {
       kv: kvNamespace(this.o.kv, `plugin:${p.id}`),
       clock: this.o.clock,
       pushEvent: (input) => this.push(caps, input),
-      emitOutput: (out) =>
+      emitOutput: (out) => {
+        const at = new Date(this.o.clock.now()).toISOString();
+        let id: number | undefined;
+        try {
+          id = this.o.outputs?.record({
+            at,
+            plugin: p.id,
+            text: out.text,
+            ...(out.channel !== undefined ? { channel: out.channel } : {}),
+            ...(out.sessionId !== undefined ? { sessionId: out.sessionId } : {}),
+            ...(out.batchId !== undefined ? { batchId: out.batchId } : {}),
+          }).id;
+        } catch (err) {
+          log.warn({ err: errorMessage(err) }, 'could not store an output');
+        }
         this.o.bus.emit('plugin.output', {
           plugin: p.id,
           text: out.text,
-          at: new Date(this.o.clock.now()).toISOString(),
+          at,
           ...(out.channel !== undefined ? { channel: out.channel } : {}),
-        }),
+          ...(id !== undefined ? { id } : {}),
+          ...(out.batchId !== undefined ? { batchId: out.batchId } : {}),
+        });
+      },
       resolveSender: (senderKey) => this.o.owner.resolve(p.id, senderKey) ?? 'unknown',
     };
   }

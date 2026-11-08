@@ -21,6 +21,7 @@ export * from './events/validate.js';
 export * from './events/owner.js';
 export * from './events/gate.js';
 export * from './events/store.js';
+export * from './events/outputs.js';
 export * from './events/render.js';
 export * from './session/transcript.js';
 export * from './session/main-session.js';

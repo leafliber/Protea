@@ -5,6 +5,8 @@ import { Badge, Bar, Button, Card, Empty, ErrorText, KV, LevelBadge, Ring, State
 import { useReloadOn } from '../live';
 import { go, useSession } from '../session';
 
+const PHASE_NAME: Record<string, string> = { idle: '空闲', delivering: '送达中', model: '思考中', tools: '运行工具', backoff: '模型不可用，重试中', handoff: '交接中' };
+
 export function Overview({ status, reload }: { status: StatusResponse | undefined; reload: () => void }) {
   const { canWrite } = useSession();
   const internal = useApi<{ events: EventEnvelope[] }>(`/api/events${qs({ source: 'core', limit: 12 })}`);
@@ -30,19 +32,19 @@ export function Overview({ status, reload }: { status: StatusResponse | undefine
       )}
       {!status.provider.ready && (
         <div className="banner banner-bad span-all">
-          模型未就绪：{status.provider.problem} <a href="#/providers">去「模型」页配置</a>
+          模型未就绪：{status.provider.problem} <a href="#/console/providers">去「模型」页配置</a>
         </div>
       )}
       {(badPlugins.length > 0 || badMcp.length > 0) && (
         <div className="banner banner-warn span-all">
           {badPlugins.map((p) => (
             <span key={p.id}>
-              插件 <a href={`#/plugins?id=${p.id}`}>{p.id}</a> <StateBadge state={p.state} />{' '}
+              插件 <a href={`#/console/plugins?id=${p.id}`}>{p.id}</a> <StateBadge state={p.state} />{' '}
             </span>
           ))}
           {badMcp.map((m) => (
             <span key={m.id}>
-              MCP <a href="#/mcp">{m.id}</a> <StateBadge state={m.state} />{' '}
+              MCP <a href="#/console/mcp">{m.id}</a> <StateBadge state={m.state} />{' '}
             </span>
           ))}
         </div>
@@ -51,7 +53,7 @@ export function Overview({ status, reload }: { status: StatusResponse | undefine
       <Card title="运行">
         <KV
           rows={[
-            ['阶段', <span key="p">{status.phase}{status.batchId ? <span className="muted"> · {status.batchId}</span> : null}</span>],
+            ['阶段', <span key="p">{PHASE_NAME[status.phase] ?? status.phase}{status.batchId ? <span className="muted"> · {status.batchId}</span> : null}</span>],
             ['模型', <span key="m">{status.provider.id}/{status.provider.mainModel} {status.provider.ready ? <Badge tone="good">ready</Badge> : <Badge tone="bad">not ready</Badge>}</span>],
             ['运行时长', `${Math.floor(status.uptimeSec / 3600)} 小时 ${Math.floor((status.uptimeSec % 3600) / 60)} 分`],
             ['工具', `${status.tools.total}${status.tools.deferred ? `（${status.tools.deferred} 个按需加载）` : ''}`],
@@ -75,7 +77,7 @@ export function Overview({ status, reload }: { status: StatusResponse | undefine
         )}
       </Card>
 
-      <Card title="待处理" actions={<a href="#/events?state=pending">查看</a>}>
+      <Card title="待处理" actions={<a href="#/console/events?state=pending">查看</a>}>
         <div className="levels">
           {Object.entries(status.pending).map(([l, n]) => (
             <div key={l} className="level-cell">
@@ -89,7 +91,7 @@ export function Overview({ status, reload }: { status: StatusResponse | undefine
         )}
       </Card>
 
-      <Card title="上下文" actions={<a href="#/sessions">会话</a>}>
+      <Card title="上下文" actions={<a href="#/console/sessions">会话</a>}>
         <div className="row">
           <Ring
             value={status.context.estimatedTokens}
@@ -139,7 +141,7 @@ export function Overview({ status, reload }: { status: StatusResponse | undefine
         />
       </Card>
 
-      <Card title="预算（按等级）" actions={<a href="#/config?tab=budget">设置</a>}>
+      <Card title="预算（按等级）" actions={<a href="#/console/config?tab=budget">设置</a>}>
         {Object.entries(status.budget.levels).map(([l, b]) => (
           <div key={l} className="budget-row">
             <LevelBadge level={Number(l)} />
@@ -153,7 +155,7 @@ export function Overview({ status, reload }: { status: StatusResponse | undefine
         <div className="muted small">{status.budget.enforced ? `预算已强制执行${status.budget.hardCapReached ? '；已到全局硬上限，只处理 L0/L1' : ''}` : '预算只统计、不限制（budget.enforce: false）'}</div>
       </Card>
 
-      <Card title="Fork" actions={<a href="#/sessions?tab=forks">全部</a>}>
+      <Card title="Fork" actions={<a href="#/console/sessions?tab=forks">全部</a>}>
         {activeForks.length === 0 ? (
           <Empty>没有进行中的 Fork</Empty>
         ) : (
@@ -170,19 +172,19 @@ export function Overview({ status, reload }: { status: StatusResponse | undefine
       <Card title="插件与 MCP">
         <div className="chips">
           {status.plugins.map((p) => (
-            <a key={p.id} href={`#/plugins?id=${p.id}`} className="chip">
+            <a key={p.id} href={`#/console/plugins?id=${p.id}`} className="chip">
               {p.id} <StateBadge state={p.enabled ? p.state : 'disabled'} />
             </a>
           ))}
           {status.mcp.map((m) => (
-            <a key={m.id} href="#/mcp" className="chip">
+            <a key={m.id} href="#/console/mcp" className="chip">
               mcp:{m.id} <StateBadge state={m.enabled ? m.state : 'disabled'} />
             </a>
           ))}
         </div>
       </Card>
 
-      <Card title="最近的内部事件" className="span-2" actions={<a href="#/events?source=core">全部</a>}>
+      <Card title="最近的内部事件" className="span-2" actions={<a href="#/console/events?source=core">全部</a>}>
         {internal.data?.events.length ? (
           <ul className="list">
             {internal.data.events.map((e) => (

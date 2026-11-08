@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import type { ModelRole, ProbeProviderResponse, ProviderProfileInfo, ProviderProtocolName, ProvidersResponse } from '@protea/protocol';
 import { api, enc, post, useAction, useApi } from '../api';
-import { Badge, Button, Card, Drawer, Empty, ErrorText, Field, cx } from '../components/ui';
+import { Badge, Button, PageActions, Card, Drawer, Empty, ErrorText, Field, cx } from '../components/ui';
 import { useSession } from '../session';
 
 const ROLES: Array<[ModelRole, string, string]> = [
@@ -420,14 +420,13 @@ export function Providers() {
   };
   return (
     <div className="page">
-      <div className="row">
-        <h2 className="grow">模型供应商</h2>
+      <PageActions>
         {canWrite && (
           <Button kind="primary" onClick={() => setEditing('new')}>
             添加供应商
           </Button>
         )}
-      </div>
+      </PageActions>
       {!view.ready && <div className={cx('banner', 'banner-bad')}>模型未就绪：{view.problem}</div>}
       {sorted.length === 0 ? (
         <Empty>还没有供应商。添加一个后，Protea 才能回答消息。</Empty>

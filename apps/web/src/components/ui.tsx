@@ -1,4 +1,5 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 
 export function cx(...names: Array<string | false | null | undefined>): string {
   return names.filter(Boolean).join(' ');
@@ -264,4 +265,13 @@ export function Field({ label, children, hint }: { label: string; children: Reac
       {hint && <span className="field-hint">{hint}</span>}
     </label>
   );
+}
+
+/** Where a console page's header actions go (the shell renders the header). */
+export const PageActionsContext = createContext<HTMLElement | null>(null);
+
+/** Buttons for the page header, next to the title. */
+export function PageActions({ children }: { children: ReactNode }) {
+  const el = useContext(PageActionsContext);
+  return el ? createPortal(children, el) : null;
 }

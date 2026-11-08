@@ -26,7 +26,8 @@ export interface PluginContext {
   readonly kv: KvNamespace;
   readonly clock: Clock;
   pushEvent(input: EventInput): PushResult;
-  emitOutput(o: { channel?: string; text: string }): void;
+  /** To the operator (stream subscribers); stored when the host keeps an output log. Pass the tool call's batch so the console can tie a reply to the message it answers. */
+  emitOutput(o: { channel?: string; text: string; batchId?: string; sessionId?: string }): void;
   resolveSender(senderKey: string): SenderRole;
 }
 

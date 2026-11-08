@@ -149,7 +149,25 @@ CREATE INDEX auth_sessions_account ON auth_sessions(account_id);
 
 没有管理员账号时控制台进入初始化（[../10-architecture/13-control-plane.md](../10-architecture/13-control-plane.md) §2）。过期会话在创建新会话时顺带清理（至多每小时一次）。诊断包不导出这两张表；备份会带上它们（密码只有哈希）。
 
-### 1.6 后续迁移（计划）
+### 1.6 迁移 6：`outputs`（2026-11-05）
+
+```sql
+CREATE TABLE outputs (                                  -- 插件发给主人的输出（con_send 回复、审批提示）
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,                                     -- ISO（UTC），与 events.received_at 同格式，便于按时间合并
+  plugin TEXT NOT NULL, channel TEXT,                   -- console：channel 为 console（回复）或 approvals（审批提示）
+  text TEXT NOT NULL,
+  session_id TEXT, batch_id TEXT                        -- 发出它的工具调用所在的会话与批（插件没给时为 NULL）
+);
+CREATE INDEX ix_outputs_plugin_at ON outputs(plugin, at);
+CREATE INDEX ix_outputs_batch ON outputs(batch_id) WHERE batch_id IS NOT NULL;
+CREATE INDEX ix_events_source_received ON events(source, received_at);
+CREATE INDEX ix_events_batch ON events(batch_id) WHERE batch_id IS NOT NULL;
+```
+
+控制台「对话」页的历史（`GET /api/chat`）= `console.message` 事件 + `plugin = 'console'` 的输出，按 `(at, 种类, id)` 倒序分页。迁移之前发出的回复在第一次启动时从主会话转录（`sessions/main.*.jsonl`）里找回：迁移时间之前、结果不是错误的 `con_send` 调用，各补一行；完成后在 `kv`（`core` / `outputs.backfilled`）记下，只做一次。和 `events` 一样不自动清理。诊断包不导出这张表（里面是回复正文）；备份会带上。`model.error` 内部事件从此在 `meta` 里带 `batchId` 与 `kind`，对话页据此说明某条消息为什么没有回复。
+
+### 1.7 后续迁移（计划）
 
 | 表 | 用途 | 里程碑 |
 |---|---|---|

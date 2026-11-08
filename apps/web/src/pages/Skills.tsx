@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { SkillInfo } from '@protea/protocol';
 import { api, enc, post, useAction, useApi } from '../api';
-import { Badge, Button, Card, Empty, ErrorText, KV, StateBadge, oneLine, timeAgo } from '../components/ui';
+import { Badge, Button, PageActions, Card, Empty, ErrorText, KV, StateBadge, oneLine, timeAgo } from '../components/ui';
 import { useReloadOn } from '../live';
 import { useSession } from '../session';
 import { InstallForm } from './Plugins';
@@ -38,10 +38,7 @@ export function Skills() {
   const act = useAction();
   return (
     <div className="page">
-      <div className="row">
-        <h1 className="grow">Skills</h1>
-        {canWrite && <Button onClick={() => setInstalling((x) => !x)}>{installing ? '收起' : '安装 Skill'}</Button>}
-      </div>
+      <PageActions>{canWrite && <Button kind="primary" onClick={() => setInstalling((x) => !x)}>{installing ? '收起' : '安装 Skill'}</Button>}</PageActions>
       {installing && (
         <Card title="安装 Skill">
           <InstallForm
