@@ -25,7 +25,7 @@ import type { SecretStore } from '../config/secrets.js';
 import type { SystemSegment } from '../providers/types.js';
 import type { Logger } from '../observability/logger.js';
 import type { PolicyDecision } from '../permissions/policy.js';
-import type { PluginHostSettings } from '../plugins/host.js';
+import type { PluginHostSettings } from '../plugins/settings.js';
 import type { PromptSkill, PromptSource } from '../skills/registry.js';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { ToolDef, ToolOutcome, ToolSpec } from '../tools/types.js';

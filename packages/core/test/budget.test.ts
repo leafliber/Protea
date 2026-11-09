@@ -49,7 +49,7 @@ function setup(dailyUsd: number | null, extra: Partial<BudgetSettings> = {}, dir
     usage.record(rec);
     bus.emit('usage.recorded', rec);
   };
-  /** What the plugin host does: gate, admit, append. */
+  /** What the event gateway does: gate, admit, append. */
   const push = (b: BudgetTracker, level: Level, trigger: Trigger, origin: 'external' | 'internal' = 'external') => {
     const ev: GatedEvent = { ts: new Date(now).toISOString(), type: 't', source: 's', origin, level, trigger, text: 'x', effLevel: level, effTrigger: trigger };
     const d = b.admit(ev);

@@ -5,36 +5,13 @@ import { stripThinking } from '../context/prefix.js';
 import { MEMORY_ROOT, type MemoryStore } from '../memory/store.js';
 import type { Logger } from '../observability/logger.js';
 import type { HandoffPlan, PersonaHooks } from '../persona/persona.js';
-import type { Provider, ProviderRequest } from '../providers/types.js';
-import { estimateTokens } from '../skills/parse.js';
+import type { Provider } from '../providers/types.js';
 import { errorMessage } from '../util/errors.js';
 import type { Clock } from '../util/time.js';
 import { isoInZone } from '../util/time.js';
+import { estimateContentTokens, estimateTokens } from '../util/tokens.js';
+import type { HandoffSettings } from './settings.js';
 import { Transcript } from './transcript.js';
-
-export interface HandoffSettings {
-  /** At the start of a batch, hand off when the next request would exceed this many input tokens. */
-  softTokens: number;
-  /** Before any request, hand off above this; null = the model's context window − max output − a margin. */
-  hardTokens: number | null;
-  /** Share of softTokens carried into the new conversation verbatim (the most recent messages). */
-  keepRatio: number;
-  /** Output budget of the notes request. */
-  notesMaxTokens: number;
-  /** Largest rendered history sent to the notes model; older parts are cut first. */
-  notesInputTokens: number;
-  /** Entries kept in the "Recent handoffs" list of memory/INDEX.md. */
-  recentInIndex: number;
-}
-
-export const DEFAULT_HANDOFF: HandoffSettings = {
-  softTokens: 200_000,
-  hardTokens: null,
-  keepRatio: 1 / 3,
-  notesMaxTokens: 8_000,
-  notesInputTokens: 150_000,
-  recentInIndex: 5,
-};
 
 export interface ContextLimits {
   soft: number;
@@ -49,31 +26,6 @@ export function contextLimits(s: HandoffSettings, contextWindow: number | undefi
   const hard = s.hardTokens ?? Math.max(8_000, derived);
   const soft = Math.min(s.softTokens, hard);
   return { soft, hard, keep: Math.round(soft * s.keepRatio) };
-}
-
-/** Rough token count of content blocks (no tokenizer): text by script, media by a flat rate. */
-export function estimateContentTokens(blocks: readonly ContentBlock[]): number {
-  let n = 0;
-  for (const b of blocks) {
-    if (b.type === 'image' || b.type === 'document') n += 1_600;
-    else if (b.type === 'thinking' || b.type === 'redacted_thinking') n += estimateTokens(String(b['thinking'] ?? b['data'] ?? '')) + 50;
-    else if (b.type === 'text') n += estimateTokens(String(b['text'] ?? '')) + 4;
-    else if (b.type === 'tool_result') {
-      const c = b['content'];
-      n += 10 + (typeof c === 'string' ? estimateTokens(c) : Array.isArray(c) ? estimateContentTokens(c as ContentBlock[]) : 0);
-    } else n += estimateTokens(JSON.stringify(b)) + 4;
-  }
-  return n;
-}
-
-export function estimateMessagesTokens(messages: readonly TranscriptMessage[]): number {
-  return messages.reduce((n, m) => n + 4 + estimateContentTokens(m.content), 0);
-}
-
-export function estimateRequestTokens(req: ProviderRequest): number {
-  const sys = req.system.reduce((n, s) => n + estimateTokens(s.text) + 4, 0);
-  const tools = req.tools.filter((t) => !t.deferLoading).reduce((n, t) => n + estimateTokens(JSON.stringify(t)), 0);
-  return sys + tools + estimateMessagesTokens(req.messages);
 }
 
 /** A tail may start at a user message that answers no tool call (an events message). */

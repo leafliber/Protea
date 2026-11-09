@@ -20,7 +20,7 @@ SQLite（WAL 模式），单文件 `/data/protea.db`（[ADR-0006](../20-decision
 
 | 表 | 作用 | 写入者 |
 |---|---|---|
-| `events` | 事件信封主体（JSON 列 + 索引列：cursor、source、level、type、ts、state） | PluginHost |
+| `events` | 事件信封主体（JSON 列 + 索引列：cursor、source、level、type、ts、state） | EventGateway |
 | `event_blobs` | 附件元数据；二进制存 `/data/blobs/<sha256>` | PluginHost |
 | `deliveries` | 事件终结记录：`cursor → outcome, batchId, sessionId, at` | Scheduler / Session |
 | `batches` | 批：id、等级、触发原因、开始/结束、回合数、是否被取消 | Scheduler |

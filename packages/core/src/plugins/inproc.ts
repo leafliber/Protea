@@ -1,20 +1,11 @@
 import type { ApprovalRequestParams, EventInput, Level, SenderRole, TerminalOutcome, Trigger } from '@protea/protocol';
 import type { KvNamespace } from '../db/repos.js';
+import type { PushResult } from '../events/gateway.js';
 import type { Logger } from '../observability/logger.js';
 import type { ToolSpec } from '../tools/types.js';
 import type { Clock } from '../util/time.js';
 
 export type PluginKind = 'source' | 'connector' | 'tool';
-
-export interface PushResult {
-  ok: boolean;
-  cursor?: number;
-  effectiveLevel?: Level;
-  effectiveTrigger?: Trigger;
-  deduped?: boolean;
-  warnings: string[];
-  errors?: string[];
-}
 
 /** What Core offers an in-process plugin; mirrors the out-of-process protocol (docs/30-specs/03-plugin-protocol.md). */
 export interface PluginContext {

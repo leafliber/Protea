@@ -1,5 +1,6 @@
 import YAML from 'yaml';
 import type { Level } from '@protea/protocol';
+import { estimateTokens } from '../util/tokens.js';
 
 export const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const MAX_DESCRIPTION = 1024;
@@ -32,17 +33,6 @@ function toolList(v: unknown): string[] | null {
   if (typeof v === 'string') return v.split(/[\s,]+/).filter(Boolean);
   if (Array.isArray(v) && v.every((x) => typeof x === 'string')) return v.flatMap((x) => x.split(/[\s,]+/)).filter(Boolean);
   return null;
-}
-
-/** Rough token estimate: ~4 characters per token for ASCII, one per CJK character. */
-export function estimateTokens(text: string): number {
-  let ascii = 0;
-  let other = 0;
-  for (const ch of text) {
-    if (ch.charCodeAt(0) < 128) ascii++;
-    else other++;
-  }
-  return Math.ceil(ascii / 4) + other;
 }
 
 /**

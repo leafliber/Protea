@@ -1,6 +1,6 @@
 import { isTextBlock, isToolResultBlock, type ModelRole } from '@protea/protocol';
-import { estimateRequestTokens } from '../session/handoff.js';
-import { estimateTokens } from '../skills/parse.js';
+import { estimateTokens } from '../util/tokens.js';
+import { estimateRequestTokens } from './tokens.js';
 import { sleep } from '../util/abort.js';
 import { reply, toolCall } from './scripted.js';
 import type { Provider, ProviderHealth, ProviderRequest, ProviderResponse } from './types.js';

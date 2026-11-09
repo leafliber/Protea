@@ -1,7 +1,7 @@
-import { DEFAULT_TOOL_SEARCH } from '../context/tool-search.js';
+import { DEFAULT_TOOL_SEARCH } from '../context/settings.js';
 import { DEFAULT_MCP_SETTINGS } from '../mcp/settings.js';
-import { DEFAULT_PLUGIN_HOST_SETTINGS } from '../plugins/host.js';
-import { DEFAULT_HANDOFF } from '../session/handoff.js';
+import { DEFAULT_PLUGIN_HOST_SETTINGS } from '../plugins/settings.js';
+import { DEFAULT_HANDOFF } from '../session/settings.js';
 import { defaultTimeZone } from '../util/time.js';
 import type { ProteaConfig } from './types.js';
 

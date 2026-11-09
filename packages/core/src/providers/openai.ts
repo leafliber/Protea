@@ -1,8 +1,8 @@
 import crypto from 'node:crypto';
 import { isTextBlock, isToolResultBlock, isToolUseBlock, type ContentBlock, type Effort, type ModelRole } from '@protea/protocol';
 import type { ProviderProfile } from '../config/types.js';
-import { estimateRequestTokens } from '../session/handoff.js';
-import { estimateTokens } from '../skills/parse.js';
+import { estimateTokens } from '../util/tokens.js';
+import { estimateRequestTokens } from './tokens.js';
 import { estimateCost } from './pricing.js';
 import { joinUrl, parseArguments, request, resultText, sseMessages } from './http.js';
 import { PROTOCOL_DEFAULT_URL } from './profiles.js';

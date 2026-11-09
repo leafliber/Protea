@@ -9,6 +9,7 @@ import {
   ContextAssembler,
   EventStore,
   ForkManager,
+  EventGateway,
   PluginHost,
   KvRepo,
   MainSession,
@@ -36,6 +37,7 @@ import {
   type PreemptStormSettings,
   type Provider,
   type ScriptStep,
+  type InternalEventInput,
   type ToolSearchSettings,
   type ToolSpec,
 } from '../src/index.js';
@@ -96,10 +98,11 @@ export function makeHarness(opts: HarnessOptions = {}) {
     { plugin: 'test', senderKey: 'test:owner' },
   ]);
   const tools = new ToolRegistry();
-  const plugins = new PluginHost({ store, bus, owner, kv, tools, log, clock: systemClock, dataDir: dir, timezone: 'UTC' });
+  const gateway = new EventGateway({ store, owner, log, clock: systemClock });
+  const plugins = new PluginHost({ store, bus, gateway, owner, kv, tools, log, clock: systemClock, dataDir: dir, timezone: 'UTC' });
   const provider = opts.provider ?? new ScriptedProvider(opts.steps ?? [() => textReply('ok')]);
-  const pushInternal = (input: Parameters<PluginHost['pushInternal']>[0]): void => {
-    plugins.pushInternal(input);
+  const pushInternal = (input: InternalEventInput): void => {
+    gateway.pushInternal(input);
   };
   const defaults = defaultConfig();
   const dispatcher = new ToolDispatcher(tools, log);
@@ -197,7 +200,7 @@ export function makeHarness(opts: HarnessOptions = {}) {
 
   let seq = 0;
   const push = (input: Partial<EventInput> & { text: string }, source = 'test', maxLevel: Level = 1) =>
-    plugins.push(
+    gateway.push(
       { source, maxLevel },
       {
         type: 'test.message',

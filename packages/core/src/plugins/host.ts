@@ -6,7 +6,6 @@ import {
   RpcError,
   type ApprovalDecideParams,
   type ApprovalInfo,
-  type EventEnvelope,
   type EventInput,
   type EventState,
   type HttpRequestParams,
@@ -20,13 +19,13 @@ import {
   type SettledParams,
   type TerminalOutcome,
   type ToolDecl,
-  type Trigger,
 } from '@protea/protocol';
 import type { Bus } from '../bus.js';
 import type { PluginSettings } from '../config/types.js';
 import type { SecretStore } from '../config/secrets.js';
 import { kvNamespace, type KvRepo } from '../db/repos.js';
-import { gateEvent, type GatedEvent, type SourceCaps } from '../events/gate.js';
+import type { SourceCaps } from '../events/gate.js';
+import { CORE_SOURCE, type EventGateway } from '../events/gateway.js';
 import type { OwnerRegistry } from '../events/owner.js';
 import type { OutputLog } from '../events/outputs.js';
 import type { EventStore } from '../events/store.js';
@@ -37,45 +36,16 @@ import type { ToolDef, ToolSpec } from '../tools/types.js';
 import { sleep } from '../util/abort.js';
 import { errorMessage } from '../util/errors.js';
 import type { Clock } from '../util/time.js';
-import type { InprocPlugin, PluginContext, PushResult } from './inproc.js';
+import type { InprocPlugin, PluginContext } from './inproc.js';
 import { allowedTriggers, discoverPlugins, loadManifest, type LoadedManifest, type PluginOrigin } from './manifest.js';
 import { ProcessPlugin } from './process.js';
-import { DEFAULT_PROCESS_LIMITS, MemoryWatchdog, passthroughEnv, withLimits, type ProcessLimits } from '../util/child-process.js';
-
-export const CORE_SOURCE = 'core';
-
-export interface PluginHostSettings {
-  /** Delay before restart number n after a crash (the last value repeats). */
-  restartBackoffMs: number[];
-  /** Consecutive crashes before a plugin is marked failed. */
-  maxCrashes: number;
-  /** A run at least this long resets the consecutive-crash count. */
-  stableAfterMs: number;
-  /** How long a stopping plugin may finish running tool calls. */
-  drainTimeoutMs: number;
-  initializeTimeoutMs: number;
-  /** After `stop`, how long before SIGTERM. */
-  stopTimeoutMs: number;
-  /** Memory and file-descriptor limits of plugin and MCP processes; over the memory limit they restart. */
-  limits: ProcessLimits;
-  /** Outbound rate limit: tool calls per connector plugin per minute (null: unlimited). */
-  outboundPerMinute: number | null;
-}
-
-export const DEFAULT_PLUGIN_HOST_SETTINGS: PluginHostSettings = {
-  restartBackoffMs: [1000, 2000, 4000, 8000, 16000, 32000, 60000],
-  maxCrashes: 5,
-  stableAfterMs: 60_000,
-  drainTimeoutMs: 30_000,
-  initializeTimeoutMs: 20_000,
-  stopTimeoutMs: 5_000,
-  limits: { ...DEFAULT_PROCESS_LIMITS },
-  outboundPerMinute: 20,
-};
+import { DEFAULT_PLUGIN_HOST_SETTINGS, type PluginHostSettings } from './settings.js';
+import { MemoryWatchdog, passthroughEnv, withLimits } from '../util/child-process.js';
 
 export interface PluginHostOptions {
   store: EventStore;
   bus: Bus;
+  gateway: EventGateway;
   owner: OwnerRegistry;
   kv: KvRepo;
   tools: ToolRegistry;
@@ -91,8 +61,6 @@ export interface PluginHostOptions {
   roots?: Array<{ dir: string; origin: LoadedManifest['origin'] }>;
   /** Development mode: run sources (`runtime.dev`) and load TypeScript through this Node loader. */
   dev?: { loader: string };
-  /** Scheduling change for a new event after gating (budget enforcement); null keeps it. */
-  admit?: (ev: GatedEvent) => { trigger: Trigger; onStored(e: EventEnvelope): void } | null;
   /** Prepended to PYTHONPATH of Python plugins (the bundled `protea_plugin` SDK). */
   pythonPath?: string;
   /** Operator intent changed through the host (enable/disable/install): persist it. */
@@ -149,9 +117,9 @@ function shallowPatch(prev: Record<string, unknown>, next: Record<string, unknow
 
 /**
  * Runs every plugin — built-in in-process ones and out-of-process ones speaking the
- * stdio protocol — and is the single entry point for events into the store
- * (docs/10-architecture/07-plugin-system.md). Handles discovery, the lifecycle state
- * machine, supervision with backoff restarts, draining, and hot operations.
+ * stdio protocol (docs/10-architecture/07-plugin-system.md). Handles discovery, the
+ * lifecycle state machine, supervision with backoff restarts, draining, and hot operations.
+ * Plugin events go to the store through the EventGateway.
  */
 export class PluginHost {
   private readonly entries = new Map<string, Entry>();
@@ -753,7 +721,7 @@ export class PluginHost {
       e.error = `crashed ${e.crashes} times in a row; last: ${reason}`;
       this.o.log.error({ plugin: e.id, crashes: e.crashes, reason }, 'plugin failed: too many crashes');
       this.emit(e);
-      this.pushInternal({
+      this.o.gateway.pushInternal({
         type: 'plugin.failed',
         level: 2,
         trigger: 'flush',
@@ -767,7 +735,7 @@ export class PluginHost {
     e.state = 'crashed';
     this.o.log.warn({ plugin: e.id, reason, crashes: e.crashes, restartInMs: delay }, 'plugin crashed; restarting');
     this.emit(e);
-    this.pushInternal({
+    this.o.gateway.pushInternal({
       type: 'plugin.crashed',
       level: 4,
       trigger: 'store',
@@ -888,7 +856,7 @@ export class PluginHost {
     };
     return {
       [PLUGIN_TO_HOST.eventsPush]: (params) => {
-        const r = this.push(caps(), params as EventInput);
+        const r = this.o.gateway.push(caps(), params as EventInput);
         if (!r.ok) throw new RpcError(RPC_ERRORS.InvalidParams, (r.errors ?? []).join('; '));
         return { cursor: r.cursor, effectiveLevel: r.effectiveLevel, effectiveTrigger: r.effectiveTrigger, deduped: r.deduped, warnings: r.warnings };
       },
@@ -1005,50 +973,6 @@ export class PluginHost {
     return undefined;
   }
 
-  // —— The event gateway ——
-
-  /** Gate and store an event on behalf of a source. */
-  push(caps: SourceCaps, input: EventInput): PushResult {
-    const gated = gateEvent(input, caps, this.o.owner);
-    if (!gated.ok) {
-      this.o.log.warn({ source: caps.source, errors: gated.errors }, 'event rejected');
-      return { ok: false, warnings: [], errors: gated.errors };
-    }
-    // Budget enforcement changes the delivery mode of new events (not a downgrade notice per event).
-    const admission = this.o.admit?.(gated.event) ?? null;
-    if (admission) gated.event.effTrigger = admission.trigger;
-    const { envelope, deduped } = this.o.store.append(gated.event);
-    if (admission && !deduped) admission.onStored(envelope);
-    if (gated.warnings.length > 0 && !deduped) {
-      this.o.log.warn({ source: caps.source, cursor: envelope.cursor, warnings: gated.warnings }, 'event downgraded');
-      if (caps.source !== CORE_SOURCE) {
-        this.pushInternal({
-          type: 'core.event_downgraded',
-          level: 4,
-          trigger: 'piggyback',
-          text: `Event #${envelope.cursor} from ${caps.source} was adjusted: ${gated.warnings.join('; ')}.`,
-          correlation: String(envelope.cursor),
-        });
-      }
-    }
-    return {
-      ok: true,
-      cursor: envelope.cursor,
-      effectiveLevel: envelope.effLevel,
-      effectiveTrigger: envelope.effTrigger,
-      deduped,
-      warnings: gated.warnings,
-    };
-  }
-
-  /** Core's own events: origin internal, may use level 0. */
-  pushInternal(input: Omit<EventInput, 'ts' | 'origin'> & { ts?: string }): PushResult {
-    return this.push(
-      { source: CORE_SOURCE, maxLevel: 0, mayEmitInternal: true },
-      { ...input, ts: input.ts ?? new Date(this.o.clock.now()).toISOString(), origin: 'internal' },
-    );
-  }
-
   private contextFor(e: Entry): PluginContext {
     const p = e.inproc as InprocPlugin;
     const caps = this.capsFor(e);
@@ -1061,7 +985,7 @@ export class PluginHost {
       log,
       kv: kvNamespace(this.o.kv, `plugin:${p.id}`),
       clock: this.o.clock,
-      pushEvent: (input) => this.push(caps, input),
+      pushEvent: (input) => this.o.gateway.push(caps, input),
       emitOutput: (out) => {
         const at = new Date(this.o.clock.now()).toISOString();
         let id: number | undefined;
