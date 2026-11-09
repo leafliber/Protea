@@ -1,8 +1,10 @@
 # 路线图
 
-> 状态：Draft · 更新：2026-11-05
+> 状态：Draft · 更新：2026-11-08
 
 每个里程碑有**可演示的验收标准**；没有通过验收不进入下一个。估时按一人全职、不含控制台美化。
+
+下图是 2026-11-03 定稿时的排期（2026-11-10 起、按周估），只保留作范围划分的参考：M0–M6 实际在 2026-11-03 至 11-06 间实现并逐个通过了离线验收，需要真实条件的验收项改在实际使用中复核（[06-real-world-testing.md](06-real-world-testing.md)）。
 
 ## 总览
 
@@ -87,7 +89,7 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 - 抢占风暴只计**实际执行**的取消；冷却同时作用于 `preempt` 与 `interrupt`；Core 自身事件不受限制。
 - `phase=backoff` 视同"模型调用、无外部输出"，可被 `preempt`。
 - 预算只统计：不改变调度，`budget.enforce` 留到 M6（已在 M6 实现）。
-- Fork 的 `seed`、`stopWhen.maxTokens|deadline`、`wrapUpHint`、经 API 派生与暂停/恢复尚未实现；已结束 Fork 的转录暂不清理（`scheduler.retention` 留到 M5）。
+- Fork 的 `seed`、`stopWhen.maxTokens|deadline`、`wrapUpHint` 尚未实现（经 API 派生与暂停/恢复在 M5 实现）；已结束 Fork 的转录暂不清理（`scheduler.retention` 推迟到 M7a）。
 - Fork 端点放在 `/api/sessions/forks` 下（与控制 API 规范一致）。
 
 ## M2 · 插件系统与热插拔（3 周）· 状态：已实现（2026-11-03）
@@ -141,7 +143,7 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 - 工具表变化没有单独的"待应用队列"：每次模型请求都在回合边界组装，变化自然在下一回合生效；`list_changed` 合并 500 ms。
 - 只有 MCP 工具会被延迟加载（插件工具总是加载）；"常用前 k 个"按新表 `tool_stats` 的调用次数计算，只在该服务器的工具列表变化时重算，避免前缀抖动。历史里出现过工具搜索结果后，工具搜索保持开启，已消失的被引用工具以"不可用"的延迟占位定义保留，避免请求被拒。
 - 工具描述覆盖为 `descriptionOverrides`（按服务器的原工具名）；描述过长的提示留到控制台（M5）。
-- Skills 增加 `skill_read`（读取 Skill 目录内的文件，限制在目录内）；`shell` 工具尚未实现，Skill 的脚本暂时无法执行。重复加载的回执改为"已在本会话加载（工具调用 id）"。Protea 扩展 `metadata.requires-tools`：所需工具不存在时不进目录。
+- Skills 增加 `skill_read`（读取 Skill 目录内的文件，限制在目录内）；`shell` 工具（`sh_run`）在 M6 实现，默认不启用；启用前 Skill 的脚本无法执行。重复加载的回执改为"已在本会话加载（工具调用 id）"。Protea 扩展 `metadata.requires-tools`：所需工具不存在时不进目录。
 - Skills 只能从本地目录安装；Git URL 留到 M5。例程把 Skill 作为 Fork 目标、描述相似度诊断未实现。
 - `rss` 默认 L4 `piggyback`（可配 L3 `debounce`），首次读取只报最新 3 条；`imap` 默认 L2 `flush`，邮件列表与自动邮件（`List-*`、`Precedence: bulk`、`Auto-Submitted`）降为 L4，首次连接只记录邮箱当前位置。
 
@@ -207,7 +209,7 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 - 新增（原设计没有）：Fork 的运营暂停/恢复（`pauseReason: operator`，重启后保留）；调度暂停持久化（重启后仍暂停）；清空 pending 只允许 L2–L4；审计 `control_write`；`/api/audit`、`/api/runs`、`/api/persona/*`、`/api/auth/*`；预算设置改为热更新。
 - 从 Git / tarball 安装时不做构建：来源里必须有可直接运行的入口（与 M2 的目录安装一致）；`.git` 不复制；指向来源之外的符号链接直接拒绝。
 
-## M6 · 单镜像与加固（2 周）· 状态：已实现（2026-11-04），长时间运行留给实际使用，CI 首次运行待复核
+## M6 · 单镜像与加固（2 周）· 状态：已实现（2026-11-04），长时间运行留给实际使用；CI 首次运行已通过（T5，30b8e17）
 
 **目标**：`docker run` 即用，连续运行 30 天。
 
@@ -303,18 +305,45 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 - 控制台：分组侧栏与图标、面包屑顶栏、统一页头（标题、说明、操作按钮）、账号菜单；一套新的设计变量（颜色、圆角、阴影、焦点环），卡片、按钮、输入框、表格、标签页统一调整；窄屏时侧栏收进抽屉。
 - 修正：回复极快时，发送请求的响应晚于实时推送，消息会被临时副本覆盖（顺序颠倒、停在"等待处理"）。
 
-**v1.0 发布点**。
+### CI 修复与文档同步（2026-11-08）
 
-## M7 · 扩展与生态（4 周，v1.x）
+84abdce 推送后 CI 在两个分支上都失败（run 42484226250 / 42484226396），上一次全绿是 30b8e17（T5）。两处原因都不是功能回归：
+- `apps/daemon/test/crash.e2e.test.ts` 还在用旧写法 `PROTEA_PROVIDERS__ECHO__DELAY_MS` 设置 echo 的回复延迟。2026-11-05 改为供应商档案后，环境变量里的旧写法只记一条警告、不再生效，echo 立即回复，"回合中途 kill -9"变成与回复赛跑：本机能赢，CI 上输。改为 `PROTEA_PROVIDERS__PROFILES__ECHO__ECHO__DELAY_MS`，并在 kill 之后断言回复确实还没写进转录，这类静默失效以后会在该处直接失败。
+- Trivy 报 zlib1g 两个 HIGH（CVE-2026-76844、CVE-2026-85091），Debian 已发布修复，但 `Dockerfile` 只 `apt-get install`、从不 `apt-get upgrade`，基础镜像发布后的安全更新不会进镜像。slim 与 full 两个阶段现在都先 `apt-get upgrade`。
+- 文档：M6 标题、M1/M3 差异段里过期的"留到 M5"与"shell 尚未实现"、排期图的说明、`docs/README.md` 状态行、M0–M4 对应架构文档的状态（Draft → Accepted）；M7 按收尾（M7a）与生态（M7b）拆开并补验收标准草案。
+- 实际测试的观察（本机试用容器，镜像 `0.1.0-e8a60fe-dirty`）：T10 的步骤 1–4 部分成立——账号建好、DeepSeek（`openai-responses`）档案就绪并服务三个角色、对话窗口有回复、24 h 内 2 次调用缓存命中 95%；设置码被拒/作废、登录限流、按角色分配与换回 Claude 未复核。另有一个 Streamable HTTP 的 MCP 服务器因 `auth: none` 而 401 进入 `failed`：服务器端要 bearer 令牌，属配置问题，监督与状态显示符合设计。
 
-- Claude Agent SDK Fork 执行器插件。
-- Protea 作为 MCP 服务器。
+**v1.0 发布点**：功能到此为止；打 `v1.0.0` 标签、把 `package.json` 从 0.1.0 升上去、发布镜像，与 M6 推迟的加固项一起放在 M7a。
+
+## M7 · 扩展与生态（v1.x）· 状态：未开始
+
+拆成两段：M7a 收掉 M6 推迟的加固项并发布 v1.0；M7b 是生态扩展，每项独立，可无限期推迟（风险 R9）。验收标准是草案，开工前由主人确认。
+
+### M7a · 收尾与 v1.0 发布（估 2 周）
+
+- [ ] `scheduler.retention`：事件（按状态与等级）、已结束 Fork 的转录、运行目录的保留期；到期清理在空闲时分批做，`protea_db_size_bytes` 随之回落。
+- [ ] 软告警（[15-observability.md](../10-architecture/15-observability.md) §6）：缓存命中率连续低、插件反复重启、预算 90%、拒答连续发生、pending 老化超过两倍 `maxWait`、SQLite 超阈值；控制台横幅 + 可选的 L2 `internal` 事件。
+- [ ] `permissions.conditions`（按批等级、参数、时间窗）与外发白名单 `permissions.egress`。
+- [ ] 镜像发布到镜像仓库（GHCR）并签名（cosign 或来源证明）；CI 在 tag 上发布；README 的"镜像还没有发布"改掉。
+- [ ] 打 `v1.0.0`：`package.json` 版本、镜像标签、变更记录。
+
+**验收**（草案）：
+- [ ] 保留期设为 1 天、灌入 2 天事件后，到期事件与转录被清理、数据库体积回落，`events_query` 仍能查到保留期内的事件。
+- [ ] 人为制造上述六种告警条件各一次：横幅与（开启时）L2 事件出现，恢复后消失。
+- [ ] 带条件的策略：同一工具在 L1 批 `allow`、在 L3 批 `ask`；超出 `egress` 白名单的外发被拒并记审计。
+- [ ] 发布的镜像能 `docker pull`、签名校验通过；容器冒烟测试对发布的镜像跑一遍。
+- [ ] 实际测试 T1–T4、T6–T9 至少各有一次记录（通过或说明），结论写回对应里程碑。
+
+### M7b · 生态（v1.1+，每项独立）
+
+- Protea 作为 MCP 服务器（对外暴露事件推送、记忆检索与状态查询）。
+- Claude Agent SDK Fork 执行器插件（[ADR-0003](../20-decisions/ADR-0003-own-agent-loop-over-agent-sdk.md) 的可选路径）。
+- 控制台多语言（先英文）与打磨。
+- 一个新连接器（Slack、Discord 或 CalDAV 之一），沿用 `telegram` 的审批与主人映射。
+- 向量记忆（sqlite-vec）；插件 CPU 上限；OpenTelemetry；Cortico World 适配器（探索）。
 - ~~`openai-compat` Provider 插件~~：已内置为 `openai-chat` 与 `openai-responses` 协议（2026-11-05）。
-- 向量记忆（sqlite-vec）。
-- 更多连接器（Slack、Discord、CalDAV）。
-- Cortico World 适配器（探索）。
-- 控制台打磨与多语言。
-- 从 M6 推迟：镜像发布到镜像仓库与签名；`scheduler.retention`（事件与已结束 Fork 的保留期）；`permissions.conditions` 与外发白名单 `permissions.egress`；插件 CPU 上限；OpenTelemetry；软告警（[15-observability.md](../10-architecture/15-observability.md) §6）；真实 Prometheus 抓取。长时间运行（30 天成功标准）不再单独压测，在实际使用中观察。
+
+**验收**（草案）：每项有自己的端到端测试与文档；新连接器要过与 T6 同等的真实账号测试。长时间运行（30 天成功标准）不再单独压测，在实际使用中观察（T8）。
 
 ## 跨里程碑的持续工作
 

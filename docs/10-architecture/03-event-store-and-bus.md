@@ -1,6 +1,6 @@
 # 事件存储与总线
 
-> 状态：Draft · 更新：2026-11-03 · 规范：[../30-specs/06-storage-schema.md](../30-specs/06-storage-schema.md)
+> 状态：Accepted（M0–M6）· 更新：2026-11-08 · 规范：[../30-specs/06-storage-schema.md](../30-specs/06-storage-schema.md)
 
 ## 1. 职责
 

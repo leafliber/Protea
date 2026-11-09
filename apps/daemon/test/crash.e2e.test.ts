@@ -29,7 +29,8 @@ function serve(dataDir: string, port: number, echoDelayMs: number): ChildProcess
       ...process.env,
       PROTEA_DATA_DIR: dataDir,
       PROTEA_PROVIDERS__DEFAULT: 'echo',
-      PROTEA_PROVIDERS__ECHO__DELAY_MS: String(echoDelayMs),
+      PROTEA_PROVIDERS__PROFILES__ECHO__PROTOCOL: 'echo',
+      PROTEA_PROVIDERS__PROFILES__ECHO__ECHO__DELAY_MS: String(echoDelayMs),
       PROTEA_CONTROL__LISTEN: `127.0.0.1:${port}`,
       PROTEA_OBSERVABILITY__LOG_FORMAT: 'json',
     },
@@ -73,6 +74,10 @@ describe('crash recovery (real process, SIGKILL)', () => {
     const done = exited(first);
     first.kill('SIGKILL'); // mid model call: the event is in the transcript, the reply is not
     await done;
+    // Without this the test only looks like it passes when the echo delay stops applying (the
+    // reply lands before the kill, the restart has nothing to resume) — as happened in CI when
+    // the provider config moved to profiles and the old environment variable became a no-op.
+    expect(fs.readFileSync(transcript, 'utf8')).not.toContain('echo: survive the crash');
     expect(fs.existsSync(path.join(dataDir, 'protea.lock'))).toBe(true); // stale lock left behind
 
     const second = serve(dataDir, port, 0);

@@ -66,6 +66,9 @@ LABEL org.opencontainers.image.title="protea" \
 ARG NPM_VERSION=12.2.1
 ARG UNDICI_VERSION=6.29.1
 RUN apt-get update \
+ # Debian security updates published after the base image was built: CI's Trivy scan blocks on
+ # fixable HIGH/CRITICAL findings (zlib1g, 2026-11), and the base image lags the archive.
+ && apt-get upgrade -y --no-install-recommends \
  && apt-get install -y --no-install-recommends tini ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  # npx stays (MCP servers); the npm bundled with the base image carries vulnerable dependencies,
@@ -104,6 +107,7 @@ CMD ["serve"]
 # —— full (default): + Python, uv/uvx, git, ripgrep, jq, curl ——
 FROM slim AS full
 RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
  && apt-get install -y --no-install-recommends python3 git ripgrep jq curl openssh-client \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=uv /uv /uvx /usr/local/bin/

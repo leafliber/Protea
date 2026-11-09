@@ -22,8 +22,8 @@ docker build -t protea:slim --target slim .    # slim
 
 1. `builder`（`node:22-trixie-slim` + 编译工具）：`pnpm fetch`（只依赖锁文件，代码变化时复用这一层）→ `pnpm install --offline` → `pnpm build`（含插件打包与控制台）→ `pnpm --filter @protea/cli deploy --prod` 得到只含生产依赖的 `/app`；删掉 TypeScript 源文件、source map、其他平台的原生二进制与 better-sqlite3 的 SQLite 源码。
 2. `assets`：内置的进程外插件（每个插件只保留清单、`dist/`、`config.schema.json`、`ENV_PROMPT.md`、`skills/`）、默认人格、内置 Skills、Python 插件 SDK、控制台构建产物，放在 `/app/assets`（`PROTEA_ASSETS_DIR`）。
-3. `slim`：`node:22-trixie-slim` + tini；npm 升级到较新的版本（基础镜像自带的 npm 依赖里有已知漏洞），删除不用的 corepack 与 yarn。
-4. `full`：在 `slim` 上加 apt 包与 uv 的官方镜像里的 `uv`、`uvx`。
+3. `slim`：`node:22-trixie-slim` + tini；先 `apt-get upgrade` 带入基础镜像发布后的 Debian 安全更新（CI 的 Trivy 只放过没有修复的漏洞，2026-11-08 的 zlib1g 就是有修复而镜像没带），npm 升级到较新的版本（基础镜像自带的 npm 依赖里有已知漏洞），删除不用的 corepack 与 yarn。
+4. `full`：在 `slim` 上加 apt 包（同样先 `apt-get upgrade`）与 uv 的官方镜像里的 `uv`、`uvx`。
 
 测得的体积比原目标（full ≤ 450 MB、slim ≤ 200 MB）大：Node 22 的 Debian 基础镜像本身就有约 270 MB，Python 与 git（连带 perl）约 160 MB，uv 约 45 MB，应用本身约 47 MB。体积按镜像各层未压缩大小相加（`docker history`）；Docker Desktop 的 containerd 存储在 `docker images` 里显示的数字更大，因为它同时算了压缩的层与解开的快照。原目标按压缩后的下载量看是满足的。
 

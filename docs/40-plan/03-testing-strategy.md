@@ -1,6 +1,6 @@
 # 测试策略
 
-> 状态：Draft（M6 起与实现对齐的部分见各节注）· 更新：2026-11-04
+> 状态：Draft（M6 起与实现对齐的部分见各节注）· 更新：2026-11-08
 
 ## 1. 金字塔
 
@@ -41,3 +41,5 @@
 
 - `packages/core` 行覆盖 ≥ 85%，分支 ≥ 75%；调度器与转录修复 100% 分支。
 - CI 阻断：lint、typecheck、单元/组件/协议测试、Docker 构建、镜像扫描高危。M6 的 `.github/workflows/ci.yml` 已有 typecheck、构建、全部测试、`pnpm audit --prod --audit-level high`、两种镜像的构建与容器冒烟测试、Trivy（HIGH/CRITICAL、有修复的）；lint 与覆盖率门槛尚未加入。
+- 镜像扫描会因基础镜像的新漏洞而与代码无关地变红（2026-11-08 的 zlib1g）：`Dockerfile` 在 slim 与 full 两个阶段都先 `apt-get upgrade`；Debian 没有修复的由 `ignore-unfixed` 放过，有修复但镜像里还没有的，重建镜像即可。
+- 守护进程配置写法变更后，测试里的环境变量不会报错而是被忽略并记一条警告（2026-11-08 的 crash 测试）：改配置键时全文搜索 `PROTEA_` 变量；时序类测试要断言前置条件（例如"kill 时回复尚未写入"）而不是只看结果。

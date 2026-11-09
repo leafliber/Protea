@@ -1,6 +1,6 @@
 # 事件模型
 
-> 状态：Draft · 更新：2026-11-03 · 规范：[../30-specs/01-event-envelope-schema.md](../30-specs/01-event-envelope-schema.md)
+> 状态：Accepted（M0–M1）· 更新：2026-11-08 · 规范：[../30-specs/01-event-envelope-schema.md](../30-specs/01-event-envelope-schema.md)
 
 ## 1. 什么是事件
 

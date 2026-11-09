@@ -1,6 +1,6 @@
 # 会话与代理循环
 
-> 状态：Draft · 更新：2026-11-03 · 决策：[ADR-0003](../20-decisions/ADR-0003-own-agent-loop-over-agent-sdk.md) · [ADR-0008](../20-decisions/ADR-0008-append-only-history-and-handoff.md)
+> 状态：Accepted（M0–M4；未实现的子项在文中标注）· 更新：2026-11-08 · 决策：[ADR-0003](../20-decisions/ADR-0003-own-agent-loop-over-agent-sdk.md) · [ADR-0008](../20-decisions/ADR-0008-append-only-history-and-handoff.md)
 
 ## 1. 会话种类
 
@@ -115,7 +115,7 @@ M1 实现的子集：`goal`、`context`、`tools`、`model`、`level`、`maxTurn
 
 - Fork 固定其派生时的 Provider 端点与模型（主会话每次请求都读当前配置）。
 - 完成/失败时向主会话推送 `internal` 事件 `fork.completed {id, summary}`，summary 由 Fork 自己在最后一回合写出（人格的收尾提示要求它这样做）。
-- 保留最近 20 个已结束 Fork 的转录供控制台查看（M1：转录文件全部保留，`/api/forks` 与 `fork_status` 列出最近 10 个已结束的；清理策略随 `scheduler.retention` 实现）。
+- 保留最近 20 个已结束 Fork 的转录供控制台查看（M1：转录文件全部保留，`/api/sessions/forks` 与 `fork_status` 列出最近 10 个已结束的；清理策略随 `scheduler.retention`（M7a）实现）。
 
 ### 5.3 检查点与恢复
 
