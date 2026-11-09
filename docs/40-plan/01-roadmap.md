@@ -1,6 +1,6 @@
 # 路线图
 
-> 状态：Draft · 更新：2026-11-08
+> 状态：Draft · 更新：2026-11-09
 
 每个里程碑有**可演示的验收标准**；没有通过验收不进入下一个。估时按一人全职、不含控制台美化。
 
@@ -209,7 +209,7 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 - 新增（原设计没有）：Fork 的运营暂停/恢复（`pauseReason: operator`，重启后保留）；调度暂停持久化（重启后仍暂停）；清空 pending 只允许 L2–L4；审计 `control_write`；`/api/audit`、`/api/runs`、`/api/persona/*`、`/api/auth/*`；预算设置改为热更新。
 - 从 Git / tarball 安装时不做构建：来源里必须有可直接运行的入口（与 M2 的目录安装一致）；`.git` 不复制；指向来源之外的符号链接直接拒绝。
 
-## M6 · 单镜像与加固（2 周）· 状态：已实现（2026-11-04），长时间运行留给实际使用；CI 首次运行已通过（T5，30b8e17）
+## M6 · 单镜像与加固（2 周）· 状态：已实现（2026-11-04），长时间运行留给实际使用；CI 已通过（T5：30b8e17 首次全绿，219b0b1 复核全绿）
 
 **目标**：`docker run` 即用，连续运行 30 天。
 
@@ -311,6 +311,7 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 - `apps/daemon/test/crash.e2e.test.ts` 还在用旧写法 `PROTEA_PROVIDERS__ECHO__DELAY_MS` 设置 echo 的回复延迟。2026-11-05 改为供应商档案后，环境变量里的旧写法只记一条警告、不再生效，echo 立即回复，"回合中途 kill -9"变成与回复赛跑：本机能赢，CI 上输。改为 `PROTEA_PROVIDERS__PROFILES__ECHO__ECHO__DELAY_MS`，并在 kill 之后断言回复确实还没写进转录，这类静默失效以后会在该处直接失败。
 - Trivy 报 zlib1g 两个 HIGH（CVE-2026-76844、CVE-2026-85091），Debian 已发布修复，但 `Dockerfile` 只 `apt-get install`、从不 `apt-get upgrade`，基础镜像发布后的安全更新不会进镜像。slim 与 full 两个阶段现在都先 `apt-get upgrade`。
 - 文档：M6 标题、M1/M3 差异段里过期的"留到 M5"与"shell 尚未实现"、排期图的说明、`docs/README.md` 状态行、M0–M4 对应架构文档的状态（Draft → Accepted）；M7 按收尾（M7a）与生态（M7b）拆开并补验收标准草案。
+- 结果：以上改动提交为 219b0b1 并推送后（2026-11-09），`feat/kernel` 与 `main` 的 ci 都全绿（run 42576417368、42576420953：check、image full、image slim），T5 重新通过。
 - 实际测试的观察（本机试用容器，镜像 `0.1.0-e8a60fe-dirty`）：T10 的步骤 1–4 部分成立——账号建好、DeepSeek（`openai-responses`）档案就绪并服务三个角色、对话窗口有回复、24 h 内 2 次调用缓存命中 95%；设置码被拒/作废、登录限流、按角色分配与换回 Claude 未复核。另有一个 Streamable HTTP 的 MCP 服务器因 `auth: none` 而 401 进入 `failed`：服务器端要 bearer 令牌，属配置问题，监督与状态显示符合设计。
 
 **v1.0 发布点**：功能到此为止；打 `v1.0.0` 标签、把 `package.json` 从 0.1.0 升上去、发布镜像，与 M6 推迟的加固项一起放在 M7a。

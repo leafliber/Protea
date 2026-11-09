@@ -25,7 +25,7 @@ docker build -t protea:slim --target slim .    # slim
 3. `slim`：`node:22-trixie-slim` + tini；先 `apt-get upgrade` 带入基础镜像发布后的 Debian 安全更新（CI 的 Trivy 只放过没有修复的漏洞，2026-11-08 的 zlib1g 就是有修复而镜像没带），npm 升级到较新的版本（基础镜像自带的 npm 依赖里有已知漏洞），删除不用的 corepack 与 yarn。
 4. `full`：在 `slim` 上加 apt 包（同样先 `apt-get upgrade`）与 uv 的官方镜像里的 `uv`、`uvx`。
 
-测得的体积比原目标（full ≤ 450 MB、slim ≤ 200 MB）大：Node 22 的 Debian 基础镜像本身就有约 270 MB，Python 与 git（连带 perl）约 160 MB，uv 约 45 MB，应用本身约 47 MB。体积按镜像各层未压缩大小相加（`docker history`）；Docker Desktop 的 containerd 存储在 `docker images` 里显示的数字更大，因为它同时算了压缩的层与解开的快照。原目标按压缩后的下载量看是满足的。
+测得的体积比原目标（full ≤ 450 MB、slim ≤ 200 MB）大：Node 22 的 Debian 基础镜像本身就有约 270 MB，Python 与 git（连带 perl）约 160 MB，uv 约 45 MB，应用本身约 47 MB。体积按镜像各层未压缩大小相加（`docker history`）；Docker Desktop 的 containerd 存储在 `docker images` 里显示的数字更大，因为它同时算了压缩的层与解开的快照。原目标按压缩后的下载量看是满足的。 CI（amd64，`docker image inspect` 的 `Size`）在 219b0b1 上测得 full 457 MB、slim 268 MB（2026-11-09）；本机 arm64 构建的数字另算。
 
 ## 2. 运行
 
