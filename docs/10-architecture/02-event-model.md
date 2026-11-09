@@ -6,7 +6,7 @@
 
 事件是"世界发生了某个变化"的一条**被动**记录：收到一条消息、到了某个时刻、邮件到达、CI 失败、文件被修改。事件 **不是** 查询结果；主动获取信息走工具（P4 诚实认识论：事件只陈述已发生的事实）。
 
-事件由事件源插件产生，经 PluginHost 校验后写入 Event Store，获得游标，然后由调度器决定何时进入主会话。
+事件由事件源插件产生，经 EventGateway 校验后写入 Event Store，获得游标，然后由调度器决定何时进入主会话。
 
 ## 2. 事件信封（EventEnvelope）
 
@@ -77,7 +77,7 @@ Core 自身事件的 `source` 固定为 `core`，`type` 以子系统为前缀（
 | `secret.redacted` | L4 store | 某秘密的值出现在发往模型的文本里并已替换（每个名字每次运行一条，M4） |
 | `fork.completed` / `fork.failed` | 派生等级与 L2 中较低者；≤ L3 用 flush，L4 用 piggyback | Fork 结束，正文是其最终消息或错误（`correlation` = Fork id） |
 
-插件进程试图发送 `origin: internal` 的事件会被 PluginHost 降级为 `external` 并记录警告。
+插件进程试图发送 `origin: internal` 的事件会被 EventGateway 降级为 `external` 并记录警告。
 
 ## 4. 处理等级（level）
 

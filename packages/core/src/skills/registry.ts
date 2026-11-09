@@ -8,7 +8,8 @@ import type { ToolOutcome } from '../tools/types.js';
 import { errorMessage } from '../util/errors.js';
 import { globToRegExp } from '../util/glob.js';
 import type { Clock } from '../util/time.js';
-import { BODY_TOKEN_WARN, estimateTokens, parseSkillFile, type SkillMeta } from './parse.js';
+import { estimateTokens } from '../util/tokens.js';
+import { BODY_TOKEN_WARN, parseSkillFile, type SkillMeta } from './parse.js';
 
 export type SkillOrigin = SkillInfo['origin'];
 

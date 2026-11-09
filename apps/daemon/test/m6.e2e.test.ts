@@ -83,7 +83,7 @@ describe('M6: budget enforcement', () => {
     const notice = d.store.query({ type: 'budget.exhausted' })[0] as EventEnvelope;
     expect(notice).toMatchObject({ origin: 'internal', effLevel: 0, effTrigger: 'flush' });
 
-    const held = d.plugins.push({ source: 'rss', maxLevel: 3 }, { ts: new Date().toISOString(), type: 'rss.item', level: 3, trigger: 'flush', text: 'a feed item' });
+    const held = d.gateway.push({ source: 'rss', maxLevel: 3 }, { ts: new Date().toISOString(), type: 'rss.item', level: 3, trigger: 'flush', text: 'a feed item' });
     expect(held).toMatchObject({ ok: true, effectiveTrigger: 'store' });
     expect(d.store.get(held.cursor as number)?.state).toBe('archived');
     const status = (await call<{ status: BudgetStatus }>('GET', '/api/budget')).json.status;

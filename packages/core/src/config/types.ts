@@ -1,9 +1,9 @@
-import type { Effort, Level, ModelRole } from '@protea/protocol';
-import type { HandoffSettings } from '../session/handoff.js';
-import type { ToolSearchSettings } from '../context/tool-search.js';
+import type { Effort, Level, ModelRole, ProviderProtocolName } from '@protea/protocol';
+import type { HandoffSettings } from '../session/settings.js';
+import type { ToolSearchSettings } from '../context/settings.js';
 import type { McpSettings } from '../mcp/settings.js';
 import type { PermissionSettings } from '../permissions/policy.js';
-import type { PluginHostSettings } from '../plugins/host.js';
+import type { PluginHostSettings } from '../plugins/settings.js';
 
 export interface LevelSettings {
   /** Batch window; null means the level never opens a window (it only rides along). */
@@ -54,9 +54,7 @@ export interface OwnerIdentity {
   senderKey: string;
 }
 
-/** Wire protocols a provider profile can speak (docs/10-architecture/12-model-providers.md §3). */
-export const PROVIDER_PROTOCOLS = ['anthropic', 'openai-chat', 'openai-responses', 'echo'] as const;
-export type ProviderProtocol = (typeof PROVIDER_PROTOCOLS)[number];
+export type ProviderProtocol = ProviderProtocolName;
 
 /** Options only the Anthropic Messages protocol uses. */
 export interface AnthropicOptions {

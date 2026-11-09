@@ -19,6 +19,7 @@ import { renderEventsBlock, renderStatusBlock, type StatusSnapshot } from '../ev
 import { MEMORY_ROOT } from '../memory/store.js';
 import type { EventStore } from '../events/store.js';
 import type { Logger } from '../observability/logger.js';
+import { estimateRequestTokens } from '../providers/tokens.js';
 import { ProviderError, type Provider, type ProviderRequest, type ProviderResponse } from '../providers/types.js';
 import type { RunningTurn } from '../scheduler/preemption.js';
 import type { ToolDispatcher } from '../tools/dispatcher.js';
@@ -26,7 +27,8 @@ import { isAbortError, sleep } from '../util/abort.js';
 import { errorMessage } from '../util/errors.js';
 import { newId } from '../util/ids.js';
 import type { Clock } from '../util/time.js';
-import { estimateMessagesTokens, estimateRequestTokens, type ContextLimits, type Handoff, type HandoffResult } from './handoff.js';
+import { estimateMessagesTokens } from '../util/tokens.js';
+import type { ContextLimits, Handoff, HandoffResult } from './handoff.js';
 import type { Transcript } from './transcript.js';
 
 export interface Batch {

@@ -10,6 +10,7 @@ import {
   BudgetTracker,
   BusTrail,
   ContextAssembler,
+  EventGateway,
   ForkManager,
   EventStore,
   Handoff,
@@ -52,7 +53,6 @@ import {
   contextLimits,
   PROTOCOL_DEFAULT_URL,
   PROVIDER_PRESETS,
-  PROVIDER_PROTOCOLS,
   compactProfile,
   createProvider,
   defaultProfile,
@@ -94,6 +94,7 @@ import {
   writeShutdownReport,
   type Clock,
   type Db,
+  type InternalEventInput,
   type Logger,
   type McpServerSettings,
   type Metrics,
@@ -107,7 +108,7 @@ import {
 import { authenticate, createControlApp, createWebSocketEndpoint, startControlServer, type AuthDeps, type ControlServer, type ProviderOps } from '@protea/control';
 import { ConsolePlugin } from '@protea/plugin-console';
 import { CronPlugin } from '@protea/plugin-cron';
-import type { Level, ModelRole, ProviderProtocolName, ProvidersResponse, StatusResponse } from '@protea/protocol';
+import { PROVIDER_PROTOCOLS, type Level, type ModelRole, type ProviderProtocolName, type ProvidersResponse, type StatusResponse } from '@protea/protocol';
 import { acquireLock } from './lock.js';
 
 export const VERSION = '0.1.0';
@@ -175,6 +176,8 @@ export interface Daemon {
   db: Db;
   bus: Bus;
   store: EventStore;
+  /** The single entry point for events into the store. */
+  gateway: EventGateway;
   /** The current main transcript (a handoff replaces it). */
   readonly transcript: Transcript;
   main: MainSession;
@@ -315,9 +318,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   // Capabilities.
   const owner = new OwnerRegistry(config.owner.identities);
   if (!owner.hasAny()) log.warn('owner.identities is empty: no event can reach level 1');
+  const gateway = new EventGateway({ store, owner, log: log.child({ component: 'events' }), clock });
+  const pushInternal = (input: InternalEventInput) => gateway.pushInternal(input);
   // Invariant I-7: no request carries a secret value, whatever path it took into the context.
   const redactedNames = new Set<string>();
-  let pushInternalLater: ((input: Parameters<PluginHost['pushInternal']>[0]) => void) | null = null;
   // Profiles per role (providers.*); rebuilt when their settings or keys change, no restart needed.
   const router: ProviderRouter | null = opts.provider ? null : createProvider(() => config.providers, secrets);
   const baseProvider: Provider = opts.provider ?? (router as ProviderRouter);
@@ -333,7 +337,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     if (fresh.length === 0) return;
     for (const n of fresh) redactedNames.add(n);
     log.warn({ secrets: fresh }, 'secret values were redacted from a model request');
-    pushInternalLater?.({
+    pushInternal({
       type: 'secret.redacted',
       level: 4,
       trigger: 'store',
@@ -353,13 +357,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       log.error({ key: keyPath.join('.'), err: errorMessage(err) }, 'could not write config.yaml');
     }
   };
-  // Budget enforcement (set once the tracker exists, below) decides the delivery mode of new events.
-  let budgetRef: BudgetTracker | null = null;
   const plugins = new PluginHost({
     store,
     bus,
     outputs,
-    admit: (ev) => budgetRef?.admit(ev) ?? null,
+    gateway,
     owner,
     kv,
     tools,
@@ -406,11 +408,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     secrets,
     settings: () => config.mcp,
     supervision: () => config.pluginHost,
-    pushInternal: (input) => {
-      plugins.pushInternal(input);
-    },
+    pushInternal,
     pushEvent: (server, input) => {
-      plugins.push({ source: `mcp:${server}`, maxLevel: 4 }, { ...input, ts: new Date(clock.now()).toISOString() });
+      gateway.push({ source: `mcp:${server}`, maxLevel: 4 }, { ...input, ts: new Date(clock.now()).toISOString() });
     },
     redirectUrl: () => `${(config.control.publicUrl ?? controlUrl).replace(/\/$/, '')}/api/mcp/oauth/callback`,
   });
@@ -429,9 +429,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     log: log.child({ component: 'approvals' }),
     ttlMs: () => config.permissions.approvalTtlMs,
     deliver: (a) => plugins.requestApproval(a),
-    pushInternal: (input) => {
-      plugins.pushInternal(input);
-    },
+    pushInternal,
     redact: (text) => secrets.redact(text),
   });
   plugins.attachApprovals(approvals);
@@ -440,8 +438,6 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   if (ensurePersona(personaDir, path.join(assets, 'personas', 'default')).created) log.info({ dir: personaDir }, 'installed the default persona');
   const persona = new Persona(personaDir, log.child({ component: 'persona' }));
   await persona.loadHooks();
-  const pushInternal = (input: Parameters<PluginHost['pushInternal']>[0]) => plugins.pushInternal(input);
-  pushInternalLater = pushInternal;
 
   // Memory (docs/10-architecture/11-memory-and-persona.md): files under /data/memory, a full-text index, the INDEX.md segment.
   const memoryDir = path.join(dataDir, 'memory');
@@ -484,7 +480,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     kv: kvNamespace(kv, 'budget'),
     store,
   });
-  budgetRef = budget;
+  // Budget enforcement decides the delivery mode of new events.
+  gateway.setAdmission((ev) => budget.admit(ev));
   const segments = new SystemSegments({
     persona: () => persona.current,
     hooks: () => persona.hooks,
@@ -515,7 +512,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     isConnector: (owner) => plugins.get(owner)?.kind === 'connector',
     clock,
     log: log.child({ component: 'tools' }),
-    pushInternal: (input) => plugins.pushInternal(input),
+    pushInternal,
   });
   dispatcher.setLimiter((def, use) => outbound.check(def, use));
   const toolStats = new ToolStatsRepo(db);
@@ -1109,7 +1106,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   }
 
   const waiting = Object.values(store.pendingCounts()).reduce((a, b) => a + b, 0);
-  plugins.pushInternal({
+  pushInternal({
     type: 'daemon.started',
     level: 4,
     trigger: 'piggyback',
@@ -1169,7 +1166,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       const before = { phase: main.phase, batchId: main.currentBatchId, pending: store.pendingCounts(), forks: forks.activeCount() };
       for (const off of unwatch) off();
       clearInterval(expiry);
-      plugins.pushInternal({ type: 'daemon.stopping', level: 4, trigger: 'store', text: `Daemon stopping: ${reason}.` });
+      pushInternal({ type: 'daemon.stopping', level: 4, trigger: 'store', text: `Daemon stopping: ${reason}.` });
       scheduler.drain();
       const graceMs = config.daemon.shutdown.graceMs;
       let finished = true;
@@ -1220,6 +1217,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     db,
     bus,
     store,
+    gateway,
     get transcript() {
       return main.currentTranscript;
     },

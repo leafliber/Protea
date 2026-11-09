@@ -27,14 +27,14 @@ Protea/
 │   ├── plugin-sdk/              @protea/plugin-sdk：definePlugin / runPlugin，测试用 FakeHost（@protea/plugin-sdk/testing）
 │   ├── core/                    @protea/core：内核
 │   │   ├── src/
-│   │   │   ├── events/          校验（ajv）、门禁、主人映射、事件库、输出记录与对话历史、渲染
+│   │   │   ├── events/          校验（ajv）、门禁、事件网关（gateway.ts，所有事件的唯一入口）、主人映射、事件库、输出记录与对话历史、渲染
 │   │   │   ├── scheduler/       批窗口与投递、抢占矩阵（preemption.ts）、风暴防护、老化、预算统计与强制执行（budget.ts）
 │   │   │   ├── forks/           Fork 管理器（排队、让渡/恢复、检查点、重启恢复）与 fork_* 工具
 │   │   │   ├── session/         主会话循环、转录与修复（含 thinking 截止标记）、启动对账、容量交接（handoff.ts）、回放的数据读取（replay-source.ts）
 │   │   │   ├── context/         系统分段、运行时说明、环境提示模板、请求装配、工具搜索（tool-search.ts）、前缀指纹（prefix.ts）
 │   │   │   ├── tools/           工具注册表、分发器、内核工具、外发限速（outbound.ts）
 │   │   │   ├── providers/       Provider 接口、按角色路由（router.ts）、供应商档案与预设（profiles.ts）、工厂与连接测试（factory.ts）、anthropic、OpenAI Chat / Responses（openai.ts、http.ts）、echo、scripted、价格表、秘密扫描包装（redact.ts）、录制与回放（recorder.ts）
-│   │   │   ├── plugins/         PluginHost（生命周期、监督、事件网关）、清单与发现、子进程运行时、一致性检查、开发加载器
+│   │   │   ├── plugins/         PluginHost（生命周期、监督）、清单与发现、子进程运行时、一致性检查、开发加载器
 │   │   │   ├── permissions/     权限策略、审批、审计、权限守卫、approval_request 工具
 │   │   │   ├── mcp/             MCP 客户端管理器（连接、监督、工具命名与注册、资源与 prompts、OAuth）
 │   │   │   ├── skills/          SKILL.md 解析、Skills 注册表与目录段、skill_load / skill_read
@@ -75,6 +75,8 @@ Protea/
 ## 包依赖方向
 
 `protocol` ← `core` ← {`control`, 进程内插件} ← `daemon` ← `cli`；`core` 不依赖 `control`、`daemon` 或任何插件。进程外插件（内置的与第三方的）只依赖 `plugin-sdk` 与 `protocol`，并打包成单文件；`web` 只依赖 `protocol` 的类型。
+
+`packages/core` 内部按层依赖，从下到上：`util` → 各模块的 `settings.ts`（设置与默认值，纯数据；`providers/profiles.ts` 同属这一层）→ `config`、`db`、`bus`、`events`、`memory`、`observability`、`permissions`、`persona`、`skills`、`auth` → `context`、`tools`、`mcp`、`backup`、`diagnostics` → `plugins`、`providers` → `session` → `forks`、`scheduler`。运行时只能导入更低的层；`import type` 不受限制，对象之间由 `apps/daemon/src/daemon.ts` 通过构造参数连接。`packages/core/test/architecture.test.ts` 检查这个方向和各包允许的 `@protea/*` 依赖；新增 core 模块时要在其中指定层。
 
 ## 构建与运行
 

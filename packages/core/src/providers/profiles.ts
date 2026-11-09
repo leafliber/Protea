@@ -1,5 +1,5 @@
-import { LEVELS, MODEL_ROLES, type Effort, type Level, type ModelRole } from '@protea/protocol';
-import { PROVIDER_PROTOCOLS, type ProviderProfile, type ProviderProtocol, type ProvidersSettings } from '../config/types.js';
+import { LEVELS, MODEL_ROLES, PROVIDER_PROTOCOLS, type Effort, type Level, type ModelRole } from '@protea/protocol';
+import type { ProviderProfile, ProviderProtocol, ProvidersSettings } from '../config/types.js';
 
 const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 const PROFILE_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;

@@ -1,16 +1,7 @@
 import type { ModelRole, TranscriptMessage } from '@protea/protocol';
 import type { ProviderToolDef, ToolRegistry } from '../tools/registry.js';
 import type { ToolDef } from '../tools/types.js';
-
-export interface ToolSearchSettings {
-  /** auto: defer MCP tools once the tool count passes `threshold`; always: defer whenever possible; never. */
-  mode: 'auto' | 'always' | 'never';
-  threshold: number;
-  /** The most-called tools of each MCP server stay loaded. */
-  keepPerServer: number;
-}
-
-export const DEFAULT_TOOL_SEARCH: ToolSearchSettings = { mode: 'auto', threshold: 40, keepPerServer: 3 };
+import type { ToolSearchSettings } from './settings.js';
 
 /** Name of the provider's search tool as it appears in server_tool_use blocks. */
 export const TOOL_SEARCH_NAMES = new Set(['tool_search_tool_regex', 'tool_search_tool_bm25']);

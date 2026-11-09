@@ -314,6 +314,12 @@ export const WS_TOPICS = {
 } as const satisfies Record<string, ReadonlyArray<WsServerMessage['topic']>>;
 export type WsTopic = keyof typeof WS_TOPICS;
 
+/** Replies to one client; they belong to no subscription group. */
+type WsReplyTopic = 'hello' | 'subscribed' | 'error';
+type Expect<T extends true> = T;
+/** Compile-time check: ws.ts drops a message without a group, so every other topic must have one. */
+type _EveryWsTopicHasAGroup = Expect<[Exclude<WsServerMessage['topic'], (typeof WS_TOPICS)[WsTopic][number] | WsReplyTopic>] extends [never] ? true : false>;
+
 /** Client → server. Each message replaces the subscription; `since` replays stored events first. */
 export interface WsClientMessage {
   subscribe: WsTopic[];
@@ -353,7 +359,9 @@ export interface SecretInfo {
 }
 
 /** Wire protocols of model providers (docs/10-architecture/12-model-providers.md §3). */
-export type ProviderProtocolName = 'anthropic' | 'openai-chat' | 'openai-responses' | 'echo';
+/** Wire protocols a provider profile can speak (docs/10-architecture/12-model-providers.md §3). */
+export const PROVIDER_PROTOCOLS = ['anthropic', 'openai-chat', 'openai-responses', 'echo'] as const;
+export type ProviderProtocolName = (typeof PROVIDER_PROTOCOLS)[number];
 
 /** A provider profile as the console shows it: its settings (never the key) and its state. */
 export interface ProviderProfileInfo {

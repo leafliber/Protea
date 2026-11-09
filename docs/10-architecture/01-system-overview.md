@@ -26,6 +26,7 @@ flowchart LR
 
   subgraph Core["Core（守护进程，无语义）"]
     HOST[PluginHost\n插件宿主]
+    GATE[EventGateway\n事件网关]
     STORE[(Event Store\nSQLite append-only)]
     SCHED[Scheduler\n等级·批·抢占]
     MAIN[Main Session\n常驻主会话]
@@ -47,7 +48,7 @@ flowchart LR
   MAIL --> P3 --> HOST
   RSS --> P4 --> HOST
   CLK --> P5 --> HOST
-  HOST -->|pushEvent| STORE --> SCHED
+  HOST -->|pushEvent| GATE --> STORE --> SCHED
   SCHED -->|batch| MAIN
   SCHED -->|spawn / pause| FORK
   MAIN --> CTX --> PROV
@@ -68,7 +69,7 @@ flowchart LR
 | 层 | 组件 | 职责 | 不做什么 |
 |---|---|---|---|
 | **插件层** | 事件源、连接器、工具插件、MCP 服务器、Skills | 把世界变成事件；把助理的动作送回世界；提供能力 | 不访问记忆；不互相调用；不决定优先级以外的调度 |
-| **Core** | PluginHost、Event Store、Scheduler、Sessions、Context Assembler、Capability Registry、Provider、Memory FS | 存事件、排调度、跑回合、调模型、管插件生命周期 | 不解释语义；不生成自然语言 |
+| **Core** | PluginHost、EventGateway、Event Store、Scheduler、Sessions、Context Assembler、Capability Registry、Provider、Memory FS | 存事件、排调度、跑回合、调模型、管插件生命周期 | 不解释语义；不生成自然语言 |
 | **人格层** | Persona 文件（`SOUL.md`、`OPERATING.md`、`USER.md`）、记忆布局、可选钩子 | 决定助理是谁、怎么做事、记什么 | 不接触传输协议与进程管理 |
 | **控制平面** | HTTP API、WebSocket、Web 控制台、CLI | 观察、配置、审批、热插拔操作 | 不绕过 Core 直接写存储 |
 
@@ -101,7 +102,7 @@ tini (PID 1)
 ```mermaid
 sequenceDiagram
   participant S as 事件源插件
-  participant H as PluginHost
+  participant H as EventGateway
   participant E as Event Store
   participant D as Scheduler
   participant M as Main Session
