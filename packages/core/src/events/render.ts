@@ -1,13 +1,11 @@
 import { type EventEnvelope, type Level, type RunPhase, type TextBlock, LEVELS } from '@protea/protocol';
+import { escapeStructural } from '../util/escape.js';
+
+export { escapeStructural };
 
 /** Escape for XML attribute values. */
 function attr(v: string): string {
   return v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-/** Neutralise only the sequences that would break the batch structure; the text is otherwise untouched. */
-export function escapeStructural(text: string): string {
-  return text.replace(/<(\/?)(events?|status)\b/gi, '&lt;$1$2');
 }
 
 export function senderAttr(e: EventEnvelope): string | undefined {

@@ -14,6 +14,7 @@
 | [ADR-0008](ADR-0008-append-only-history-and-handoff.md) | 历史只追加，容量以交接处理 | Accepted |
 | [ADR-0009](ADR-0009-single-uid-with-process-limits.md) | 插件与守护进程同用一个用户，靠资源上限与工作区约束 | Accepted |
 | [ADR-0010](ADR-0010-accounts-and-provider-profiles.md) | 控制台账号与设置码初始化；模型供应商档案 | Accepted |
+| [ADR-0011](ADR-0011-layered-memory-and-idle-compaction.md) | 分层记忆、闲时压缩与每日整理，不使用 embedding | Accepted |
 
 新增 ADR：复制 `ADR-0000-template.md`（见下），编号递增，提交 PR 时在此表登记。
 

@@ -4,6 +4,7 @@ import type {
   BatchReason,
   EventEnvelope,
   ForkInfo,
+  HandoffKind,
   Level,
   McpServerStatus,
   PluginStatus,
@@ -42,7 +43,7 @@ export interface BusTopics {
   /** The Skills catalog changed (listed names). */
   'skills.changed': { names: string[] };
   /** The main session handed off to a new transcript (M4). */
-  'session.handoff': { sessionId: string; from: string; to: string; notes: string; dropped: number; kept: number };
+  'session.handoff': { sessionId: string; from: string; to: string; notes: string; dropped: number; kept: number; kind: HandoffKind };
   /** Persona files or hooks changed on disk (M4). */
   'persona.changed': { files: string[] };
 }

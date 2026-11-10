@@ -44,7 +44,7 @@ export function defaultProfile(protocol: ProviderProtocol, id: string = protocol
     headers: {},
     pricing: {},
     anthropic: { features: 'full', fallbacks: 'default', thinkingDisplay: 'omitted', cacheTtl: '1h', thinkingMismatch: 'drop_block' },
-    openai: { reasoningEffort: false, maxTokensField: 'max_tokens' },
+    openai: { reasoningEffort: false, maxTokensField: 'max_tokens', promptCacheKey: null },
     echo: { delayMs: 0 },
   };
 }
@@ -114,6 +114,7 @@ export function normalizeProviderProfile(id: string, raw: unknown): ProviderProf
     throw new Error(`${at}.anthropic.thinkingMismatch must be drop_block, error or null`);
   }
   if (typeof p.openai.reasoningEffort !== 'boolean') throw new Error(`${at}.openai.reasoningEffort must be true or false`);
+  if (p.openai.promptCacheKey !== null && typeof p.openai.promptCacheKey !== 'boolean') throw new Error(`${at}.openai.promptCacheKey must be true, false or null`);
   if (p.openai.maxTokensField !== 'max_tokens' && p.openai.maxTokensField !== 'max_completion_tokens') {
     throw new Error(`${at}.openai.maxTokensField must be max_tokens or max_completion_tokens`);
   }

@@ -181,7 +181,7 @@ PROTEA_DATA_DIR=.dev-data pnpm protea skills
 
 人格在 `.dev-data/persona/`：`SOUL.md`（是谁）、`OPERATING.md`（怎么做事）、`USER.md`（关于你）。改完从下一次模型请求生效。需要代码时可以加 `persona/hooks.mjs`（例如自定义交接），见 [docs/10-architecture/11-memory-and-persona.md](docs/10-architecture/11-memory-and-persona.md) §6。
 
-对话超过 `context.handoff.softTokens`（默认 200k token）时会交接：较早的部分写成 `memory/handoff/` 下的笔记，新对话带着最近的消息继续。也可以在控制台的"会话"页手动触发，或者：
+助理空闲时会压缩对话：较早的部分写成 `memory/handoff/` 下的笔记（原文另存到 `memory/raw/`），新对话带着白板、笔记和最近的消息继续。忙碌时超过 `context.handoff.softTokens`（默认 80k token）会当场交接。也可以在控制台的"会话"页手动触发，或者：
 
 ```bash
 PROTEA_DATA_DIR=.dev-data pnpm protea sessions handoff

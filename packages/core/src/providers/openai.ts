@@ -73,6 +73,12 @@ abstract class OpenAiStyleProvider implements Provider {
     return this.settings.contextWindow ?? DEFAULT_OPENAI_CONTEXT;
   }
 
+  /** The request field that keeps one role's requests on the same cache, for servers known to accept it. */
+  protected cacheKeyField(role: ModelRole): Record<string, string> {
+    const on = this.settings.openai.promptCacheKey ?? new URL(this.base).hostname === 'api.openai.com';
+    return on ? { prompt_cache_key: `protea-${role}` } : {};
+  }
+
   protected headers(): Record<string, string> {
     return { ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}), ...this.settings.headers };
   }
@@ -170,6 +176,7 @@ export class OpenAiChatProvider extends OpenAiStyleProvider {
       stream: true,
       stream_options: { include_usage: true },
       [this.settings.openai.maxTokensField]: req.maxOutputTokens ?? this.settings.maxOutputTokens,
+      ...this.cacheKeyField(req.role),
     };
     if (req.tools.length > 0) body['tools'] = req.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } }));
     if (this.settings.openai.reasoningEffort) body['reasoning_effort'] = reasoningEffort(req.effort);
@@ -279,6 +286,7 @@ export class OpenAiResponsesProvider extends OpenAiStyleProvider {
       stream: true,
       store: false,
       max_output_tokens: req.maxOutputTokens ?? this.settings.maxOutputTokens,
+      ...this.cacheKeyField(req.role),
     };
     const instructions = req.system.map((s) => s.text).join('\n\n');
     if (instructions) body['instructions'] = instructions;

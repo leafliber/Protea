@@ -9,8 +9,11 @@ import {
   BatchRepo,
   BudgetTracker,
   BusTrail,
+  Board,
   ContextAssembler,
+  DreamRunner,
   EventGateway,
+  IdleMaintenance,
   ForkManager,
   EventStore,
   Handoff,
@@ -193,6 +196,9 @@ export interface Daemon {
   skills: SkillRegistry;
   memory: MemoryStore;
   memoryIndex: MemoryIndex;
+  board: Board;
+  dream: DreamRunner;
+  maintenance: IdleMaintenance;
   persona: Persona;
   /** Resolves once the MCP servers configured at start have been tried (they start in the background). */
   mcpReady: Promise<void>;
@@ -443,12 +449,13 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const memoryDir = path.join(dataDir, 'memory');
   if (ensureMemoryDir(memoryDir, path.join(assets, 'personas', 'default', 'memory')).created) log.info({ dir: memoryDir }, 'created the memory directory');
   let memoryIndex: MemoryIndex | null = null;
-  let refreshSegments = (): void => undefined;
-  const memory = new MemoryStore(memoryDir, (paths) => {
-    memoryIndex?.update(paths);
-    if (paths.includes('INDEX.md')) refreshSegments();
-  });
-  memoryIndex = new MemoryIndex(db, memory, () => new Date(clock.now()).toISOString());
+  const memory = new MemoryStore(memoryDir, (paths) => memoryIndex?.update(paths));
+  memoryIndex = new MemoryIndex(db, memory, () => new Date(clock.now()).toISOString(), () => clock.now());
+  const memoryKv = kvNamespace(kv, 'memory');
+  const board = new Board(db, memoryKv, () => config.memory.board, () => new Date(clock.now()).toISOString());
+  // INDEX.md is in the cached system prefix, so a new version goes live only at chosen moments.
+  let publishedIndex = memory.readText('INDEX.md') ?? null;
+  let indexPublishPending = false;
   const synced = memoryIndex.sync();
   if (synced.indexed + synced.removed > 0) log.info(synced, 'memory index updated');
 
@@ -485,7 +492,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const segments = new SystemSegments({
     persona: () => persona.current,
     hooks: () => persona.hooks,
-    memoryIndex: () => memory.readText('INDEX.md') ?? null,
+    memoryIndex: () => publishedIndex,
     plugins,
     timezone: tz,
     overridesDir: path.join(dataDir, 'overrides'),
@@ -504,7 +511,18 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     segments.refresh();
   });
   bus.on('skills.changed', () => segments.refresh());
-  refreshSegments = () => segments.refresh();
+  const applyPublishedIndex = (): void => {
+    indexPublishPending = false;
+    const text = memory.readText('INDEX.md') ?? null;
+    if (text === publishedIndex) return;
+    publishedIndex = text;
+    segments.refresh();
+  };
+  // Not during a batch: a new prefix would move the thinking floor in the middle of it.
+  const publishIndex = (): void => {
+    if (main.busy) indexPublishPending = true;
+    else applyPublishedIndex();
+  };
   const dispatcher = new ToolDispatcher(tools, log.child({ component: 'tools' }));
   dispatcher.setGuard(opts.toolGuard ?? new PermissionGuard(policy, approvals, audit));
   const outbound = new OutboundLimiter({
@@ -617,9 +635,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
           estimatedTokens: contextTokens(),
           softTokens: lim.soft,
           hardTokens: lim.hard,
+          ...(maintenance.lastCompaction ? { lastCompaction: maintenance.lastCompaction } : {}),
         };
       })(),
-      memory: { files: memoryIndex?.size ?? 0 },
+      memory: { files: memoryIndex?.size ?? 0, board: { open: board.open().length, rev: board.rev }, dream: dream.status() },
       persona: { hooks: persona.hooks !== null, ...(persona.hooksProblem ? { problem: persona.hooksProblem } : {}) },
       usage24h: usage.totalsSince(clock.now() - 86_400_000),
       scheduler: { paused: scheduler.paused, cooldowns: scheduler.cooldowns() },
@@ -631,7 +650,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   for (const spec of forkTools(forks, { maxTurns: config.scheduler.forks.maxTurns })) tools.register('core', spec);
   for (const spec of approvalTools({ approvals, policy, tools })) tools.register('core', spec);
   for (const spec of skillTools(skills)) tools.register('core', spec);
-  for (const spec of memoryTools({ store: memory, index: memoryIndex, clock, timezone: tz, nativeType: config.memory.nativeTool })) tools.register('core', spec);
+  for (const spec of memoryTools({ store: memory, index: memoryIndex, board, clock, timezone: tz, nativeType: config.memory.nativeTool })) tools.register('core', spec);
   await plugins.startAll();
   skills.rescan();
   const mcpReady = mcp.apply(config.mcp.servers).catch((err: unknown) => log.error({ err: errorMessage(err) }, 'MCP servers not applied'));
@@ -668,6 +687,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       forks: forks.activeCount(),
     }),
     pushInternal,
+    board,
     handoff: new Handoff({
       provider,
       memory,
@@ -679,10 +699,30 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       settings: () => config.context.handoff,
       hooks: () => persona.hooks,
       cheapEffort: () => effortOf('cheap'),
+      redact: (text) => secrets.redact(text),
+      onNotesUsage: (res, level) => {
+        const now = clock.now();
+        const rec = {
+          at: new Date(now).toISOString(),
+          atMs: now,
+          provider: provider.id,
+          model: res.model,
+          role: 'cheap' as const,
+          sessionId: 'main',
+          level,
+          ...res.usage,
+          stopReason: res.stopReason,
+          ...(res.costUsd !== undefined ? { costUsd: res.costUsd } : {}),
+        };
+        usage.record(rec);
+        bus.emit('usage.recorded', rec);
+      },
     }),
     limits,
     prefixSalt: () => secretsEpoch(secrets),
     onHandoff: (r) => {
+      // The conversation starts over here, so a new prefix costs nothing extra.
+      applyPublishedIndex();
       sessions.upsert({
         id: 'main',
         kind: 'main',
@@ -696,6 +736,19 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       if (hook) void Promise.resolve(hook(stats)).catch((err: unknown) => log.warn({ err: errorMessage(err) }, 'persona onBatchEnd failed'));
     },
   });
+  const dream = new DreamRunner({
+    forks,
+    kv: memoryKv,
+    memory,
+    bus,
+    clock,
+    timezone: tz,
+    settings: () => config.memory.dream,
+    budgetRefusal: () => budget.forkRefusal(4),
+    onCompleted: publishIndex,
+    notify: gateway,
+    log: log.child({ component: 'dream' }),
+  });
   const scheduler = new Scheduler({
     store,
     bus,
@@ -707,6 +760,24 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     clock,
     pushInternal,
     agingExempt: (cursor) => budget.isHeld(cursor),
+  });
+  const maintenance = new IdleMaintenance({
+    main,
+    bus,
+    urgentPending: () => {
+      const pending = store.pendingCounts();
+      return pending[0] + pending[1] + pending[2];
+    },
+    paused: () => scheduler.paused !== null,
+    budgetRefusal: () => budget.forkRefusal(4),
+    settings: () => config.context.idleCompaction,
+    cacheHorizonMs: () => provider.cacheHorizonMs?.('main'),
+    clock,
+    log: log.child({ component: 'maintenance' }),
+    onTick: () => {
+      if (indexPublishPending && !main.busy) applyPublishedIndex();
+    },
+    dream,
   });
   // An operator pause outlives restarts (it is shown in the status and the console).
   const schedulerKv = kvNamespace(kv, 'scheduler');
@@ -1060,7 +1131,13 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     memory: {
       store: memory,
       index: memoryIndex,
-      onWrite: (rel) => audit.record({ kind: 'memory_write', summary: `/memories/${rel}`, owner: 'console:admin' }),
+      board,
+      dream,
+      onWrite: (rel) => {
+        audit.record({ kind: 'memory_write', summary: `/memories/${rel}`, owner: 'console:admin' });
+        if (rel === 'INDEX.md') publishIndex();
+      },
+      onBoardWrite: (receipt) => audit.record({ kind: 'memory_write', summary: `board: ${receipt}`, owner: 'console:admin' }),
     },
     forks,
     plugins,
@@ -1115,6 +1192,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   scheduler.start();
   forks.recover();
   forks.start();
+  dream.start();
+  maintenance.start();
   const unwatch = [
     watchPaths([{ path: dataDir, filter: (name) => name === 'config.yaml' }], () => void reloadConfig(), {
       onError: (err) => log.warn({ err: err.message }, 'config watcher error'),
@@ -1132,10 +1211,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       debounceMs: 300,
       onError: (err) => log.warn({ err: err.message }, 'persona directory watcher error'),
     }),
-    // The owner may edit memory files directly; keep the index (and the INDEX.md segment) in step.
+    // The owner may edit memory files directly; keep the search index in step.
     watchPaths([{ path: memoryDir, recursive: true, filter: (name) => name === null || !path.basename(name).startsWith('.tmp-') }], () => {
       memoryIndex?.sync();
-      segments.refresh();
     }, {
       debounceMs: 500,
       onError: (err) => log.warn({ err: err.message }, 'memory directory watcher error'),
@@ -1166,6 +1244,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       const before = { phase: main.phase, batchId: main.currentBatchId, pending: store.pendingCounts(), forks: forks.activeCount() };
       for (const off of unwatch) off();
       clearInterval(expiry);
+      maintenance.stop();
+      dream.stop();
       pushInternal({ type: 'daemon.stopping', level: 4, trigger: 'store', text: `Daemon stopping: ${reason}.` });
       scheduler.drain();
       const graceMs = config.daemon.shutdown.graceMs;
@@ -1234,6 +1314,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     skills,
     memory,
     memoryIndex,
+    board,
+    dream,
+    maintenance,
     persona,
     mcpReady,
     runDir,

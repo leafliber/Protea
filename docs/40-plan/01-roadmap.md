@@ -314,6 +314,10 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 - 结果：以上改动提交为 219b0b1 并推送后（2026-11-09），`feat/kernel` 与 `main` 的 ci 都全绿（run 42576417368、42576420953：check、image full、image slim），T5 重新通过。
 - 实际测试的观察（本机试用容器，镜像 `0.1.0-e8a60fe-dirty`）：T10 的步骤 1–4 部分成立——账号建好、DeepSeek（`openai-responses`）档案就绪并服务三个角色、对话窗口有回复、24 h 内 2 次调用缓存命中 95%；设置码被拒/作废、登录限流、按角色分配与换回 Claude 未复核。另有一个 Streamable HTTP 的 MCP 服务器因 `auth: none` 而 401 进入 `failed`：服务器端要 bearer 令牌，属配置问题，监督与状态显示符合设计。
 
+### 记忆系统重构（2026-11-10）
+
+按 [07-memory-system-redesign.md](07-memory-system-redesign.md) 一次完成，决策见 [ADR-0011](../20-decisions/ADR-0011-layered-memory-and-idle-compaction.md)：白板（`board` 工具与控制台页）；闲时压缩（低水位 32k，上限 80k，尾部 8k，尽量对齐缓存寿命）；压缩笔记与白板直接进新对话；被压缩的对话另存为可读原文；中文二元组检索与按层检索；`INDEX.md` 发布点；每日梦境。真实模型下的摘要与整理质量待 T3、T11 实测。
+
 **v1.0 发布点**：功能到此为止；打 `v1.0.0` 标签、把 `package.json` 从 0.1.0 升上去、发布镜像，与 M6 推迟的加固项一起放在 M7a。
 
 ## M7 · 扩展与生态（v1.x）· 状态：未开始

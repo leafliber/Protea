@@ -68,13 +68,14 @@ docker cp protea:/data/exports/<名字> .
 |---|---|---|---|
 | T1 | M0 | 连续 100 次推送，缓存命中率 ≥ 80% | API key（约 100 次主模型调用，数美元） |
 | T2 | M3 | 真实 MCP 服务器：≤ 10 s 可调用；fetch 的调用结果 | 正常网络（本机 fake-IP DNS 不跑） |
-| T3 | M4 | 多次交接后仍能答对"我们昨天说好的三件事" | API key，跨天使用 |
+| T3 | M4 | 多次压缩后仍能答对"我们昨天说好的三件事" | API key，跨天使用 |
 | T4 | M5 | Prometheus 抓取与 Grafana 面板 | Docker |
 | T5 | M6 | GitHub Actions 首次运行（**已通过**：2026-11-04，run 41873125001，check 与两个镜像任务全绿）。84abdce 上再次变红（crash 测试的旧配置写法、基础镜像的 zlib1g 漏洞），修复后 219b0b1 于 2026-11-09 在两个分支上重新全绿（run 42576417368 / 42576420953） | GitHub |
 | T6 | M2 | Telegram 真实机器人 | 机器人令牌 |
 | T7 | M2 | IMAP 真实邮箱 | 邮箱与应用专用密码 |
 | T8 | M6 | 长时间运行：内存是否封顶（风险 R10）、存储增长 | 实际使用数天到 30 天 |
 | T9 | M0/M6 | 真实模型下的重启恢复：回合中途 `docker restart`，批续跑、副作用不重复 | API key |
+| T11 | 分层记忆 | 白板、闲时压缩、原文层、梦境 | API key，跨天使用 |
 | T10 | 账号与供应商 | 首次设置、账号登录；Anthropic 以外的供应商（OpenAI 兼容）跑通对话与工具调用；按角色分配 | 至少一个第三方 API key（或本机 Ollama） |
 
 ### T1 · 缓存命中率
@@ -196,6 +197,18 @@ node scripts/soak.mjs --url http://127.0.0.1:7788 --token-file protea-token --ho
 - **通过**：以上都成立；日志里没有 API Key 与设置码（`docker logs protea` 的设置码横幅除外）。
 - **看日志**：`protea logq --q "model call"`（每行有 `provider`、`model`、token 与 `cacheHit`）；`protea logq --q "provider"`（档案保存、连接测试）；`protea logq --level warn`。
 - **导出**：`protea diag --since 2h`；对话质量相关的问题加 `--content`。
+
+### T11 · 白板、闲时压缩与梦境
+
+1. 让助理记三件事到白板（"记下来：一、……二、……三、……"），在控制台"记忆 → 白板"确认出现，再从控制台改掉其中一条。下一条消息后问助理白板上有什么，应当看到你的修改。
+2. 对话到 `protea status` 显示的估算超过 32k 后停下，等到缓存过期（Anthropic 默认 1 小时，其他 30 分钟）。确认转录序号增加，`/data/memory/raw/` 与 `handoff/` 各多一个文件。
+3. 继续对话：助理不读文件也应该知道之前在做什么。看 `logq --q "model call"` 的 `cacheHit`：压缩后第一次请求的系统前缀部分应仍命中。
+4. 第二天早上在控制台看"记忆整理"：有结果、日志里有整理记录，笔记带 `summary`、`keywords`、`sources`，`INDEX.md` 每个笔记一行。
+5. 问一个换了说法的问题（笔记里写"合伙人"，你问"partner"），看助理能否在两次检索内找到。
+
+- **通过**：以上都成立；原文文件里没有秘密；`INDEX.md` 没有被改坏。
+- **看日志**：`protea logq --q "idle compaction"`、`protea logq --component dream`、`protea logq --q "handed off"`。
+- **导出**：`protea diag --since 48h --content`。
 
 ## 3. 日志在哪里、怎么查
 

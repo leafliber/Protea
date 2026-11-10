@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { BOARD_SECTIONS, type BoardCommand, type BoardItem, type BoardResponse, type BoardSection, type DreamStatus } from '@protea/protocol';
 import { api, qs, useApi } from '../api';
 import { Button, Card, Editor, Empty, ErrorText, Tabs, timeAgo } from '../components/ui';
 import { go, useSession } from '../session';
@@ -143,19 +144,195 @@ function PersonaTab({ selected }: { selected: string | null }) {
   );
 }
 
+const SECTION_LABELS: Record<BoardSection, string> = { goals: '目标', todo: '待办', notes: '注意事项' };
+const DREAM_RESULTS: Record<NonNullable<DreamStatus['result']>, string> = { completed: '完成', failed: '失败', cancelled: '已取消' };
+
+function BoardRow({ item, canWrite, send }: { item: BoardItem; canWrite: boolean; send: (c: BoardCommand) => Promise<boolean> }) {
+  const [editing, setEditing] = useState<string | null>(null);
+  if (editing !== null) {
+    return (
+      <li>
+        <form
+          className="row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void send({ command: 'update', id: item.id, text: editing }).then((ok) => {
+              if (ok) setEditing(null);
+            });
+          }}
+        >
+          <input className="grow" value={editing} onChange={(e) => setEditing(e.target.value)} />
+          <Button type="submit" small disabled={!editing.trim()}>
+            保存
+          </Button>
+          <Button small kind="ghost" onClick={() => setEditing(null)}>
+            取消
+          </Button>
+        </form>
+      </li>
+    );
+  }
+  return (
+    <li className="row">
+      <span className="grow">
+        {item.text}
+        {item.due && <span className="muted"> · 截止 {item.due}</span>}
+      </span>
+      {canWrite && (
+        <>
+          <Button small kind="ghost" onClick={() => setEditing(item.text)}>
+            编辑
+          </Button>
+          <Button small onClick={() => void send({ command: 'done', id: item.id })}>
+            完成
+          </Button>
+          <Button small kind="ghost" onClick={() => void send({ command: 'drop', id: item.id })}>
+            丢弃
+          </Button>
+        </>
+      )}
+    </li>
+  );
+}
+
+function DreamCard({ canWrite }: { canWrite: boolean }) {
+  const dream = useApi<DreamStatus>('/api/memory/dream', { refreshMs: 10_000 });
+  const [error, setError] = useState<string | null>(null);
+  const s = dream.data;
+  const run = async () => {
+    try {
+      setError(null);
+      await api('POST', '/api/memory/dream');
+      dream.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+  return (
+    <Card
+      title="记忆整理"
+      actions={
+        canWrite && s ? (
+          <Button small disabled={s.running} onClick={() => void run()}>
+            {s.running ? '整理中…' : '立即整理'}
+          </Button>
+        ) : undefined
+      }
+    >
+      <ErrorText error={error ?? dream.error} />
+      {s && (
+        <>
+          <p className="muted">
+            {!s.enabled ? '每日整理已关闭' : s.disabled ? `连续失败 ${s.failures} 次，每日整理已暂停；手动运行一次可恢复` : `每天 ${s.at} 之后，主会话空闲时运行`}
+          </p>
+          {s.date && (
+            <p>
+              最近一次：{s.date}
+              {s.result ? ` · ${DREAM_RESULTS[s.result]}` : s.running ? ' · 进行中' : ''}
+            </p>
+          )}
+          {s.summary && <p className="muted">{s.summary}</p>}
+        </>
+      )}
+    </Card>
+  );
+}
+
+function BoardTab() {
+  const { canWrite } = useSession();
+  const board = useApi<BoardResponse>('/api/memory/board?closed=1', { refreshMs: 10_000 });
+  const [form, setForm] = useState<{ section: BoardSection; text: string; due: string }>({ section: 'todo', text: '', due: '' });
+  const [error, setError] = useState<string | null>(null);
+  const send = async (cmd: BoardCommand): Promise<boolean> => {
+    try {
+      setError(null);
+      await api('POST', '/api/memory/board', cmd);
+      board.reload();
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return false;
+    }
+  };
+  const add = (e: FormEvent) => {
+    e.preventDefault();
+    void send({ command: 'add', section: form.section, text: form.text, ...(form.due ? { due: form.due } : {}) }).then((ok) => {
+      if (ok) setForm({ ...form, text: '', due: '' });
+    });
+  };
+  const items = board.data?.items ?? [];
+  return (
+    <>
+      <Card title="白板">
+        <ErrorText error={error ?? board.error} />
+        {canWrite && (
+          <form className="row" onSubmit={add}>
+            <select value={form.section} onChange={(e) => setForm({ ...form, section: e.target.value as BoardSection })}>
+              {BOARD_SECTIONS.map((s) => (
+                <option key={s} value={s}>
+                  {SECTION_LABELS[s]}
+                </option>
+              ))}
+            </select>
+            <input className="grow" value={form.text} onChange={(e) => setForm({ ...form, text: e.target.value })} placeholder="新条目" />
+            <input type="date" value={form.due} onChange={(e) => setForm({ ...form, due: e.target.value })} />
+            <Button type="submit" disabled={!form.text.trim()}>
+              添加
+            </Button>
+          </form>
+        )}
+        {board.data && items.length === 0 && <Empty>白板是空的</Empty>}
+        {BOARD_SECTIONS.map((section) => {
+          const inSection = items.filter((i) => i.section === section);
+          if (inSection.length === 0) return null;
+          return (
+            <section key={section}>
+              <h3>{SECTION_LABELS[section]}</h3>
+              <ul className="plain">
+                {inSection.map((item) => (
+                  <BoardRow key={item.id} item={item} canWrite={canWrite} send={send} />
+                ))}
+              </ul>
+            </section>
+          );
+        })}
+      </Card>
+      {(board.data?.closed?.length ?? 0) > 0 && (
+        <Card title="最近关闭">
+          <ul className="plain">
+            {board.data?.closed?.map((i) => (
+              <li key={i.id}>
+                <span className={i.state === 'dropped' ? 'muted' : undefined}>{i.text}</span>
+                <span className="muted">
+                  {' '}
+                  · {i.state === 'done' ? '完成' : '丢弃'}
+                  {i.closedAt ? ` · ${timeAgo(i.closedAt)}` : ''}
+                  {i.outcome ? ` · ${i.outcome}` : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+      <DreamCard canWrite={canWrite} />
+    </>
+  );
+}
+
 export function Memory({ params }: { params: URLSearchParams }) {
-  const tab = (params.get('tab') ?? 'memory') as 'memory' | 'persona';
+  const tab = (params.get('tab') ?? 'memory') as 'memory' | 'board' | 'persona';
   return (
     <div className="page">
       <Tabs
         tabs={[
           ['memory', '记忆'],
+          ['board', '白板'],
           ['persona', '人格'],
         ]}
         value={tab}
         onChange={(t) => go('memory', { tab: t })}
       />
-      {tab === 'memory' ? <MemoryTab selected={params.get('file')} /> : <PersonaTab selected={params.get('file')} />}
+      {tab === 'memory' ? <MemoryTab selected={params.get('file')} /> : tab === 'board' ? <BoardTab /> : <PersonaTab selected={params.get('file')} />}
     </div>
   );
 }

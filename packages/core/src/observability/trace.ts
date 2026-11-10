@@ -48,6 +48,10 @@ export class TracingProvider implements Provider {
     return this.inner.contextWindow?.(role);
   }
 
+  cacheHorizonMs(role: ModelRole): number | undefined {
+    return this.inner.cacheHorizonMs?.(role);
+  }
+
   countTokens(req: ProviderRequest, opts: { signal: AbortSignal }): Promise<number | undefined> {
     return this.inner.countTokens ? this.inner.countTokens(req, opts) : Promise.resolve(undefined);
   }

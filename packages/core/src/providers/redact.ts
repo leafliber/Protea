@@ -102,6 +102,10 @@ export class RedactingProvider implements Provider {
     return this.inner.contextWindow?.(role);
   }
 
+  cacheHorizonMs(role: ModelRole): number | undefined {
+    return this.inner.cacheHorizonMs?.(role);
+  }
+
   async countTokens(req: ProviderRequest, opts: { signal: AbortSignal }): Promise<number | undefined> {
     if (!this.inner.countTokens) return undefined;
     return this.inner.countTokens(redactRequest(req, this.secrets).req, opts);

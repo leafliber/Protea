@@ -1,8 +1,8 @@
 # Memory index
 
-Pointers to what is where in /memories. This file is part of every request, so keep it short and change it rarely.
+A map of what is where in /memories. This file is part of every request, so it stays short; a nightly consolidation rewrites it.
 
-- journal/YYYY-MM-DD.md: what happened and what was decided, one file per day
 - notes/: one file per topic (people, projects, habits, preferences)
-- tasks.md: open commitments and things being tracked
-- handoff/: notes written when a conversation was handed off
+- journal/YYYY-MM-DD.md: what happened and what was decided, one file per day
+- raw/: archived conversations, for the original wording
+- handoff/: notes written each time the conversation was compacted

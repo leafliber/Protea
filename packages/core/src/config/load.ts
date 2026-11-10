@@ -187,14 +187,26 @@ function validate(cfg: ProteaConfig, warnings: string[]): void {
   if (h.hardTokens !== null && !posInt(h.hardTokens)) throw new Error('context.handoff.hardTokens must be a positive integer or null');
   if (h.hardTokens !== null && h.hardTokens < h.softTokens) throw new Error('context.handoff.hardTokens must not be below softTokens');
   if (!(typeof h.keepRatio === 'number' && h.keepRatio > 0 && h.keepRatio < 1)) throw new Error('context.handoff.keepRatio must be between 0 and 1');
-  if (!posInt(h.notesMaxTokens) || !posInt(h.notesInputTokens) || !posInt(h.recentInIndex)) {
-    throw new Error('context.handoff.notesMaxTokens, notesInputTokens and recentInIndex must be positive integers');
+  if (!posInt(h.notesMaxTokens) || !posInt(h.notesInputTokens)) {
+    throw new Error('context.handoff.notesMaxTokens and notesInputTokens must be positive integers');
   }
+  const idle = cfg.context.idleCompaction;
+  if (typeof idle.enabled !== 'boolean') throw new Error('context.idleCompaction.enabled must be a boolean');
+  for (const k of ['minTokens', 'earlyTokens', 'earlyAfterMs', 'coldAfterMs', 'keepTokens', 'minDroppableTokens', 'minIntervalMs'] as const) {
+    if (!posInt(idle[k])) throw new Error(`context.idleCompaction.${k} must be a positive integer`);
+  }
+  if (idle.earlyTokens < idle.minTokens) throw new Error('context.idleCompaction.earlyTokens must not be below minTokens');
   const c = cfg.context.compaction;
   if (typeof c.enabled !== 'boolean') throw new Error('context.compaction.enabled must be a boolean');
   if (!posInt(c.triggerTokens) || c.triggerTokens < 50_000) throw new Error('context.compaction.triggerTokens must be an integer of at least 50000');
   if (c.instructions !== null && typeof c.instructions !== 'string') throw new Error('context.compaction.instructions must be text or null');
   if (typeof cfg.memory.nativeTool !== 'boolean') throw new Error('memory.nativeTool must be a boolean');
+  if (!posInt(cfg.memory.board.maxItems) || !posInt(cfg.memory.board.maxChars)) throw new Error('memory.board.maxItems and maxChars must be positive integers');
+  const dream = cfg.memory.dream;
+  if (typeof dream.enabled !== 'boolean') throw new Error('memory.dream.enabled must be a boolean');
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(dream.at)) throw new Error('memory.dream.at must be a local time such as 03:30');
+  if (!posInt(dream.minIdleMs)) throw new Error('memory.dream.minIdleMs must be a positive integer');
+  if (dream.model !== 'main' && dream.model !== 'fork' && dream.model !== 'cheap') throw new Error('memory.dream.model must be main, fork or cheap');
   if (typeof cfg.persona.dir !== 'string' || cfg.persona.dir.trim() === '') throw new Error('persona.dir must be a path');
   const legacy = ['anthropic', 'echo'].filter((k) => k in (cfg.providers as unknown as Record<string, unknown>));
   if (legacy.length > 0) warnings.push(`providers.${legacy.join(' and providers.')} (environment): the old layout is ignored; use providers.profiles`);

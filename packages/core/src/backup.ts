@@ -182,6 +182,8 @@ export async function gitBackup(o: { dataDir: string; url: string; now?: Date })
     await fs.promises.rm(dest, { recursive: true, force: true });
     const src = path.join(o.dataDir, item);
     if (fs.existsSync(src)) await copyItemAsync(src, dest);
+    // Conversation archives are private and large; the full backup keeps them.
+    if (item === 'memory') await fs.promises.rm(path.join(dest, 'raw'), { recursive: true, force: true });
   }
   await git(work, ['add', '-A']);
   const changed = (await git(work, ['status', '--porcelain'])).split('\n').filter(Boolean).length;

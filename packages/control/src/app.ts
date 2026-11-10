@@ -5,6 +5,8 @@ import {
   EVENT_STATES,
   isLevel,
   isTrigger,
+  type BoardCommand,
+  type BoardResponse,
   type EventState,
   type PushEventRequest,
   type PushEventResponse,
@@ -12,11 +14,14 @@ import {
   type StreamMessage,
 } from '@protea/protocol';
 import {
+  BoardError,
   MemoryError,
   type ApprovalService,
   type AuditLog,
+  type Board,
   type Bus,
   type Cidr,
+  type DreamRunner,
   type EventStore,
   type ForkManager,
   type HandoffResult,
@@ -64,7 +69,7 @@ export interface ControlDeps extends Omit<OpsDeps, 'store' | 'audit'> {
   setSkillEnabled?: (name: string, enabled: boolean) => void;
   /** Hand the main session off now (idle) or at the start of the next batch. */
   handoff?: (reason?: string) => Promise<{ scheduled: true } | { result: HandoffResult | null }>;
-  memory?: { store: MemoryStore; index: MemoryIndex; onWrite?: (path: string) => void };
+  memory?: { store: MemoryStore; index: MemoryIndex; board?: Board; dream?: DreamRunner; onWrite?: (path: string) => void; onBoardWrite?: (receipt: string) => void };
   status: () => StatusResponse;
   ready: () => { ready: boolean; reasons: string[] };
   /** Deliver an operator message through the console plugin. */
@@ -355,6 +360,37 @@ export function createControlApp(d: ControlDeps): Hono {
     const paths = c.req.queries('paths');
     const limit = Math.min(Math.max(intParam(c, 'limit') ?? 10, 1), 50);
     return c.json({ hits: d.memory.index.search(q, { ...(paths ? { paths } : {}), limit }) });
+  });
+  app.get('/api/memory/board', (c) => {
+    const board = d.memory?.board;
+    if (!board) return c.json({ error: { code: 'not_found', message: 'no whiteboard' } }, 404);
+    const body: BoardResponse = { rev: board.rev, items: board.open(), ...(c.req.query('closed') ? { closed: board.closed() } : {}) };
+    return c.json(body);
+  });
+  app.post('/api/memory/board', async (c) => {
+    const board = d.memory?.board;
+    if (!board) return c.json({ error: { code: 'not_found', message: 'no whiteboard' } }, 404);
+    const cmd = (await c.req.json().catch(() => null)) as BoardCommand | null;
+    if (!cmd || typeof cmd !== 'object') return c.json({ error: { code: 'invalid', message: 'send a JSON board command' } }, 400);
+    try {
+      const receipt = board.apply(cmd, 'external');
+      d.memory?.onBoardWrite?.(receipt);
+      return c.json({ ok: true, receipt, rev: board.rev });
+    } catch (err) {
+      if (err instanceof BoardError) return errorJson(c, 400, 'invalid', err);
+      throw err;
+    }
+  });
+  app.get('/api/memory/dream', (c) => {
+    const dream = d.memory?.dream;
+    if (!dream) return c.json({ error: { code: 'not_found', message: 'no memory consolidation' } }, 404);
+    return c.json(dream.status());
+  });
+  app.post('/api/memory/dream', (c) => {
+    const dream = d.memory?.dream;
+    if (!dream) return c.json({ error: { code: 'not_found', message: 'no memory consolidation' } }, 404);
+    const r = dream.run({ manual: true });
+    return r.started ? c.json(r, 202) : c.json({ error: { code: 'not_started', message: r.reason } }, 409);
   });
 
   app.get('/api/sessions/forks', (c) => c.json({ forks: d.forks?.list() ?? [] }));

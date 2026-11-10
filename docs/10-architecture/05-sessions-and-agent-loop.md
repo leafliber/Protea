@@ -173,15 +173,16 @@ M2 实现：步骤 1 的"审批出口"是所有声明了 `approvals` 能力的�
 
 ## 8. 容量与交接（handoff）
 
-- 阈值（`context.handoff`，M4）：`hardTokens` 默认 `contextWindow − maxOutputTokens − max(8000, 5 % 窗口)`（Opus 5.5 为 886 000）；`softTokens` 默认 200 000（不超过 hardTokens）。
+- **闲时压缩（常态，2026-11-10）**：主会话空闲时，维护模块每 60 秒检查一次。全部满足才压缩：没有 L0–L2 待投递、未暂停、没有待续跑的批、L4 预算未耗尽、距上次尝试至少 10 分钟（失败也计入）、可丢弃的内容至少 16k token（防止只是轮换转录）。然后满足其一：对话（不含前缀）≥ 32k 且空闲时间达到 Provider 的缓存寿命（Anthropic 取 `cacheTtl`，其他默认 30 分钟），此时下一次请求本来就会未命中缓存，压缩只多花一次笔记请求；或对话 ≥ 48k 且空闲 ≥ 15 分钟。压缩期间到达 L0/L1 事件会立即放弃；笔记返回之前不写任何文件，所以放弃后对话原样不变。笔记模型失败、拒答、返回空文本或被 `max_tokens` 截断时也放弃本次。默认值见 `context.idleCompaction`。
+- 阈值（`context.handoff`，M4）：`hardTokens` 默认 `contextWindow − maxOutputTokens − max(8000, 5 % 窗口)`（Opus 5.5 为 886 000）；`softTokens` 默认 80 000（不超过 hardTokens）。
 - 估算：上一次模型响应的 usage（输入 + 缓存读写 + 输出）加上之后追加的消息的本地估算（按文字类别估 token，图片与文档按固定值）；估算到达阈值的 90 % 时改用 Provider 的 `count_tokens` 求精确值。新转录还没有 usage 时整份请求本地估算。
 - 触发：批开始时（第一次模型请求前）超过 `softTokens`；任何模型请求前超过 `hardTokens`；Provider 返回"输入过长"（Anthropic：400 `prompt is too long` 或 413），此时交接一次后重试。`POST /api/sessions/main/handoff` 请求交接：空闲时立即执行，否则等下一批开始时执行。
 - 流程（[11-memory-and-persona.md](11-memory-and-persona.md) §5 描述笔记与尾部）：
-  1. Core 切到 `handoff` 阶段；有 `onHandoff` 钩子时由它决定尾部与笔记，否则用默认策略（`cheap` 模型写 `memory/handoff/<ts>.md`）。
-  2. 新建转录文件 `main.<seq>.jsonl`：`session_start`、`handoff_from {file, notes, reason, dropped, kept}` 标记，第一条 user 消息是 `session.handoff` 事件，然后是尾部消息（**去掉 thinking 块**，保留原 `batch` 与 `cursors`）。同名文件已存在（上次交接在切换指针前崩溃）时先改名为 `.abandoned-<ms>`。
+  1. Core 切到 `handoff` 阶段；有 `onHandoff` 钩子时由它决定尾部与笔记，否则用默认策略（`cheap` 模型写 `memory/handoff/<ts>.md`）；被丢弃的对话另存到 `memory/raw/<ts>.md`。
+  2. 新建转录文件 `main.<seq>.jsonl`：`session_start`、`handoff_from {file, notes, reason, dropped, kept}` 标记，第一条 user 消息是 `session.handoff` 事件加白板与笔记（[11-memory-and-persona.md](11-memory-and-persona.md) §5），然后是尾部消息（**去掉 thinking 块**和旧的白板块，保留原 `batch` 与 `cursors`）。没有批在运行时（闲时或空闲时手动触发），在切换指针之前写入不可续跑的 `batch_ended` 标记，否则崩溃后会被当成中断的批。同名文件已存在（上次交接在切换指针前崩溃）时先改名为 `.abandoned-<ms>`。
   3. 旧文件只追加一条 `handoff {to, notes, reason}` 标记，不删除。
   4. 原子替换 `main.current`，更新 `sessions` 表，发 `session.handoff` 总线事件（SSE 主题 `handoff`）。
-  5. 系统前缀在下一次请求时按新的 `INDEX.md` 重建，当前批在新转录里继续（不是从头重投：正在运行的批完整保留在尾部）。
+  5. 系统前缀在下一次请求时按最新的 `INDEX.md` 重建，当前批在新转录里继续（不是从头重投：正在运行的批完整保留在尾部）。
 - 循环保护：交接后估算仍超过 `hardTokens`（前缀本身或正在运行的批太大）时，记 error，发一条 L0 `flush` 事件 `context.overflow` 请主人处理（缩减 Skills 目录、MCP 工具或 `INDEX.md`），批以 `context_overflow` 结束；此后在下一次成功的模型调用之前不再尝试交接、也不再发事件，批次直接以 `context_overflow` 结束。
 
 ### 8.1 前缀变化与 thinking 块（保留思考）

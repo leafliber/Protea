@@ -7,8 +7,10 @@ import {
   type Effort,
   type EventEnvelope,
   type EventInput,
+  type HandoffKind,
   type Level,
   type RunPhase,
+  type TextBlock,
   type ToolResultBlock,
 } from '@protea/protocol';
 import type { Bus } from '../bus.js';
@@ -16,6 +18,7 @@ import { mergeConsecutive, type ContextAssembler } from '../context/assembler.js
 import { prefixFingerprint } from '../context/prefix.js';
 import type { BatchRepo, UsageRepo } from '../db/repos.js';
 import { renderEventsBlock, renderStatusBlock, type StatusSnapshot } from '../events/render.js';
+import type { Board } from '../memory/board.js';
 import { MEMORY_ROOT } from '../memory/store.js';
 import type { EventStore } from '../events/store.js';
 import type { Logger } from '../observability/logger.js';
@@ -25,10 +28,11 @@ import type { RunningTurn } from '../scheduler/preemption.js';
 import type { ToolDispatcher } from '../tools/dispatcher.js';
 import { isAbortError, sleep } from '../util/abort.js';
 import { errorMessage } from '../util/errors.js';
+import { escapeStructural } from '../util/escape.js';
 import { newId } from '../util/ids.js';
 import type { Clock } from '../util/time.js';
 import { estimateMessagesTokens } from '../util/tokens.js';
-import type { ContextLimits, Handoff, HandoffResult } from './handoff.js';
+import { selectTailStart, type ContextLimits, type Handoff, type HandoffResult } from './handoff.js';
 import type { Transcript } from './transcript.js';
 
 export interface Batch {
@@ -73,6 +77,8 @@ export interface MainSessionOptions {
   pushInternal: (input: Omit<EventInput, 'ts' | 'origin'> & { ts?: string }) => { cursor?: number } | void;
   /** Capacity handoff (M4); without it the conversation grows until the provider refuses it. */
   handoff?: Handoff;
+  /** The whiteboard: shown again when someone other than this session changed it. */
+  board?: Board;
   /** Context thresholds for the main model. */
   limits?: () => ContextLimits;
   /** A transcript was retired by a handoff. */
@@ -117,11 +123,15 @@ export class MainSession {
   private transcript: Transcript;
   private handoffRequested: string | null = null;
   private idleWork: Promise<unknown> | null = null;
+  /** Cancels the idle work in progress (shutdown, or an urgent event during an idle compaction). */
+  private idleAbort: AbortController | null = null;
+  private idleSinceMs: number;
   /** The context did not fit even after a handoff; cleared by the next successful model call. */
   private overflowed = false;
 
   constructor(private readonly o: MainSessionOptions) {
     this.transcript = o.transcript;
+    this.idleSinceMs = o.clock.now();
   }
 
   /** The current main transcript (handoffs replace it). */
@@ -139,6 +149,11 @@ export class MainSession {
 
   get busy(): boolean {
     return this.current !== null || this.idleWork !== null;
+  }
+
+  /** When the last batch ended (the start of the process before any batch). */
+  get idleSince(): number {
+    return this.idleSinceMs;
   }
 
   get currentBatchId(): string | null {
@@ -204,6 +219,7 @@ export class MainSession {
       })
       .finally(() => {
         this.current = null;
+        this.idleSinceMs = this.o.clock.now();
         this.setPhase('idle');
         this.feed?.onIdle();
       });
@@ -214,7 +230,10 @@ export class MainSession {
   async drain(timeoutMs: number): Promise<boolean> {
     const cur = this.current;
     if (!cur) {
-      if (this.idleWork) await this.idleWork.catch(() => undefined);
+      if (this.idleWork) {
+        this.idleAbort?.abort('shutdown');
+        await this.idleWork.catch(() => undefined);
+      }
       return true;
     }
     const finished = await Promise.race([cur.done.then(() => true), sleep(timeoutMs).then(() => false)]);
@@ -235,9 +254,19 @@ export class MainSession {
   }
 
   /** Append events (and the status snapshot) to the transcript, then mark them delivered. */
-  private eventBlocks(batch: Batch, events: EventEnvelope[]): ContentBlock[] {
+  private eventBlocks(batch: Batch, events: EventEnvelope[], extra?: TextBlock): ContentBlock[] {
     if (events.length === 0) return [];
-    return [renderEventsBlock(events, batch.id), renderStatusBlock(this.o.status())];
+    return [renderEventsBlock(events, batch.id), ...(extra ? [extra] : []), renderStatusBlock(this.o.status())];
+  }
+
+  /** The whiteboard, when someone other than this session changed it since this conversation last saw it. */
+  private boardUpdate(): { block: TextBlock; rev: number } | null {
+    const board = this.o.board;
+    if (!board) return null;
+    const rev = board.externalRev;
+    // Not "greater than": restoring a backup can move the revision back.
+    if (rev === this.transcript.boardRev) return null;
+    return { block: { type: 'text', text: board.render() }, rev };
   }
 
   private settleDelivered(batch: Batch, events: EventEnvelope[]): void {
@@ -307,11 +336,13 @@ export class MainSession {
     this.setPhase('delivering', { batchId: batch.id });
 
     if (batch.events.length > 0) {
+      const board = this.boardUpdate();
       this.transcript.appendMessage({
         role: 'user',
-        content: this.eventBlocks(batch, batch.events),
+        content: this.eventBlocks(batch, batch.events, board?.block),
         batch: batch.id,
         cursors: batch.events.map((e) => e.cursor),
+        ...(board ? { boardRev: board.rev } : {}),
       });
       this.settleDelivered(batch, batch.events);
     }
@@ -513,7 +544,8 @@ export class MainSession {
     // A requested handoff, or one after the provider refused the input (our estimate was too low),
     // carries over as little as possible: the running batch.
     const minimal = requested !== null || at === 'overflow';
-    const r = await this.handOff(reason, est, minimal ? { ...limits, keep: 0 } : limits, this.transcript.batchStart(cur.batch.id), cur.batch.id, signal);
+    const kind: HandoffKind = requested !== null ? 'requested' : at === 'overflow' ? 'overflow' : 'capacity';
+    const r = await this.handOff(reason, est, minimal ? { ...limits, keep: 0 } : limits, this.transcript.batchStart(cur.batch.id), cur.batch.id, signal, { kind, level: cur.batch.level });
     if (r) cur.handoffs++;
     const after = r ? await this.estimate(cur.batch.level, limits.hard, signal) : est;
     if (after > limits.hard || (at === 'overflow' && !r)) return this.overflow(after, limits);
@@ -541,6 +573,7 @@ export class MainSession {
     mustKeepFrom: number,
     batchId: string | null,
     signal: AbortSignal,
+    how: { kind: HandoffKind; level: Level; strict?: boolean; seal?: boolean },
   ): Promise<HandoffResult | null> {
     const o = this.o;
     const h = o.handoff as Handoff;
@@ -550,25 +583,92 @@ export class MainSession {
       estimatedTokens: est,
       reason,
       signal,
-      notice: (info) => this.handoffNotice(info, reason, batchId),
+      kind: how.kind,
+      level: how.level,
+      ...(how.strict ? { strict: true } : {}),
+      ...(how.seal ? { seal: true } : {}),
+      notice: (info) => this.handoffNotice(info, reason, batchId, how.kind),
     });
     if (!r) return null;
     const old = this.transcript;
     this.transcript = r.transcript;
     old.close();
-    o.bus.emit('session.handoff', { sessionId: SESSION_ID, from: old.file, to: r.transcript.file, notes: r.notesPath, dropped: r.dropped, kept: r.kept });
+    o.bus.emit('session.handoff', { sessionId: SESSION_ID, from: old.file, to: r.transcript.file, notes: r.notesPath, dropped: r.dropped, kept: r.kept, kind: r.kind });
     o.onHandoff?.({ ...r, from: old.file });
     return r;
   }
 
-  /** The first message of the new conversation: a session.handoff event pointing at the notes. */
-  private handoffNotice(info: { notesPath: string; dropped: number; kept: number }, reason: string, batchId: string | null): { content: ContentBlock[]; cursors?: number[]; batch?: string } {
-    const text = `The conversation was handed off (${reason}). ${info.dropped} earlier message(s) are summarised in ${MEMORY_ROOT}/${info.notesPath}; the ${info.kept} most recent message(s) follow unchanged. Read the notes before relying on anything from before the handoff.`;
-    const pushed = this.o.pushInternal({ type: 'session.handoff', level: 4, trigger: 'store', text, correlation: info.notesPath });
+  /**
+   * The first message of the new conversation: a session.handoff event with the facts, then
+   * the whiteboard and the notes. The notes are a model's summary and may quote outside
+   * content, so they stay out of the internal event.
+   */
+  private handoffNotice(
+    info: { notesPath: string; notes: string | null; dropped: number; kept: number },
+    reason: string,
+    batchId: string | null,
+    kind: HandoffKind,
+  ): { content: ContentBlock[]; cursors?: number[]; batch?: string; boardRev?: number } {
+    const text = `The conversation was compacted (${reason}). ${info.dropped} earlier message(s) are summarised in ${MEMORY_ROOT}/${info.notesPath}; the ${info.kept} most recent message(s) follow unchanged.${info.notes === null ? ' Read the notes before relying on anything from before this point.' : ''}`;
+    const pushed = this.o.pushInternal({ type: 'session.handoff', level: 4, trigger: 'store', text, correlation: info.notesPath, meta: { kind } });
     const cursor = pushed && typeof pushed.cursor === 'number' ? pushed.cursor : undefined;
     const env = cursor !== undefined ? this.o.store.get(cursor) : undefined;
     const block = env ? renderEventsBlock([env], batchId ?? 'handoff') : { type: 'text', text };
-    return { content: [block], ...(cursor !== undefined && env ? { cursors: [cursor] } : {}), ...(batchId ? { batch: batchId } : {}) };
+    const content: ContentBlock[] = [block];
+    const board = this.o.board;
+    if (board && board.open().length > 0) content.push({ type: 'text', text: board.render() });
+    if (info.notes !== null) content.push({ type: 'text', text: `<handoff_notes path="${MEMORY_ROOT}/${info.notesPath}">\n${escapeStructural(info.notes)}\n</handoff_notes>` });
+    return {
+      content,
+      ...(cursor !== undefined && env ? { cursors: [cursor] } : {}),
+      ...(batchId ? { batch: batchId } : {}),
+      ...(board ? { boardRev: board.externalRev } : {}),
+    };
+  }
+
+  /** How much of the conversation an idle compaction would act on. Local estimate only: this must not touch the transcript. */
+  compactionStats(keepTokens: number): { conversationTokens: number; droppableTokens: number } {
+    const messages = this.transcript.messages;
+    const start = selectTailStart(messages, messages.length, keepTokens);
+    return {
+      conversationTokens: estimateMessagesTokens(messages),
+      droppableTokens: start === 0 ? 0 : estimateMessagesTokens(messages.slice(0, start)),
+    };
+  }
+
+  /**
+   * Compact while nothing is running. Nothing is written until the notes exist, so
+   * `abortIdleWork` or a failed notes request leaves the conversation as it was. Returns the
+   * result, or null when it did not happen.
+   */
+  async compactWhileIdle(reason: string, keepTokens: number): Promise<HandoffResult | null> {
+    const o = this.o;
+    if (!o.handoff || !o.limits || this.current || this.idleWork) return null;
+    const limits = o.limits();
+    const ac = new AbortController();
+    const work = (async (): Promise<HandoffResult | null> => {
+      this.setPhase('handoff');
+      const est = estimateMessagesTokens(this.transcript.messages);
+      return this.handOff(reason, est, { ...limits, keep: keepTokens }, this.transcript.length, null, ac.signal, { kind: 'idle', level: 4, strict: true, seal: true });
+    })();
+    this.idleWork = work;
+    this.idleAbort = ac;
+    try {
+      return await work;
+    } catch (err) {
+      if (ac.signal.aborted || isAbortError(err)) return null;
+      throw err;
+    } finally {
+      this.idleWork = null;
+      this.idleAbort = null;
+      this.setPhase('idle');
+      this.feed?.onIdle();
+    }
+  }
+
+  /** Give up the idle work in progress, if any. */
+  abortIdleWork(): void {
+    this.idleAbort?.abort('preempted');
   }
 
   /**
@@ -586,16 +686,15 @@ export class MainSession {
     const work = (async (): Promise<HandoffResult | null> => {
       this.setPhase('handoff');
       const est = await this.estimate(2, limits.hard, ac.signal);
-      const r = await this.handOff(reason, est, { ...limits, keep: 0 }, this.transcript.length, null, ac.signal);
-      // Nothing waits for a reply: do not resume the notice as an interrupted batch after a restart.
-      if (r && this.transcript.lastMessage()?.role === 'user') this.transcript.appendMark('batch_ended', { reason: 'handoff', rounds: 0, resumable: false });
-      return r;
+      return this.handOff(reason, est, { ...limits, keep: 0 }, this.transcript.length, null, ac.signal, { kind: 'requested', level: 2, seal: true });
     })();
     this.idleWork = work;
+    this.idleAbort = ac;
     try {
       return { result: await work };
     } finally {
       this.idleWork = null;
+      this.idleAbort = null;
       this.setPhase('idle');
       this.feed?.onIdle();
     }
