@@ -35,11 +35,25 @@ export interface PluginManifest {
   envPrompt?: string;
   /** Directory of skills the plugin ships (default `skills/`), relative to the plugin. */
   skills?: string;
+  /** Present on a chat platform; the plugin must also advertise the `chat` capability and answer `chat/send`. */
+  chat?: ChatPlatformDecl;
   healthcheck?: { intervalMs?: number; timeoutMs?: number };
   resources?: { maxMemoryMb?: number; maxCpu?: number; maxFds?: number };
   homepage?: string;
   repository?: string;
   license?: string;
+}
+
+/** Formatting a chat platform shows. */
+export const CHAT_MARKDOWN = ['none', 'basic', 'full'] as const;
+export type ChatMarkdown = (typeof CHAT_MARKDOWN)[number];
+
+/** A connector that is a chat platform: `chat_send` can reach the owner through it (docs/30-specs/02-plugin-manifest.md). */
+export interface ChatPlatformDecl {
+  displayName?: string;
+  markdown?: ChatMarkdown;
+  /** Longest single message the platform shows; longer text is the plugin's to split. */
+  maxChars?: number;
 }
 
 export interface ToolDecl {
@@ -77,6 +91,8 @@ export interface PluginCapabilities {
   shutdownVerify?: boolean;
   /** Can deliver approval requests to the owner (`approvals/request`). */
   approvals?: boolean;
+  /** Can send the owner a chat message (`chat/send`). */
+  chat?: boolean;
   /** Webhook names served under `/hooks/<name>` (`http/request`). */
   hooks?: string[];
 }
@@ -139,6 +155,23 @@ export interface ApprovalRequestParams {
   expiresAt: string;
 }
 
+/** `chat/send`: deliver this to the owner on the plugin's platform. */
+export interface ChatSendParams {
+  text: string;
+  /** Platform message id to reply to (the `correlation` of the owner's `chat.message`). */
+  replyTo?: string;
+  sessionId?: string;
+  batchId?: string;
+}
+
+export interface ChatSendResult {
+  ok: boolean;
+  /** Platform ids of what was sent (a long text may take several messages). */
+  messageIds?: string[];
+  /** ok: false: why, in words the model can act on. */
+  error?: string;
+}
+
 export interface HttpRequestParams {
   hook: string;
   method: string;
@@ -195,6 +228,7 @@ export const HOST_TO_PLUGIN = {
   health: 'health',
   shutdownVerify: 'shutdown/verify',
   approvalsRequest: 'approvals/request',
+  chatSend: 'chat/send',
   httpRequest: 'http/request',
 } as const;
 

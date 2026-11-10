@@ -5,6 +5,8 @@ import {
   PLUGIN_TO_HOST,
   RpcPeer,
   type ApprovalDecideParams,
+  type ChatSendParams,
+  type ChatSendResult,
   type EventInput,
   type HttpRequestParams,
   type HttpResponse,
@@ -142,6 +144,11 @@ export class FakeHost {
       input,
       context: { sessionId: 'main', batchId: 'b_test', batchLevel: 1 },
     });
+  }
+
+  /** What `chat_send` would ask of this platform. */
+  chatSend(req: ChatSendParams): Promise<ChatSendResult> {
+    return this.host.request<ChatSendResult>(HOST_TO_PLUGIN.chatSend, req);
   }
 
   settled(events: SettledParams['events']): void {

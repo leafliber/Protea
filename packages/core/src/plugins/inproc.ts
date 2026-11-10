@@ -1,4 +1,4 @@
-import type { ApprovalRequestParams, EventInput, Level, SenderRole, TerminalOutcome, Trigger } from '@protea/protocol';
+import type { ApprovalRequestParams, ChatPlatformDecl, ChatSendParams, ChatSendResult, EventInput, Level, SenderRole, TerminalOutcome, Trigger } from '@protea/protocol';
 import type { KvNamespace } from '../db/repos.js';
 import type { PushResult } from '../events/gateway.js';
 import type { Logger } from '../observability/logger.js';
@@ -17,7 +17,7 @@ export interface PluginContext {
   readonly kv: KvNamespace;
   readonly clock: Clock;
   pushEvent(input: EventInput): PushResult;
-  /** To the operator (stream subscribers); stored when the host keeps an output log. Pass the tool call's batch so the console can tie a reply to the message it answers. */
+  /** To the operator (stream subscribers); stored when the host keeps an output log. Pass the tool call's batch so a notice can be tied to the batch it came from. */
   emitOutput(o: { channel?: string; text: string; batchId?: string; sessionId?: string }): void;
   resolveSender(senderKey: string): SenderRole;
 }
@@ -39,6 +39,8 @@ export interface InprocPlugin {
   start(ctx: PluginContext): Promise<void> | void;
   stop(): Promise<void> | void;
   tools?(): ToolSpec<never>[];
+  /** Makes the plugin a chat platform: `chat_send` reaches the owner through `send`. */
+  chat?: ChatPlatformDecl & { send(req: ChatSendParams): Promise<ChatSendResult> | ChatSendResult };
   envPromptVars?(): Record<string, unknown> | null;
   onEventsSettled?(events: Array<{ cursor: number }>, outcome: TerminalOutcome): void;
   /** Deliver an approval request to the owner through this channel. */

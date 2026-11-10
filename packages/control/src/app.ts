@@ -7,9 +7,11 @@ import {
   isTrigger,
   type BoardCommand,
   type BoardResponse,
+  type ChatMessageRequest,
   type EventState,
   type PushEventRequest,
   type PushEventResponse,
+  type SessionContextResponse,
   type StatusResponse,
   type StreamMessage,
 } from '@protea/protocol';
@@ -72,8 +74,12 @@ export interface ControlDeps extends Omit<OpsDeps, 'store' | 'audit'> {
   memory?: { store: MemoryStore; index: MemoryIndex; board?: Board; dream?: DreamRunner; onWrite?: (path: string) => void; onBoardWrite?: (receipt: string) => void };
   status: () => StatusResponse;
   ready: () => { ready: boolean; reasons: string[] };
-  /** Deliver an operator message through the console plugin. */
+  /** Deliver an operator injection through the console plugin. */
   pushConsole: (req: PushEventRequest, senderKey: string) => PushResult;
+  /** Deliver the owner's message through the web chat. */
+  pushChat?: (req: ChatMessageRequest, senderKey: string) => PushResult;
+  /** What the next model request of a session would carry; undefined for an unknown session. */
+  sessionContext?: (id: string, page: { from?: number; limit?: number }) => SessionContextResponse | undefined;
   keepAliveMs?: number;
   /** control.allowCidrs, parsed (empty: any address). */
   allowCidrs?: () => readonly Cidr[];
@@ -263,12 +269,31 @@ export function createControlApp(d: ControlDeps): Hono {
     return c.json({ events, nextCursor: order === 'desc' && events.length === limit && last ? last.cursor : null });
   });
 
-  // The console conversation: console messages and replies, newest page first, items oldest first.
+  // The owner writes in the web chat.
+  app.post('/api/chat/messages', async (c) => {
+    if (!d.pushChat) return c.json({ error: { code: 'not_found', message: 'the web chat is not available' } }, 404);
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: { code: 'bad_request', message: 'body must be JSON' } }, 400);
+    }
+    const b = body as Partial<ChatMessageRequest>;
+    if (typeof b.text !== 'string' || b.text.length === 0) return c.json({ error: { code: 'bad_request', message: 'text is required' } }, 400);
+    if (b.trigger !== undefined && b.trigger !== 'flush' && b.trigger !== 'interrupt') return c.json({ error: { code: 'bad_request', message: 'trigger must be flush or interrupt' } }, 400);
+    const r = d.pushChat({ text: b.text, ...(b.trigger ? { trigger: b.trigger } : {}) }, actorOf(principal(c)));
+    if (!r.ok || r.cursor === undefined) return c.json({ error: { code: 'rejected', message: 'message rejected', details: r.errors ?? [] } }, 422);
+    const res: PushEventResponse = { cursor: r.cursor, effectiveLevel: r.effectiveLevel ?? 1, effectiveTrigger: r.effectiveTrigger ?? 'flush', deduped: r.deduped ?? false, warnings: r.warnings };
+    return c.json(res, 201);
+  });
+
+  // A conversation (default: the web chat; `platform=all` for every platform), newest page first, items oldest first.
   app.get('/api/chat', (c) => {
     if (!d.chat) return c.json({ items: [], batches: [], before: null });
     const before = c.req.query('before');
     const limit = intParam(c, 'limit');
-    return c.json(d.chat.chat({ ...(before ? { before } : {}), ...(limit !== undefined ? { limit } : {}) }));
+    const platform = c.req.query('platform');
+    return c.json(d.chat.chat({ ...(before ? { before } : {}), ...(limit !== undefined ? { limit } : {}), ...(platform ? { platform } : {}) }));
   });
 
   app.get('/api/chat/batches', (c) => {
@@ -300,6 +325,13 @@ export function createControlApp(d: ControlDeps): Hono {
         ),
     }));
     return c.json({ total: all.length, from, messages });
+  });
+
+  app.get('/api/sessions/:id/context', (c) => {
+    const from = intParam(c, 'from');
+    const limit = intParam(c, 'limit');
+    const r = d.sessionContext?.(c.req.param('id'), { ...(from !== undefined ? { from } : {}), ...(limit !== undefined ? { limit } : {}) });
+    return r ? c.json(r) : c.json({ error: { code: 'not_found', message: 'no such session' } }, 404);
   });
 
   app.get('/api/sessions', (c) => {
@@ -574,6 +606,7 @@ export function createControlApp(d: ControlDeps): Hono {
 
   app.get('/api/stream', (c) => {
     const since = intParam(c, 'since');
+    const trace = c.req.query('trace') === '1';
     return streamSSE(c, async (stream) => {
       const queue: StreamMessage[] = [];
       let wake: (() => void) | null = null;
@@ -581,7 +614,7 @@ export function createControlApp(d: ControlDeps): Hono {
         queue.push(m);
         wake?.();
       };
-      const unsub = subscribeStream(d.bus, (m) => push(m as StreamMessage));
+      const unsub = subscribeStream(d.bus, (m) => push(m as StreamMessage), { trace });
       stream.onAbort(() => {
         unsub();
         wake?.();

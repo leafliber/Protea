@@ -7,10 +7,14 @@ import type {
   HandoffKind,
   Level,
   McpServerStatus,
+  ModelDeltaTrace,
+  ModelRequestTrace,
+  ModelResponseTrace,
   PluginStatus,
   RunPhase,
   SchedulerAction,
   TerminalOutcome,
+  ToolCallTrace,
 } from '@protea/protocol';
 import type { UsageRecord } from './db/repos.js';
 
@@ -34,7 +38,13 @@ export interface BusTopics {
   'plugin.output': { plugin: string; channel?: string; text: string; at: string; id?: number; batchId?: string };
   'usage.recorded': UsageRecord;
   /** A model request is about to be sent (the latency metric measures up to here). */
-  'model.request': { batchId: string; sessionId: string; attempt: number };
+  'model.request': ModelRequestTrace;
+  /** Part of the reply as it streams (the console's run stream); never stored. */
+  'model.delta': ModelDeltaTrace;
+  /** A finished model reply, after it reached the transcript. */
+  'model.response': ModelResponseTrace;
+  /** A tool call started or ended. */
+  'tool.call': ToolCallTrace;
   'scheduler.action': SchedulerAction;
   'fork.changed': ForkInfo;
   'plugin.changed': PluginStatus;

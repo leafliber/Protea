@@ -108,7 +108,7 @@ describe('M6: outbound rate limit', () => {
   it('refuses connector calls past pluginHost.outboundPerMinute within one minute', async () => {
     const provider = new ScriptedProvider([
       (req) => {
-        if (lastText(req).includes('spam me')) return reply([toolCall('con_send', { text: '1' }), toolCall('con_send', { text: '2' }), toolCall('con_send', { text: '3' })]);
+        if (lastText(req).includes('spam me')) return reply([toolCall('chat_send', { platform: 'webchat', text: '1' }), toolCall('chat_send', { platform: 'webchat', text: '2' }), toolCall('chat_send', { platform: 'webchat', text: '3' })]);
         return reply([toolCall('idle', {})]);
       },
     ]);
@@ -169,7 +169,7 @@ describe('M6: backup, restore and replay', () => {
       (req) => {
         if (req.role !== 'main') return textReply('notes');
         const last = lastText(req);
-        if (last.includes('<events')) return reply([toolCall('con_send', { text: `answer to ${/remember (\w+)/.exec(last)?.[1] ?? 'it'}` })]);
+        if (last.includes('<events')) return reply([toolCall('chat_send', { platform: 'webchat', text: `answer to ${/remember (\w+)/.exec(last)?.[1] ?? 'it'}` })]);
         return reply([toolCall('idle', {})]);
       },
     ]);
@@ -234,7 +234,7 @@ describe('M6: backup, restore and replay', () => {
     expect(report.batches).toBeGreaterThanOrEqual(2);
     expect(report.modelCalls).toBe(calls.length);
     expect(report.remaining).toEqual({ main: 0 });
-    expect(report.tools.recorded).toBe(4); // con_send and idle, twice each
+    expect(report.tools.recorded).toBe(4); // chat_send and idle, twice each
     expect(report.tools.stubbed).toBe(0);
     const replayed = fs.readFileSync(report.transcript, 'utf8');
     expect(replayed).toContain('please remember alpha');

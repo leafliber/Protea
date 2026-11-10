@@ -26,7 +26,7 @@ Skills 与 MCP 的分工：MCP 提供**能力**（能做什么），Skills 提�
 ---
 name: weekly-report
 description: 每周一生成上周工作周报：汇总 GitHub 活动、日历与记忆中的笔记，输出 Markdown 并发给主人。当主人要求"周报"或例程 weekly-report 触发时使用。
-allowed-tools: mcp__github__*, memory_read, tg_send
+allowed-tools: mcp__github__*, memory_read, chat_send
 metadata:
   level: 3
   version: 1.2

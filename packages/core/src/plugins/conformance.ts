@@ -25,6 +25,8 @@ export interface ConformanceProbe {
   cancel?: { tool: string; input: unknown };
   /** Minimum number of events the calls should have pushed. */
   events?: number;
+  /** Chat platforms: send this through `chat/send` and expect it to succeed (a real send, so it is opt-in). */
+  chat?: { text: string };
 }
 
 export interface ConformanceCheck {
@@ -184,6 +186,14 @@ export async function checkConformance(dir: string, opts: ConformanceOptions = {
       const r = await proc.callTool(c.tool, c.input, ctx, new AbortController().signal).catch((err: Error) => ({ text: err.message, failed: true }));
       const ok = !r.failed && (c.expect === undefined || r.text.includes(c.expect));
       add(`${c.tool} ${JSON.stringify(c.input)}${c.expect ? ` → "${c.expect}"` : ''}`, ok, ok ? undefined : JSON.stringify(r));
+    }
+
+    const declaresChat = m.chat !== undefined;
+    const advertisesChat = started.init.capabilities.chat === true;
+    if (declaresChat || advertisesChat) add('the manifest block "chat" and the "chat" capability go together', declaresChat && advertisesChat, `manifest: ${declaresChat}, capability: ${advertisesChat}`);
+    if (probe.chat) {
+      const r = await proc.chatSend({ text: probe.chat.text }).catch((err: Error) => ({ ok: false, error: err.message }));
+      add('chat/send delivers a message', r.ok === true, r.ok ? undefined : JSON.stringify(r));
     }
 
     if (probe.cancel) {

@@ -12,6 +12,9 @@
       "@protea/control": [
         "./packages/control/src/index.ts"
       ],
+      "@protea/plugin-webchat": [
+        "./plugins/webchat/src/index.ts"
+      ],
       "@protea/plugin-console": [
         "./plugins/console/src/index.ts"
       ],

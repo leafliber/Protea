@@ -12,7 +12,7 @@
 | 指标 | prom-client，`/metrics` | Prometheus / 任意抓取器 |
 | 追踪（可选） | OpenTelemetry（Anthropic SDK 的 OTel 集成 + 自定义 span） | OTLP 端点（配置后开启；未实现） |
 
-此外，**事件流本身**是最重要的可观测面：所有调度决策、插件生命周期、预算动作都是 `internal` 事件，在控制台事件流中与业务事件并列可见。
+此外，**事件流本身**是最重要的可观测面：所有调度决策、插件生命周期、预算动作都是 `internal` 事件，在控制台运行流中与业务事件并列可见。运行流还实时显示每次模型调用的上下文摘要、思考与正文、工具调用与结果（[17-chat-and-console.md](17-chat-and-console.md) §5）。
 
 `observability.logLevel` 只决定终端输出的级别（`silent` 关掉终端）；运行目录的文件与内存缓冲总是收到 debug 及以上。
 

@@ -21,6 +21,7 @@ import {
   type ToolDecl,
 } from '@protea/protocol';
 import type { Bus } from '../bus.js';
+import type { ChatHub } from '../chat/hub.js';
 import type { PluginSettings } from '../config/types.js';
 import type { SecretStore } from '../config/secrets.js';
 import { kvNamespace, type KvRepo } from '../db/repos.js';
@@ -67,8 +68,10 @@ export interface PluginHostOptions {
   onEnabledChanged?: (id: string, enabled: boolean) => void;
   /** A data-volume plugin was uninstalled: drop its configuration group. */
   onUninstalled?: (id: string) => void;
-  /** Keeps what plugins send to the operator (the console conversation). */
+  /** Keeps what plugins send to the operator (notices in the conversation). */
   outputs?: OutputLog;
+  /** Chat platforms register here when they start; `chat_send` routes to them. */
+  chat?: ChatHub;
 }
 
 interface Entry {
@@ -558,6 +561,7 @@ export class PluginHost {
     } catch (err) {
       const reason = errorMessage(err);
       this.o.tools.unregisterOwner(e.id, `plugin ${e.id} failed to start`);
+      this.o.chat?.unregister(e.id, `plugin ${e.id} failed to start`);
       if (supervised) {
         this.onCrash(e, `restart failed: ${reason}`);
         return;
@@ -586,6 +590,25 @@ export class PluginHost {
       await p.stop();
       throw err;
     }
+    if (p.chat) this.o.chat?.register({ ...p.chat, id: p.id, send: (req) => (p.chat as NonNullable<InprocPlugin['chat']>).send(req) });
+  }
+
+  /** An out-of-process platform declares itself twice, in the manifest and at initialize. */
+  private registerChat(e: Entry, log: Logger): void {
+    const decl = e.loaded?.manifest?.chat;
+    if (!decl && !e.capabilities.chat) return;
+    if (!decl || !e.capabilities.chat) {
+      log.warn('a chat platform needs both the manifest block "chat" and the "chat" capability; not registered');
+      return;
+    }
+    this.o.chat?.register({
+      ...decl,
+      id: e.id,
+      send: (req) => {
+        if (!e.proc || e.state !== 'running') return { ok: false, error: `plugin ${e.id} is not running` };
+        return e.proc.chatSend(req);
+      },
+    });
   }
 
   private async startProcess(e: Entry): Promise<void> {
@@ -664,7 +687,7 @@ export class PluginHost {
         hostDataDir: this.o.dataDir,
         timezone: this.o.timezone,
         language: this.o.language ?? 'en',
-        hostCapabilities: ['events', 'kv', 'owner', 'approvals', 'hooks'],
+        hostCapabilities: ['events', 'kv', 'owner', 'approvals', 'hooks', 'chat'],
         modelFacts: { mainModel: this.o.mainModel?.() ?? '' },
         levelCap: caps.maxLevel,
         allowedTriggers: allowedTriggers(m),
@@ -691,6 +714,7 @@ export class PluginHost {
       e.proc = null;
       throw err;
     }
+    this.registerChat(e, log);
     await this.refreshEnvVars(e);
   }
 
@@ -712,6 +736,7 @@ export class PluginHost {
   private onCrash(e: Entry, reason: string): void {
     const ranMs = this.o.clock.now() - e.startedAt;
     this.o.tools.unregisterOwner(e.id, `plugin ${e.id} crashed`);
+    this.o.chat?.unregister(e.id, `plugin ${e.id} crashed`);
     e.proc = null;
     if (ranMs >= this.settings.stableAfterMs) e.crashes = 0;
     e.crashes++;
@@ -761,6 +786,7 @@ export class PluginHost {
     e.state = 'draining';
     this.emit(e);
     this.o.tools.unregisterOwner(e.id, `plugin ${e.id} is ${reason === 'disabled' ? 'disabled' : `stopped (${reason})`}`);
+    this.o.chat?.unregister(e.id, `plugin ${e.id} is ${reason === 'disabled' ? 'disabled' : `stopped (${reason})`}`);
     if (e.inproc) {
       try {
         await e.inproc.stop();

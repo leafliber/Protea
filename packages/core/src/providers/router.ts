@@ -1,7 +1,7 @@
 import { MODEL_ROLES, type Effort, type Level, type ModelRole } from '@protea/protocol';
 import type { ProviderProfile, ProvidersSettings } from '../config/types.js';
 import { profileIdFor, profileProblem } from './profiles.js';
-import { ProviderError, type Provider, type ProviderHealth, type ProviderRequest, type ProviderResponse } from './types.js';
+import { ProviderError, type GenerateOptions, type Provider, type ProviderHealth, type ProviderRequest, type ProviderResponse } from './types.js';
 
 const NOT_CONFIGURED = 'no model provider is configured: add one in the console (模型), with "protea providers set", or under providers.profiles';
 
@@ -125,7 +125,7 @@ export class ProviderRouter implements Provider {
     return this.route(role)?.profile.maxOutputTokens ?? 64_000;
   }
 
-  async generate(req: ProviderRequest, opts: { signal: AbortSignal; onText?: (delta: string) => void }): Promise<ProviderResponse> {
+  async generate(req: ProviderRequest, opts: GenerateOptions): Promise<ProviderResponse> {
     const r = this.route(req.role);
     if (!r) throw new ProviderError('config', NOT_CONFIGURED);
     const problem = profileProblem(r.profile);

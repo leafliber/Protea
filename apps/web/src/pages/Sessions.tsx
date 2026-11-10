@@ -1,44 +1,12 @@
 import { useState, type FormEvent } from 'react';
-import type { BatchInfo, EventEnvelope, ForkInfo, StatusResponse, TranscriptMessage, UsageInfo } from '@protea/protocol';
+import type { BatchInfo, ContentBlock, EventEnvelope, ForkInfo, StatusResponse, TranscriptMessage, UsageInfo } from '@protea/protocol';
 import { enc, post, qs, useAction, useApi } from '../api';
 import { Button, Card, Drawer, Empty, ErrorText, Field, KV, LevelBadge, Ring, StateBadge, Tabs, compact, dateTime, oneLine, timeAgo, usd } from '../components/ui';
+import { BlockView, ContextView } from '../components/Trace';
 import { useReloadOn } from '../live';
 import { go, useSession } from '../session';
 
-type Block = Record<string, unknown> & { type: string };
-
-function BlockView({ b, showThinking }: { b: Block; showThinking: boolean }) {
-  switch (b.type) {
-    case 'text':
-      return <div className="msg-text">{String(b['text'])}</div>;
-    case 'thinking':
-      return showThinking ? <details className="msg-thinking"><summary>思考</summary><div>{String(b['thinking'] ?? '')}</div></details> : null;
-    case 'redacted_thinking':
-      return showThinking ? <div className="muted small">[已加密的思考]</div> : null;
-    case 'tool_use':
-    case 'server_tool_use':
-      return (
-        <details className="msg-tool">
-          <summary>
-            → <code>{String(b['name'])}</code> {oneLine(JSON.stringify(b['input'] ?? {}), 100)}
-          </summary>
-          <pre>{JSON.stringify(b['input'], null, 2)}</pre>
-        </details>
-      );
-    case 'tool_result': {
-      const content = b['content'];
-      const text = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
-      return (
-        <details className={`msg-tool ${b['is_error'] ? 'msg-error' : ''}`}>
-          <summary>← {oneLine(text, 120)}</summary>
-          <pre>{text}</pre>
-        </details>
-      );
-    }
-    default:
-      return <div className="muted small">[{b.type}]</div>;
-  }
-}
+type Block = ContentBlock;
 
 function TranscriptView({ id }: { id: string }) {
   const [showThinking, setShowThinking] = useState(false);
@@ -102,6 +70,9 @@ function BatchDetail({ id, onClose }: { id: string; onClose: () => void }) {
               </li>
             ))}
           </ul>
+          <div className="row">
+            <a href={`#/console/events?batch=${enc(id)}`}>查看这一批的完整过程</a>
+          </div>
           <h3>模型调用</h3>
           <table className="table">
             <thead>
@@ -282,7 +253,7 @@ function Forks({ selected }: { selected: string | null }) {
 
 export function Sessions({ status, params }: { status: StatusResponse | undefined; params: URLSearchParams }) {
   const { canWrite } = useSession();
-  const tab = (params.get('tab') ?? 'main') as 'main' | 'batches' | 'forks';
+  const tab = (params.get('tab') ?? 'main') as 'main' | 'context' | 'batches' | 'forks';
   const act = useAction();
   const [note, setNote] = useState<string | null>(null);
   return (
@@ -290,6 +261,7 @@ export function Sessions({ status, params }: { status: StatusResponse | undefine
       <Tabs
         tabs={[
           ['main', '主会话'],
+          ...(canWrite ? ([['context', '上下文']] as Array<['context', string]>) : []),
           ['batches', '批'],
           ['forks', 'Fork'],
         ]}
@@ -343,6 +315,7 @@ export function Sessions({ status, params }: { status: StatusResponse | undefine
           </Card>
         </>
       )}
+      {tab === 'context' && canWrite && <ContextView id="main" />}
       {tab === 'batches' && <Batches selected={params.get('batch')} />}
       {tab === 'forks' && <Forks selected={params.get('fork')} />}
     </div>

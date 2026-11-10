@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import type { ContentBlock, ModelRole, TranscriptMessage } from '@protea/protocol';
 import { THINKING_TYPES } from '../context/prefix.js';
-import type { Provider, ProviderHealth, ProviderRequest, ProviderResponse } from './types.js';
+import type { GenerateOptions, Provider, ProviderHealth, ProviderRequest, ProviderResponse } from './types.js';
 
 export interface SecretValues {
   /** Every known secret value, longest first. */
@@ -63,6 +63,12 @@ export function redactRequest(req: ProviderRequest, secrets: SecretValues): { re
   return { req: out, hits: [...s.hits].sort() };
 }
 
+/** Replace every known secret value in the strings of a JSON value (what the operator views show). */
+export function redactValues<T>(value: T, secrets: SecretValues): T {
+  const values = secrets.knownValues();
+  return values.length === 0 ? value : (new Scrubber(values).json(value) as T);
+}
+
 /** Changes whenever the redacted secret set changes (part of the thinking-prefix fingerprint). */
 export function secretsEpoch(secrets: SecretValues): string {
   const h = crypto.createHash('sha256');
@@ -111,7 +117,7 @@ export class RedactingProvider implements Provider {
     return this.inner.countTokens(redactRequest(req, this.secrets).req, opts);
   }
 
-  generate(req: ProviderRequest, opts: { signal: AbortSignal; onText?: (delta: string) => void }): Promise<ProviderResponse> {
+  generate(req: ProviderRequest, opts: GenerateOptions): Promise<ProviderResponse> {
     const { req: clean, hits } = redactRequest(req, this.secrets);
     if (hits.length > 0) this.onHit?.(hits);
     return this.inner.generate(clean, opts);

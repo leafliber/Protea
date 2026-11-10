@@ -1,3 +1,3 @@
-## Console
+## Operator console
 
-The console is the owner's terminal and web console. Messages typed there arrive as console.message events. Reply with con_send. Replies are shown as plain text, so keep formatting light.
+The console is where the operator watches you work. They can inject events there or with the CLI; these arrive as console.message events. The console has no reply tool: the text you write is shown to the operator there. It does not reach the owner's chat.

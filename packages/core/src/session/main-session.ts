@@ -33,6 +33,7 @@ import { newId } from '../util/ids.js';
 import type { Clock } from '../util/time.js';
 import { estimateMessagesTokens } from '../util/tokens.js';
 import { selectTailStart, type ContextLimits, type Handoff, type HandoffResult } from './handoff.js';
+import { DeltaStream, responseTrace, summarizeRequest } from './trace.js';
 import type { Transcript } from './transcript.js';
 
 export interface Batch {
@@ -90,7 +91,8 @@ export interface MainSessionOptions {
   /**
    * Optional streaming output tap (e.g. a typing indicator or live text to a channel).
    * Once it has received text, the model call counts as having external output and
-   * can no longer be preempted (only interrupted).
+   * can no longer be preempted (only interrupted). The console's run stream is not such an
+   * output: it reads the `model.delta` bus records, which never affect preemption.
    */
   outputTap?: (delta: string, ctx: { batchId: string }) => void;
 }
@@ -128,6 +130,8 @@ export class MainSession {
   private idleSinceMs: number;
   /** The context did not fit even after a handoff; cleared by the next successful model call. */
   private overflowed = false;
+  /** The cached prefix changed since the last request went out (reported on the run stream). */
+  private prefixChanged = false;
 
   constructor(private readonly o: MainSessionOptions) {
     this.transcript = o.transcript;
@@ -366,7 +370,7 @@ export class MainSession {
           break;
         }
         this.setPhase('model', { batchId: batch.id, round: rounds + 1 });
-        const response = await this.callModel(cur);
+        const response = await this.callModel(cur, rounds + 1);
         if (response === 'overflow') {
           // The provider counted more than we estimated: hand off now, once.
           if (cur.handoffs === 0 && (await this.ensureCapacity(cur, 'overflow'))) continue;
@@ -403,6 +407,7 @@ export class MainSession {
           stop: response.stopReason,
           model: response.model,
         });
+        o.bus.emit('model.response', responseTrace(response, { sessionId: SESSION_ID, batchId: batch.id, round: rounds, at: this.nowIso() }));
         this.recordUsage(batch, response);
 
         if (response.stopReason === 'refusal') {
@@ -489,9 +494,15 @@ export class MainSession {
     const o = this.o;
     const req = o.assembler.build(this.transcript.messages, { role: 'main', effort: o.effortFor(level) });
     if (this.transcript.notePrefix(prefixFingerprint(req, o.prefixSalt?.() ?? ''))) {
+      this.prefixChanged = true;
       return { ...req, messages: mergeConsecutive(this.transcript.messages) };
     }
     return req;
+  }
+
+  /** What the next model request would carry. Reads only: the thinking floor and everything else stay as they are. */
+  previewRequest(level: Level = 2): ProviderRequest {
+    return this.o.assembler.build(this.transcript.messages, { role: 'main', effort: this.o.effortFor(level) });
   }
 
   /** Input tokens of the next request: the last response's usage plus a local estimate of what came after; exact near the threshold. */
@@ -711,7 +722,7 @@ export class MainSession {
    * One model call with backoff on retryable errors. Returns 'error' when the batch should
    * end, 'cancelled' when a preempt or interrupt cut the call (or its backoff) short.
    */
-  private async callModel(cur: Running): Promise<ProviderResponse | 'error' | 'cancelled' | 'overflow'> {
+  private async callModel(cur: Running, round: number): Promise<ProviderResponse | 'error' | 'cancelled' | 'overflow'> {
     const o = this.o;
     const { batch } = cur;
     const hard = cur.abort.signal;
@@ -722,19 +733,27 @@ export class MainSession {
       cur.externalOutput = false;
       const signal = AbortSignal.any([hard, cur.turn.signal, call.signal]);
       const tap = o.outputTap;
-      o.bus.emit('model.request', { batchId: batch.id, sessionId: SESSION_ID, attempt });
+      o.bus.emit('model.request', {
+        batchId: batch.id,
+        sessionId: SESSION_ID,
+        attempt,
+        round,
+        role: 'main',
+        model: o.provider.modelFor('main'),
+        context: summarizeRequest(req, this.prefixChanged),
+      });
+      this.prefixChanged = false;
+      const deltas = new DeltaStream((kind, text) => o.bus.emit('model.delta', { sessionId: SESSION_ID, batchId: batch.id, round, kind, text }));
       try {
         return await o.provider.generate(req, {
           signal,
-          ...(tap
-            ? {
-                onText: (delta: string) => {
-                  if (delta.length === 0) return;
-                  cur.externalOutput = true;
-                  tap(delta, { batchId: batch.id });
-                },
-              }
-            : {}),
+          onText: (delta: string) => {
+            deltas.push('text', delta);
+            if (!tap || delta.length === 0) return;
+            cur.externalOutput = true;
+            tap(delta, { batchId: batch.id });
+          },
+          onThinking: (delta: string) => deltas.push('thinking', delta),
         });
       } catch (err) {
         if (hard.aborted) throw err;
@@ -769,6 +788,7 @@ export class MainSession {
         });
         return 'error';
       } finally {
+        deltas.flush();
         cur.call = null;
       }
     }

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
+import type { OwnerIdentity } from './types.js';
 
 /** The key secret of the layout before provider profiles. */
 export const LEGACY_ANTHROPIC_SECRET = 'ANTHROPIC_API_KEY';
@@ -14,6 +15,16 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 
 function pick(o: Record<string, unknown>, keys: string[]): Record<string, unknown> {
   return Object.fromEntries(keys.filter((k) => o[k] !== undefined).map((k) => [k, o[k]]));
+}
+
+/**
+ * The web chat used to be the console plugin, so whoever was the owner on the console is the
+ * owner in the web chat. A configuration written before the split names only `console`.
+ */
+export function withWebchatIdentities(identities: readonly OwnerIdentity[]): { identities: OwnerIdentity[]; added: boolean } {
+  if (identities.some((i) => i.plugin === 'webchat')) return { identities: [...identities], added: false };
+  const mirrored = identities.filter((i) => i.plugin === 'console').map((i) => ({ plugin: 'webchat', senderKey: i.senderKey }));
+  return { identities: [...identities, ...mirrored], added: mirrored.length > 0 };
 }
 
 /**

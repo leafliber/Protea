@@ -56,7 +56,7 @@ flowchart LR
   CTX --> CAP
   P6 --> CAP
   P7 --> CAP
-  MAIN -->|tool: tg_send| P1 --> TG
+  MAIN -->|tool: chat_send| P1 --> TG
   MAIN <--> MEM
   API --> HOST
   API --> SCHED
@@ -131,7 +131,7 @@ sequenceDiagram
 
 ### 4.2 出站：动作 → 世界
 
-助理没有"发消息"的内建能力。每个连接器插件把出站能力声明为工具（如 `tg_send`），Core 只负责把 `tool_use` 分发给声明它的插件。副作用工具受权限策略约束（[14-security-and-permissions.md](14-security-and-permissions.md)）。
+助理没有"发消息"的内建能力。给主人的消息走 `chat_send`，必须指定平台（[17-chat-and-console.md](17-chat-and-console.md)）；发给第三方的出站能力由连接器插件声明为工具（如 `tg_send_chat`），Core 只负责把 `tool_use` 分发给声明它的插件。副作用工具受权限策略约束（[14-security-and-permissions.md](14-security-and-permissions.md)）。
 
 ### 4.3 能力：工具表的来源
 

@@ -83,7 +83,7 @@ docker cp protea:/data/exports/<名字> .
 用 Anthropic 档案（Claude）测；其他供应商的缓存由服务端自动决定，命中率只作记录。
 
 ```bash
-for i in $(seq 1 100); do docker exec protea protea events push "第 $i 条：请只回复收到" --timeout 120; done
+for i in $(seq 1 100); do docker exec protea protea chat "第 $i 条：请只回复收到" --timeout 120; done
 ```
 
 - **通过**：诊断包 `summary.json` 的 `usage.byRole.main.cacheHit` ≥ 0.8（`cacheHit` = 缓存读 / (输入 + 缓存读 + 缓存写)）。
@@ -101,7 +101,7 @@ docker exec protea protea mcp tools fetch
 ```
 
 ```bash
-docker exec protea protea events push "用 fetch 读取 https://example.com 并告诉我页面标题" --timeout 120
+docker exec protea protea chat "用 fetch 读取 https://example.com 并告诉我页面标题" --timeout 120
 ```
 
 - **通过**：工具在 10 s 内出现（第一次含下载可能更久；`mcp rm` 后再加一次，看有缓存时的时间）；模型调用 `mcp__fetch__fetch` 成功并给出标题。M3 记录的问题是"fetch 的调用在 60 s 内没有拿到期望的结果"，这里要确认它在正常网络下是否复现。

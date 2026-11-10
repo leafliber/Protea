@@ -43,7 +43,7 @@ const answering = () =>
   new ScriptedProvider([
     (req) => {
       if (req.role !== 'main') return textReply('fork done');
-      return lastUser(req).includes('<events') ? reply([toolCall('con_send', { text: 'got it' })]) : reply([toolCall('idle', {})]);
+      return lastUser(req).includes('<events') ? reply([toolCall('chat_send', { platform: 'webchat', text: 'got it' })]) : reply([toolCall('idle', {})]);
     },
   ]);
 
@@ -101,6 +101,7 @@ describe('M5: auth roles, console session and audit', () => {
     expect((await ro('GET', '/api/events')).status).toBe(200);
     expect((await ro('POST', '/api/events', { text: 'hi' })).status).toBe(403);
     expect((await ro('GET', '/api/memory/tree')).status).toBe(403);
+    expect((await ro('GET', '/api/sessions/main/context')).status).toBe(403);
     expect((await ro('GET', '/api/secrets')).status).toBe(403);
     expect((await ro('GET', '/api/persona/files')).status).toBe(403);
     expect((await ro('GET', '/metrics')).status).toBe(200);
@@ -195,9 +196,9 @@ describe('M5: operations without SSH', () => {
     const before = fs.readFileSync(path.join(dir, 'config.yaml'), 'utf8');
     expect((await api('PATCH', '/api/config', { session: { rounds: { soft: 50, hard: 10 } } })).status).toBe(400);
     expect(fs.readFileSync(path.join(dir, 'config.yaml'), 'utf8')).toBe(before);
-    await api('PATCH', '/api/permissions', { tools: { con_send: 'ask' } });
+    await api('PATCH', '/api/permissions', { tools: { chat_send: 'ask' } });
     const perms = await api<{ tools: Array<{ name: string; policy: string; rule: string }> }>('GET', '/api/permissions');
-    expect(perms.json.tools.find((t) => t.name === 'con_send')).toMatchObject({ policy: 'ask', rule: 'permissions.tools.con_send' });
+    expect(perms.json.tools.find((t) => t.name === 'chat_send')).toMatchObject({ policy: 'ask', rule: 'permissions.tools.chat_send' });
     expect((await api<{ settings: { dailyUsd: number } }>('PATCH', '/api/budget', { dailyUsd: 2 })).json.settings.dailyUsd).toBe(2);
 
     // Secrets: names only; the admin token cannot be deleted.
@@ -397,7 +398,7 @@ describe('M5: live stream, metrics and the console', () => {
     expect(text).toMatch(/^protea_events_pending\{level="4"\} \d+$/m);
     expect(text).toMatch(/^protea_turns_total\{session_kind="main",end_reason="[a-z_]+"\} [1-9]/m);
     expect(text).toMatch(/^protea_batch_wait_seconds_count\{level="1"\} 1$/m);
-    expect(text).toMatch(/^protea_tool_calls_total\{tool="con_send",outcome="ok"\} 1$/m);
+    expect(text).toMatch(/^protea_tool_calls_total\{tool="chat_send",outcome="ok"\} 1$/m);
     expect(text).toMatch(/^protea_plugin_state\{plugin="console",state="running"\} 1$/m);
     expect(text).toMatch(/^protea_model_tokens_total\{role="main",kind="input"\} \d+$/m);
     expect(text).toMatch(/^protea_context_tokens\{session="main"\} \d+$/m);

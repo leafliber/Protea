@@ -20,7 +20,7 @@ interface EventEnvelope {
   batchId?: string;          // 被选入的批（delivering 及之后）
 
   // —— 由来源提供 ——
-  type: string;              // 事件类型，<source>.<name>，如 "telegram.message"
+  type: string;              // 事件类型，<source>.<name>，如 "telegram.message"；主人的对话消息在所有平台上都是 "chat.message"
   ts: string;                // 事件在世界中发生的时间（来源声称）
   source: string;            // 插件 ID
   origin: 'external' | 'internal';

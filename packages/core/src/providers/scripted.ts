@@ -1,11 +1,11 @@
 import type { ContentBlock, ModelRole } from '@protea/protocol';
 import { AbortedError, sleep } from '../util/abort.js';
-import type { Provider, ProviderHealth, ProviderRequest, ProviderResponse } from './types.js';
+import type { GenerateOptions, Provider, ProviderHealth, ProviderRequest, ProviderResponse } from './types.js';
 
 export type ScriptStep = (
   req: ProviderRequest,
   index: number,
-  ctx: { signal: AbortSignal; onText?: (delta: string) => void },
+  ctx: GenerateOptions,
 ) => ProviderResponse | Error | Promise<ProviderResponse | Error>;
 
 let toolSeq = 0;
@@ -47,13 +47,13 @@ export class ScriptedProvider implements Provider {
     return { ready: true };
   }
 
-  async generate(req: ProviderRequest, opts: { signal: AbortSignal; onText?: (delta: string) => void }): Promise<ProviderResponse> {
+  async generate(req: ProviderRequest, opts: GenerateOptions): Promise<ProviderResponse> {
     const index = this.calls.length;
     this.calls.push(structuredClone(req));
     if (this.delayMs > 0) await sleep(this.delayMs, opts.signal);
     const step = this.steps[Math.min(index, this.steps.length - 1)];
     if (!step) return textReply('');
-    const out = await step(req, index, { signal: opts.signal, ...(opts.onText ? { onText: opts.onText } : {}) });
+    const out = await step(req, index, opts);
     if (opts.signal.aborted) throw new AbortedError(opts.signal.reason);
     if (out instanceof Error) throw out;
     return out;

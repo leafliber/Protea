@@ -93,7 +93,7 @@ describe('M4 acceptance', () => {
         }
         if (last.includes("Here's the content of /memories/handoff/")) {
           const agreed = /我们说好的三件事：[^\n]*/.exec(last)?.[0] ?? '不记得了';
-          return sized(reply([toolCall('con_send', { text: agreed }), toolCall('idle', {})]), req);
+          return sized(reply([toolCall('chat_send', { platform: 'webchat', text: agreed }), toolCall('idle', {})]), req);
         }
         return sized(reply([toolCall('idle', {})]), req);
       },

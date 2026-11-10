@@ -34,7 +34,7 @@ const auth = (d: Daemon) => ({ authorization: `Bearer ${d.adminToken}`, 'content
 
 describe('daemon', () => {
   it('answers a console message end to end over HTTP and SSE', async () => {
-    const provider = new ScriptedProvider([() => reply([toolCall('con_send', { text: '你好！' })]), () => textReply('done')]);
+    const provider = new ScriptedProvider([() => reply([toolCall('chat_send', { platform: 'webchat', text: '你好！' })]), () => textReply('done')]);
     const d = await start(tmp(), provider);
 
     expect((await fetch(`${d.url}/healthz`)).status).toBe(200);
@@ -68,7 +68,7 @@ describe('daemon', () => {
 
     const status = (await (await fetch(`${d.url}/api/status`, { headers: auth(d) })).json()) as Record<string, unknown>;
     expect(status).toMatchObject({ phase: 'idle', provider: { id: 'scripted', ready: true } });
-    // In-process console and cron run; the out-of-process built-ins are discovered but off by default.
+    // In-process console, webchat and cron run; the out-of-process built-ins are discovered but off by default.
     expect((status['plugins'] as Array<{ id: string; state: string }>).map((p) => `${p.id}:${p.state}`)).toEqual([
       'console:running',
       'cron:running',
@@ -77,19 +77,20 @@ describe('daemon', () => {
       'rss:loaded',
       'shell:loaded',
       'telegram:loaded',
+      'webchat:running',
       'webhook:loaded',
     ]);
 
     // The system prefix: persona, runtime notes, plugin environment prompts, then the Skills catalog; kernel and plugin tools.
     const req = provider.calls[0];
-    expect(req?.system.map((s) => s.id)).toEqual(['identity', 'runtime', 'operating', 'owner', 'env:console', 'env:cron', 'skills-catalog', 'memory-index']);
+    expect(req?.system.map((s) => s.id)).toEqual(['identity', 'runtime', 'operating', 'owner', 'env:console', 'env:cron', 'env:webchat', 'skills-catalog', 'memory-index']);
     expect(req?.system.find((s) => s.id === 'skills-catalog')?.text).toMatch(
       /- daily-brief: .*\(source: builtin\)\n- memory-dream: .*\(source: builtin\)\n- protea-self-ops: .*\(source: builtin\)$/,
     );
     expect(req?.system.at(-1)?.text).toMatch(/^<memory_index path="\/memories\/INDEX.md">\n# Memory index\n/);
     expect(req?.tools.map((t) => t.name)).toEqual([
       'approval_request', 'board', 'events_promote', 'events_query', 'fork_cancel', 'fork_spawn', 'fork_status', 'idle', 'memory', 'memory_recent', 'memory_search', 'self_status', 'skill_load', 'skill_read',
-      'con_send', 'schedule_create', 'schedule_delete', 'schedule_list', 'sleep_until',
+      'chat_send', 'schedule_create', 'schedule_delete', 'schedule_list', 'sleep_until',
     ]);
     expect(req?.toolSearch).toBeUndefined();
     expect(status['forks']).toEqual([]);
@@ -104,7 +105,7 @@ describe('daemon', () => {
       (req) => {
         if (req.role === 'fork') return textReply('Found 2 open invoices.');
         const report = req.messages.some((m) => m.content.some((b) => b.type === 'text' && String(b['text']).includes('type="fork.completed"')));
-        if (report) return reply([toolCall('con_send', { text: '2 open invoices' }), toolCall('idle', {})]);
+        if (report) return reply([toolCall('chat_send', { platform: 'webchat', text: '2 open invoices' }), toolCall('idle', {})]);
         if (req.messages.length === 1) return reply([toolCall('fork_spawn', { goal: 'Count open invoices.' })]);
         return reply([toolCall('idle', {})]);
       },
@@ -154,7 +155,7 @@ describe('daemon', () => {
     running.splice(running.indexOf(d1), 1);
     expect(fs.existsSync(path.join(dir, 'protea.lock'))).toBe(false);
 
-    const fast = new ScriptedProvider([() => reply([toolCall('con_send', { text: 'back' })]), () => textReply('done')]);
+    const fast = new ScriptedProvider([() => reply([toolCall('chat_send', { platform: 'webchat', text: 'back' })]), () => textReply('done')]);
     const outputs: string[] = [];
     const d2 = await start(dir, fast);
     d2.bus.on('plugin.output', (o) => outputs.push(o.text));

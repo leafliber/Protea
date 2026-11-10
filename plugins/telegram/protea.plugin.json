@@ -8,10 +8,11 @@
   "runtime": { "exec": "node", "args": ["dist/main.js"], "dev": { "args": ["src/main.ts"] } },
   "level": 1,
   "triggers": ["debounce", "flush", "preempt", "interrupt", "piggyback", "store"],
-  "tools": ["tg_send", "tg_send_chat", "tg_react"],
+  "tools": ["tg_send_chat", "tg_react"],
   "sideEffectTools": ["tg_send_chat"],
   "secrets": ["TELEGRAM_BOT_TOKEN"],
   "configSchema": "./config.schema.json",
   "envPrompt": "./ENV_PROMPT.md",
+  "chat": { "displayName": "Telegram", "markdown": "none", "maxChars": 3500 },
   "healthcheck": { "intervalMs": 30000, "timeoutMs": 5000 }
 }

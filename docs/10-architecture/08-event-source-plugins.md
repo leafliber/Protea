@@ -51,6 +51,8 @@
 - `barrierAfter`：发消息类工具通常声明，避免并行发送导致乱序。
 - 副作用：所有出站工具在清单 `sideEffectTools` 中列出；默认策略 `allow`（给主人发）/ `ask`（给第三方发），详见 [14-security-and-permissions.md](14-security-and-permissions.md)。
 
+给主人的对话不用自己的工具：声明 `chat` 后由 `chat_send` 路由过来，见 [17-chat-and-console.md](17-chat-and-console.md) §3。上面的规则针对其余出口（发给第三方、表情回应等）。
+
 ## 5. 环境提示（ENV_PROMPT.md）
 
 讲三件事：何时用这个插件、跨工具协调、约束。不要重复工具描述。示例（Telegram）：
@@ -58,7 +60,7 @@
 ```
 ## Telegram
 You reach the owner through Telegram. {{#if ownerChatId}}The owner's private chat is {{ownerChatId}}.{{/if}}
-Reply with tg_send when a message warrants a response; it is fine to stay silent on low-value messages.
+Reply with chat_send (platform "telegram") when a message warrants a response; it is fine to stay silent on low-value messages.
 Long messages: split at ~3500 characters. Use tg_react for lightweight acknowledgement instead of a text reply.
 Approvals: the owner replies "/approve <id>" or "/deny <id>"; those replies arrive as approval.decided events.
 ```
@@ -67,11 +69,12 @@ Approvals: the owner replies "/approve <id>" or "/deny <id>"; those replies arri
 
 | ID | kind | 等级上限 | 说明 | 里程碑 |
 |---|---|---|---|---|
-| `console` | connector | L1 | 控制台/CLI 输入输出；开发与运维必备 | M0 |
+| `console` | source | L1 | 运维注入（控制台运行流、`protea events push`）；没有回复工具 | M0，2026-11-10 收窄 |
+| `webchat` | connector（对话平台） | L1 | 网页对话窗口与 `protea chat` | 2026-11-10 |
 | `cron` | source | L3 | cron 表达式与一次性定时（`sleep_until`、`schedule_create` 的后端）；支持例程派生 | M0 |
 | `internal` | source | L0 | Core 专用：生命周期、预算、抢占通知 | M0 |
 | `webhook` | source | L2 | HTTP 入站（`/hooks/<name>`），签名校验（GitHub/通用 HMAC/token） | M2 ✓ |
-| `telegram` | connector | L1 | Bot API 长轮询（无需入站端口）；owner 由用户 id 映射 | M2 ✓ |
+| `telegram` | connector（对话平台） | L1 | Bot API 长轮询（无需入站端口）；owner 由用户 id 映射 | M2 ✓ |
 | `filewatch` | source | L3 | 监视 `/data/inbox` 等目录 | M2 ✓ |
 | `rss` | source | L4 | 定时抓取，按条目去重 | M3 ✓ |
 | `imap` | source | L2 | IDLE/轮询；邮件到达事件 + `mail_fetch` 工具 | M3 ✓ |
@@ -82,8 +85,8 @@ Approvals: the owner replies "/approve <id>" or "/deny <id>"; those replies arri
 
 **telegram**（秘密 `TELEGRAM_BOT_TOKEN`；在 `owner.identities` 加 `{ plugin: telegram, senderKey: "telegram:<你的用户 id>" }`）：
 - 长轮询 `getUpdates`，每个更新先入库（`dedupeKey: update:<id>`），再把偏移量写入 kv，因此崩溃重启只会重读、不会丢；网络故障按 1 s→30 s 退避，遵守 `retry_after`。
-- 主人私聊 → L1 `flush`；消息正好是停止词（默认 `stop`、`wait`、`停`、`停下`、`等一下`、`别说了`，可配 `stopWords`）→ L1 `interrupt`；`/approve aN`、`/deny aN` → 审批决定，不产生消息事件；陌生人私聊 → L2 `flush`；群里 @机器人或回复机器人 → L2 `flush`；其他群消息 → L4 `store`（`groupMentionsOnly: false` 时为 L2）。
-- 主人私聊的 chat id 从主人的第一条消息学到（或配置 `ownerChatId`）。工具：`tg_send`（发给主人，超过 3500 字符自动分段）、`tg_send_chat`（发给其他聊天，默认需要审批）、`tg_react`。
+- 主人私聊 → `chat.message`，L1 `flush`（编辑过的消息是 `telegram.edited`，其余见下，都用 `telegram.*` 类型）；消息正好是停止词（默认 `stop`、`wait`、`停`、`停下`、`等一下`、`别说了`，可配 `stopWords`）→ L1 `interrupt`；`/approve aN`、`/deny aN` → 审批决定，不产生消息事件；陌生人私聊 → L2 `flush`；群里 @机器人或回复机器人 → L2 `flush`；其他群消息 → L4 `store`（`groupMentionsOnly: false` 时为 L2）。
+- 主人私聊的 chat id 从主人的第一条消息学到（或配置 `ownerChatId`）。对话平台：`chat_send` 的 `telegram`（发给主人，超过 3500 字符自动分段）。工具：`tg_send_chat`（发给其他聊天，默认需要审批）、`tg_react`。
 - 配置：`apiBase`（`x-hot: false`）、`pollTimeoutSec`、`ownerChatId`、`stopWords`、`groupMentionsOnly`。
 
 **webhook**：配置 `hooks: [{ name, verify: github | hmac-sha256 | token | none, secret: "${secret:NAME}", header?, level?, trigger?, maxTextChars? }]`（`x-hot: false`）。事件类型 `webhook.<name>`；GitHub 事件（push、pull_request、issues、issue_comment、workflow_run、release、ping）写成一行事实描述并附截断的负载，其他请求附前 2000 字符；`dedupeKey` 取 `X-GitHub-Delivery` / `X-Request-Id` / `Idempotency-Key`，否则取请求体哈希。默认 L2 `flush`（L3 用 `debounce`）。返回 202 `{cursor, deduped}`；校验失败 401，不入库。

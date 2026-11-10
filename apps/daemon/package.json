@@ -22,6 +22,7 @@
     "@protea/core": "workspace:*",
     "@protea/control": "workspace:*",
     "@protea/plugin-console": "workspace:*",
+    "@protea/plugin-webchat": "workspace:*",
     "@protea/plugin-cron": "workspace:*"
   }
 }

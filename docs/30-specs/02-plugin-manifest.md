@@ -26,6 +26,7 @@
 | `configSchema` | path | 否 | JSON Schema；支持 `x-hot: false`、`x-secret: true` 扩展关键字 |
 | `envPrompt` | path | 否 | 默认 `ENV_PROMPT.md` |
 | `skills` | path | 否 | 插件自带 Skills 目录，默认 `skills/`；必须在插件目录内。插件启用时其中的 Skills 进入目录（M3） |
+| `chat` | object | 否 | 仅 `connector`：声明为对话平台，`{ displayName?, markdown?: none\|basic\|full, maxChars? }`。插件还须在 `initialize` 时声明能力 `chat` 并实现 `chat/send`（[17-chat-and-console.md](../10-architecture/17-chat-and-console.md) §3） |
 | `healthcheck.intervalMs` / `timeoutMs` | integer | 否 | 默认 30000 / 5000 |
 | `resources.maxMemoryMb` / `maxCpu` / `maxFds` | number | 否 | 默认 256 / 1.0 / 256 |
 | `mcp` | object | kind=mcp 必需 | `{ transport, command, args, env, url, auth, tools: { allow, deny } }` |
@@ -63,7 +64,7 @@
 }
 ```
 
-`calls` 依次调用并检查输出包含 `expect`；`cancel` 的调用在 200 ms 后被取消，应以部分结果返回；`events` 是这些调用至少应推送的事件数。
+声明了 `chat` 的插件总要检查清单与能力位是否同时存在；探针里写 `"chat": { "text": "…" }` 时还会真的调用一次 `chat/send`（会发出消息，所以是可选的）。`calls` 依次调用并检查输出包含 `expect`；`cancel` 的调用在 200 ms 后被取消，应以部分结果返回；`events` 是这些调用至少应推送的事件数。
 
 ## 5. 示例
 

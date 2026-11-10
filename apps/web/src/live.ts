@@ -18,6 +18,8 @@ class Live {
   private wanted = false;
   /** Highest event cursor seen, so a reconnect replays what was missed. */
   private lastCursor: number | null = null;
+  /** Pages using the heavy `trace` topics; they are only subscribed while one is open. */
+  private traceUsers = 0;
   runId: string | null = null;
 
   start(): void {
@@ -41,6 +43,23 @@ class Live {
     for (const fn of this.stateListeners) fn(s);
   }
 
+  private topics(): WsTopic[] {
+    return ['events', 'phase', 'scheduler', 'output', 'changes', 'usage', 'logs', ...(this.traceUsers > 0 ? (['trace'] as const) : [])];
+  }
+
+  /** While the returned function has not been called, the connection also carries the run stream. */
+  useTrace(): () => void {
+    if (++this.traceUsers === 1) this.resubscribe();
+    return () => {
+      if (--this.traceUsers === 0) this.resubscribe();
+    };
+  }
+
+  /** A subscription replaces the previous one; without `since` nothing is replayed. */
+  private resubscribe(): void {
+    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ subscribe: this.topics(), logFilter: { level: 'info' } }));
+  }
+
   private connect(): void {
     const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
     const ws = new WebSocket(url);
@@ -48,8 +67,7 @@ class Live {
     this.setState('connecting');
     ws.onopen = () => {
       this.retry = 0;
-      const topics: WsTopic[] = ['events', 'phase', 'scheduler', 'output', 'changes', 'usage', 'logs'];
-      ws.send(JSON.stringify({ subscribe: topics, ...(this.lastCursor !== null ? { since: this.lastCursor } : {}), logFilter: { level: 'info' } }));
+      ws.send(JSON.stringify({ subscribe: this.topics(), ...(this.lastCursor !== null ? { since: this.lastCursor } : {}), logFilter: { level: 'info' } }));
       this.setState('open');
     };
     ws.onmessage = (ev) => {
@@ -103,6 +121,11 @@ export function useLive(topics: string | string[], fn: Handler): void {
   ref.current = fn;
   const key = Array.isArray(topics) ? topics.join(',') : topics;
   useEffect(() => live.on(key.split(','), (m) => ref.current(m)), [key]);
+}
+
+/** Keep the run stream (model output, tool calls) coming while this component is mounted. */
+export function useTraceStream(): void {
+  useEffect(() => live.useTrace(), []);
 }
 
 export function useLiveState(): LiveState {

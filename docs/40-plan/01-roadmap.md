@@ -320,6 +320,17 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 
 **v1.0 发布点**：功能到此为止；打 `v1.0.0` 标签、把 `package.json` 从 0.1.0 升上去、发布镜像，与 M6 推迟的加固项一起放在 M7a。
 
+### 对话与控制台分离（2026-11-10）
+
+决策见 [ADR-0012](../20-decisions/ADR-0012-chat-platforms-and-operator-console.md)，设计见 [17-chat-and-console.md](../10-architecture/17-chat-and-console.md)。
+- 对话：Core 的对话中枢提供唯一的 `chat_send`（`platform` 必填），内置平台 `webchat`，进程外插件用清单的 `chat` 块加 `chat/send` 接入（TS 与 Python SDK、一致性检查、FakeHost）。Telegram 已迁移：`tg_send` 去掉，主人私聊是 `chat.message`。
+- `console` 收窄为运维注入，没有回复工具。
+- 控制台：事件流页升级为运行流（上下文摘要、思考、流式正文、工具调用、发出的消息，按类别筛选），`GET /api/batches/:id/trace` 回看一批的过程，会话页加上下文标签（`GET /api/sessions/:id/context`）。Anthropic 与 OpenAI 协议都接上了思考增量；观察不影响抢占。
+- CLI：`protea chat`；`events tail` 和 `events push` 显示模型输出。
+- 旧数据：分界游标兼容旧对话，不需要迁移；转录里有 `con_send` 时启动后交接一次。
+
+未验证：真实模型的思考增量、真实 Telegram（T 系列由主人在自己环境里跑）。
+
 ## M7 · 扩展与生态（v1.x）· 状态：未开始
 
 拆成两段：M7a 收掉 M6 推迟的加固项并发布 v1.0；M7b 是生态扩展，每项独立，可无限期推迟（风险 R9）。验收标准是草案，开工前由主人确认。

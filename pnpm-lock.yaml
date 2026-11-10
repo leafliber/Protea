@@ -60,6 +60,9 @@ importers:
       '@protea/plugin-cron':
         specifier: workspace:*
         version: link:../../plugins/cron
+      '@protea/plugin-webchat':
+        specifier: workspace:*
+        version: link:../../plugins/webchat
       '@protea/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -237,6 +240,15 @@ importers:
       '@protea/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      '@protea/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+
+  plugins/webchat:
+    dependencies:
+      '@protea/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@protea/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

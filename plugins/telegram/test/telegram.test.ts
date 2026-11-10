@@ -45,8 +45,8 @@ describe('telegram connector', () => {
     await waitFor(() => host.events.length === 5);
     expect(host.violations).toEqual([]);
     expect(host.events.map((e) => [e.type, e.level, e.trigger, e.senderKey])).toEqual([
-      ['telegram.message', 1, 'flush', `telegram:${OWNER}`],
-      ['telegram.message', 1, 'interrupt', `telegram:${OWNER}`],
+      ['chat.message', 1, 'flush', `telegram:${OWNER}`],
+      ['chat.message', 1, 'interrupt', `telegram:${OWNER}`],
       ['telegram.message', 2, 'flush', 'telegram:77'],
       ['telegram.message', 4, 'store', 'telegram:78'],
       ['telegram.message', 2, 'flush', 'telegram:79'],
@@ -77,15 +77,15 @@ describe('telegram connector', () => {
 
   it('sends to the owner, splits long text, and refuses before the owner chat is known', async () => {
     const { tg, host } = await setup();
-    const early = await host.callTool('tg_send', { text: 'hello' });
-    expect(early).toMatchObject({ failed: true });
+    const early = await host.chatSend({ text: 'hello' });
+    expect(early).toMatchObject({ ok: false });
     tg.inject({ fromId: OWNER, text: 'hi' });
     await waitFor(() => host.events.length === 1);
-    const r = await host.callTool('tg_send', { text: 'hello', reply_to: 5000 });
-    expect(r.text).toMatch(/^sent message \d+ to the owner$/);
+    const r = await host.chatSend({ text: 'hello', replyTo: '5000' });
+    expect(r).toMatchObject({ ok: true, messageIds: [expect.stringMatching(/^\d+$/)] });
     expect(tg.sent.at(-1)).toMatchObject({ chat_id: OWNER, text: 'hello', reply_parameters: { message_id: 5000 } });
     const long = `${'a'.repeat(3000)}\n\n${'b'.repeat(3000)}`;
-    await host.callTool('tg_send', { text: long });
+    await host.chatSend({ text: long });
     expect(tg.sent.slice(-2).map((m) => m.text.length)).toEqual([3000, 3000]);
     await host.callTool('tg_react', { message_id: 5000, emoji: '👍' });
     expect(tg.reactions.at(-1)).toMatchObject({ chat_id: OWNER, message_id: 5000 });

@@ -11,7 +11,7 @@ import type { ContentBlock, ModelRole } from '@protea/protocol';
 import type { ProviderProfile } from '../config/types.js';
 import { AbortedError } from '../util/abort.js';
 import { DEFAULT_PRICING, estimateCost } from './pricing.js';
-import { ProviderError, type Provider, type ProviderHealth, type ProviderRequest, type ProviderResponse } from './types.js';
+import { ProviderError, type GenerateOptions, type Provider, type ProviderHealth, type ProviderRequest, type ProviderResponse } from './types.js';
 
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 const BINDING_BETA = 'thinking-binding-controls-2026-08-01';
@@ -222,7 +222,7 @@ export class AnthropicProvider implements Provider {
 
   async generate(
     req: ProviderRequest,
-    opts: { signal: AbortSignal; onText?: (delta: string) => void },
+    opts: GenerateOptions,
   ): Promise<ProviderResponse> {
     if (!this.client) throw new ProviderError('config', this.health().problem ?? 'provider not configured');
     const params = this.buildParams(req);
@@ -230,6 +230,7 @@ export class AnthropicProvider implements Provider {
     try {
       const stream = this.client.beta.messages.stream(params, { signal: opts.signal });
       if (opts.onText) stream.on('text', opts.onText);
+      if (opts.onThinking) stream.on('thinking', opts.onThinking);
       message = await stream.finalMessage();
     } catch (err) {
       throw classifyAnthropicError(err, opts.signal);

@@ -1,4 +1,4 @@
-import type { ToolResultBlock, ToolUseBlock } from '@protea/protocol';
+import type { ToolCallTrace, ToolResultBlock, ToolUseBlock } from '@protea/protocol';
 import type { Logger } from '../observability/logger.js';
 import type { GuardDecision, ToolGuard } from '../permissions/guard.js';
 import { errorMessage } from '../util/errors.js';
@@ -7,6 +7,8 @@ import type { ToolContext, ToolOutcome } from './types.js';
 
 export const MAX_RESULT_CHARS = 100_000;
 export const INTERRUPT_GRACE_MS = 5_000;
+/** What the run stream shows of an input or a result; the transcript keeps the whole. */
+const TRACE_CHARS = 8_000;
 
 /** Called after every executed call (not for calls that were blocked or never started). */
 export type ToolCallObserver = (name: string, ms: number, failed: boolean) => void;
@@ -49,6 +51,7 @@ export class ToolDispatcher {
   private guard: ToolGuard | null = null;
   private observer: ToolCallObserver | null = null;
   private limiter: ToolLimiter | null = null;
+  private trace: ((t: ToolCallTrace) => void) | null = null;
 
   constructor(
     private readonly registry: ToolRegistry,
@@ -65,6 +68,11 @@ export class ToolDispatcher {
     this.observer = observer;
   }
 
+  /** Report every call as it starts and ends, refused ones included (the console's run stream). */
+  setTrace(trace: ((t: ToolCallTrace) => void) | null): void {
+    this.trace = trace;
+  }
+
   /** Outbound rate limits (docs/10-architecture/14-security-and-permissions.md §7). */
   setLimiter(limiter: ToolLimiter | null): void {
     this.limiter = limiter;
@@ -75,7 +83,7 @@ export class ToolDispatcher {
     const inflight: Promise<void>[] = [];
     for (const [i, use] of uses.entries()) {
       inflight.push(
-        this.runOne(use, ctx).then((r) => {
+        this.traced(use, ctx).then((r) => {
           results[i] = r;
         }),
       );
@@ -83,6 +91,26 @@ export class ToolDispatcher {
     }
     await Promise.all(inflight);
     return { results: results.map((r) => r.block), endsTurn: results.some((r) => r.endsTurn) };
+  }
+
+  private emitTrace(t: ToolCallTrace): void {
+    try {
+      this.trace?.(t);
+    } catch (err) {
+      this.log.warn({ tool: t.name, err: errorMessage(err) }, 'tool trace failed');
+    }
+  }
+
+  private async traced(use: ToolUseBlock, ctx: DispatchContext): Promise<OneResult> {
+    if (!this.trace) return this.runOne(use, ctx);
+    const head = { sessionId: ctx.sessionId, batchId: ctx.batchId, callId: use.id, name: use.name };
+    const started = Date.now();
+    const input = JSON.stringify(use.input ?? null);
+    this.emitTrace({ ...head, at: new Date(started).toISOString(), phase: 'start', input: input.length > TRACE_CHARS ? { _truncated: input.slice(0, TRACE_CHARS) } : use.input });
+    const r = await this.runOne(use, ctx);
+    const text = typeof r.block.content === 'string' ? r.block.content : JSON.stringify(r.block.content);
+    this.emitTrace({ ...head, at: new Date().toISOString(), phase: 'end', ms: Date.now() - started, isError: r.block.is_error === true, result: text.slice(0, TRACE_CHARS), truncated: text.length > TRACE_CHARS });
+    return r;
   }
 
   private async runOne(use: ToolUseBlock, dctx: DispatchContext): Promise<OneResult> {

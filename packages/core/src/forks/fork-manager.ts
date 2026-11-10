@@ -21,7 +21,8 @@ import { prefixFingerprint } from '../context/prefix.js';
 import type { ToolExposure } from '../context/tool-search.js';
 import type { SessionRepo, UsageRepo } from '../db/repos.js';
 import type { Logger } from '../observability/logger.js';
-import { ProviderError, type Provider, type ProviderResponse, type SystemSegment } from '../providers/types.js';
+import { ProviderError, type Provider, type ProviderRequest, type ProviderResponse, type SystemSegment } from '../providers/types.js';
+import { DeltaStream, responseTrace, summarizeRequest } from '../session/trace.js';
 import { FORK_MISSING_RESULT_TEXT, Transcript, readTranscript } from '../session/transcript.js';
 import type { ToolDispatcher } from '../tools/dispatcher.js';
 import type { ToolRegistry } from '../tools/registry.js';
@@ -324,6 +325,23 @@ export class ForkManager {
     return readTranscript(this.file(id, 'jsonl'), FORK_MISSING_RESULT_TEXT);
   }
 
+  /** What the fork's next model request would carry; undefined for an unknown fork. */
+  previewRequest(id: string): ProviderRequest | undefined {
+    const messages = this.transcript(id);
+    const cp = this.forks.get(id)?.cp ?? this.readCheckpoint(id);
+    if (!messages || !cp) return undefined;
+    const allowed = new Set(cp.tools);
+    const toolSet = this.o.exposure?.forRequest(messages, { role: cp.model, allowed });
+    return {
+      role: cp.model,
+      system: this.o.system(),
+      messages: mergeConsecutive(messages),
+      tools: toolSet ? toolSet.tools : this.o.tools.forProvider((d) => allowed.has(d.name)),
+      ...(toolSet?.toolSearch ? { toolSearch: true } : {}),
+      effort: this.o.effortFor(cp.model),
+    };
+  }
+
   /** Shutdown: ask running forks to pause, then abort the ones that do not reach a boundary in time. */
   async stop(graceMs: number): Promise<void> {
     this.stopping = true;
@@ -518,11 +536,13 @@ export class ForkManager {
         effort: o.effortFor(f.cp.model),
       };
       // Thinking blocks are bound to the prefix: when it changed, earlier ones are left out.
-      if (t.notePrefix(prefixFingerprint(req, o.prefixSalt?.() ?? ''))) req.messages = mergeConsecutive(t.messages);
-      const res = await this.callModel(f, req);
+      const prefixChanged = t.notePrefix(prefixFingerprint(req, o.prefixSalt?.() ?? ''));
+      if (prefixChanged) req.messages = mergeConsecutive(t.messages);
+      const res = await this.callModel(f, req, prefixChanged);
       if ('kind' in res) return res;
       f.cp.rounds++;
       t.appendMessage({ role: 'assistant', content: res.content, usage: res.usage, stop: res.stopReason, model: res.model });
+      o.bus.emit('model.response', responseTrace(res, { sessionId: f.cp.id, batchId: f.cp.id, round: f.cp.rounds, at: this.nowIso() }));
       this.recordUsage(f, res);
 
       if (res.stopReason === 'refusal') {
@@ -553,6 +573,7 @@ export class ForkManager {
   private async callModel(
     f: Fork,
     req: Parameters<Provider['generate']>[0],
+    prefixChanged: boolean,
   ): Promise<ProviderResponse | RunOutcome> {
     const o = this.o;
     const hard = (f.hard as AbortController).signal;
@@ -564,8 +585,12 @@ export class ForkManager {
       const call = new AbortController();
       f.call = call;
       const signal = AbortSignal.any([hard, call.signal]);
+      const round = f.cp.rounds + 1;
+      const head = { sessionId: f.cp.id, batchId: f.cp.id, round };
+      o.bus.emit('model.request', { ...head, attempt, role: f.cp.model, model: o.provider.modelFor(f.cp.model), context: summarizeRequest(req, prefixChanged && attempt === 0) });
+      const deltas = new DeltaStream((kind, text) => o.bus.emit('model.delta', { ...head, kind, text }));
       try {
-        return await o.provider.generate(req, { signal });
+        return await o.provider.generate(req, { signal, onText: (d) => deltas.push('text', d), onThinking: (d) => deltas.push('thinking', d) });
       } catch (err) {
         const stop = interrupted() ?? (call.signal.aborted ? ({ kind: 'paused' } as const) : null);
         if (stop) return stop;
@@ -582,6 +607,7 @@ export class ForkManager {
         }
         return { kind: 'failed', error: `model call failed (${kind}): ${errorMessage(err)}` };
       } finally {
+        deltas.flush();
         f.call = null;
       }
     }

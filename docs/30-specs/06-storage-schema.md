@@ -152,7 +152,7 @@ CREATE INDEX auth_sessions_account ON auth_sessions(account_id);
 ### 1.6 迁移 6：`outputs`（2026-11-05）
 
 ```sql
-CREATE TABLE outputs (                                  -- 插件发给主人的输出（con_send 回复、审批提示）
+CREATE TABLE outputs (                                  -- 发给主人的输出（chat_send 回复、审批提示）；plugin 是平台 id，channel 是 chat / approvals，旧数据是 console
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   at TEXT NOT NULL,                                     -- ISO（UTC），与 events.received_at 同格式，便于按时间合并
   plugin TEXT NOT NULL, channel TEXT,                   -- console：channel 为 console（回复）或 approvals（审批提示）
@@ -165,7 +165,7 @@ CREATE INDEX ix_events_source_received ON events(source, received_at);
 CREATE INDEX ix_events_batch ON events(batch_id) WHERE batch_id IS NOT NULL;
 ```
 
-控制台「对话」页的历史（`GET /api/chat`）= `console.message` 事件 + `plugin = 'console'` 的输出，按 `(at, 种类, id)` 倒序分页。迁移之前发出的回复在第一次启动时从主会话转录（`sessions/main.*.jsonl`）里找回：迁移时间之前、结果不是错误的 `con_send` 调用，各补一行；完成后在 `kv`（`core` / `outputs.backfilled`）记下，只做一次。和 `events` 一样不自动清理。诊断包不导出这张表（里面是回复正文）；备份会带上。`model.error` 内部事件从此在 `meta` 里带 `batchId` 与 `kind`，对话页据此说明某条消息为什么没有回复。
+对话历史（`GET /api/chat`）= `chat.message` 事件 + `channel` 为 `chat` / `approvals` 的输出，按平台过滤，按 `(at, 种类, id)` 倒序分页。2026-11-10 对话与控制台分离时，`kv`（`core` / `chat.split`）记下分界 `{ cursor, outputId }`：分界之前的 `console.message` 事件与 `plugin = 'console'` 的输出算作 `webchat`，事件日志不改写。迁移之前发出的回复在第一次启动时从主会话转录（`sessions/main.*.jsonl`）里找回：迁移时间之前、结果不是错误的 `con_send` 调用，各补一行；完成后在 `kv`（`core` / `outputs.backfilled`）记下，只做一次。和 `events` 一样不自动清理。诊断包不导出这张表（里面是回复正文）；备份会带上。`model.error` 内部事件从此在 `meta` 里带 `batchId` 与 `kind`，对话页据此说明某条消息为什么没有回复。
 
 ### 1.7 迁移 7：`memory-layers`（2026-11-10）
 

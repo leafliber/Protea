@@ -26,7 +26,7 @@ function dataDir(yaml = ''): string {
   return dir;
 }
 
-/** A fake OpenAI-compatible model server: answers every console batch with con_send, then ends the turn. */
+/** A fake OpenAI-compatible model server: answers every batch with chat_send, then ends the turn. */
 const calls: Array<{ path: string; auth: string | undefined; body: Record<string, unknown> }> = [];
 let model: http.Server;
 let modelUrl = '';
@@ -46,7 +46,7 @@ beforeAll(async () => {
       const last = messages.at(-1);
       const chunks =
         last?.role === 'user' && String(last.content).includes('<event')
-          ? [{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'con_send', arguments: JSON.stringify({ text: 'hello from the fake model' }) } }] }, finish_reason: 'tool_calls' }] }]
+          ? [{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'chat_send', arguments: JSON.stringify({ platform: 'webchat', text: 'hello from the fake model' }) } }] }, finish_reason: 'tool_calls' }] }]
           : [{ choices: [{ delta: { content: 'OK' }, finish_reason: 'stop' }] }];
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       for (const c of chunks) res.write(`data: ${JSON.stringify({ model: body['model'], ...c })}\n\n`);

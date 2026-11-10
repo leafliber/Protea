@@ -1,5 +1,5 @@
 import { definePlugin, type Host, type PluginDefinition } from '@protea/plugin-sdk';
-import type { EventInput } from '@protea/protocol';
+import { CHAT_MESSAGE_EVENT, type EventInput } from '@protea/protocol';
 
 export interface TelegramConfig {
   apiBase?: string;
@@ -114,7 +114,7 @@ const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
 /**
  * The Telegram connector: long-polls getUpdates, turns messages into events (owner
  * private messages at L1, strangers at L2, groups at L2 when mentioned, otherwise
- * stored), and offers tg_send / tg_send_chat / tg_react. See docs/10-architecture/08-event-source-plugins.md.
+ * stored), and is the `telegram` chat platform (`chat_send`), and offers tg_send_chat / tg_react. See docs/10-architecture/08-event-source-plugins.md.
  */
 export function createTelegramPlugin(): PluginDefinition<TelegramConfig> {
   let client: TelegramClient | null = null;
@@ -160,6 +160,8 @@ export function createTelegramPlugin(): PluginDefinition<TelegramConfig> {
       meta: { chatId: m.chat.id, messageId: m.message_id, chatType: m.chat.type },
     };
     const type = edited ? 'telegram.edited' : 'telegram.message';
+    // The owner's private messages are the conversation; an edit stays Telegram's own fact.
+    const ownerType = edited ? 'telegram.edited' : CHAT_MESSAGE_EVENT;
 
     if (m.chat.type === 'private') {
       if (role === 'owner') {
@@ -176,7 +178,7 @@ export function createTelegramPlugin(): PluginDefinition<TelegramConfig> {
         }
         const stopWords = (host.config.stopWords ?? DEFAULT_STOP_WORDS).map((w) => w.toLowerCase());
         const isStop = stopWords.includes(text.trim().toLowerCase().replace(/[.!。！]+$/u, ''));
-        await host.events.push({ ...base, type, level: 1, trigger: isStop && !edited ? 'interrupt' : 'flush', text: `Message from owner in private chat (${ref}):\n${text}` });
+        await host.events.push({ ...base, type: ownerType, level: 1, trigger: isStop && !edited ? 'interrupt' : 'flush', text: `Message from owner in private chat (${ref}):\n${text}` });
         return;
       }
       await host.events.push({
@@ -248,31 +250,18 @@ export function createTelegramPlugin(): PluginDefinition<TelegramConfig> {
     async onConfigChanged(host, patch) {
       if ('ownerChatId' in patch) ownerChatId = host.config.ownerChatId ?? (await host.kv.get<number>('ownerChatId')) ?? null;
     },
-    tools: [
-      {
-        name: 'tg_send',
-        description: "Send a message to the owner's private Telegram chat.",
-        inputSchema: {
-          type: 'object',
-          additionalProperties: false,
-          required: ['text'],
-          properties: {
-            text: { type: 'string', minLength: 1, maxLength: 20_000 },
-            reply_to: { type: 'integer', description: 'Message id to reply to.' },
-          },
-        },
-        flags: { sideEffect: true, barrierAfter: true },
-        handler: async (i: { text: string; reply_to?: number }) => {
-          if (ownerChatId === null) {
-            return {
-              text: "the owner's chat is not known yet: the owner has to message the bot first (or set plugins.telegram.config.ownerChatId)",
-              failed: true,
-            };
-          }
-          const ids = await send(ownerChatId, i.text, i.reply_to);
-          return `sent message ${ids.join(', ')} to the owner`;
-        },
+    chat: {
+      async send(_host, req) {
+        if (ownerChatId === null) {
+          return { ok: false, error: "the owner's Telegram chat is not known yet: the owner has to message the bot first (or set plugins.telegram.config.ownerChatId)" };
+        }
+        const replyTo = req.replyTo === undefined ? undefined : Number(req.replyTo);
+        if (replyTo !== undefined && !Number.isInteger(replyTo)) return { ok: false, error: `reply_to must be a Telegram message id, not "${req.replyTo}"` };
+        const ids = await send(ownerChatId, req.text, replyTo);
+        return { ok: true, messageIds: ids.map(String) };
       },
+    },
+    tools: [
       {
         name: 'tg_send_chat',
         description: 'Send a message to another Telegram chat (a group or another user). Needs the owner’s approval.',

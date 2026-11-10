@@ -1,5 +1,5 @@
 import type { Context, Hono } from 'hono';
-import { isLevel, isTrigger, type BatchInfo, type ConfigResponse, type SecretInfo } from '@protea/protocol';
+import { isLevel, isTrigger, type BatchInfo, type BatchTraceResponse, type BatchTraceStep, type ConfigResponse, type SecretInfo } from '@protea/protocol';
 import {
   DIAG_NAME_RE,
   fetchSource,
@@ -27,6 +27,8 @@ import { actorOf, principal } from './auth.js';
 export interface OpsDeps {
   store: EventStore;
   batches?: BatchRepo;
+  /** The steps of a batch, rebuilt from its transcript and outputs. */
+  batchSteps?: (batchId: string) => BatchTraceStep[];
   usage?: UsageRepo;
   forks?: ForkManager;
   plugins?: PluginHost;
@@ -163,6 +165,14 @@ export function registerOpsRoutes(app: Hono, d: OpsDeps): void {
       ...(session ? { sessionId: session } : {}),
     });
     return c.json({ batches });
+  });
+  app.get('/api/batches/:id/trace', (c) => {
+    const b = d.batches?.get(c.req.param('id'));
+    if (!b) return notFound(c, 'no such batch');
+    const steps = d.batchSteps?.(b.id) ?? [];
+    const events = (d.batches?.cursorsOf(b.id) ?? []).map((n) => d.store.get(n)).filter((e) => e !== undefined);
+    const res: BatchTraceResponse = { batch: b, events, steps };
+    return c.json(res);
   });
   app.get('/api/batches/:id', (c) => {
     const b = d.batches?.get(c.req.param('id'));

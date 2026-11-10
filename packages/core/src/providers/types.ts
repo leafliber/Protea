@@ -31,6 +31,14 @@ export interface ProviderUsage {
   cacheWriteTokens: number;
 }
 
+export interface GenerateOptions {
+  signal: AbortSignal;
+  /** Reply text as it streams. */
+  onText?: (delta: string) => void;
+  /** Reasoning text as it streams, where the provider shows it. */
+  onThinking?: (delta: string) => void;
+}
+
 export interface ProviderResponse {
   content: ContentBlock[];
   stopReason: string;
@@ -80,5 +88,5 @@ export interface Provider {
   /** Model names the endpoint offers (for the console's model picker), when it can list them. */
   listModels?(signal: AbortSignal): Promise<string[]>;
   /** Streams internally; resolves with the complete message. Throws ProviderError or an abort error. */
-  generate(req: ProviderRequest, opts: { signal: AbortSignal; onText?: (delta: string) => void }): Promise<ProviderResponse>;
+  generate(req: ProviderRequest, opts: GenerateOptions): Promise<ProviderResponse>;
 }
