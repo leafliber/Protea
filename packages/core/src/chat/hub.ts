@@ -119,19 +119,35 @@ export class ChatHub {
       return { text: `${id} could not send the message: ${errorMessage(err)}`, failed: true };
     }
     if (!result.ok) return { text: result.error ?? `${id} could not send the message`, failed: true };
-    this.record(id, text, call);
+    this.record(id, text, { sessionId: call.sessionId, batchId: call.batchId });
     const ids = result.messageIds ?? [];
     return { text: `sent to ${id}${ids.length > 0 ? ` as message ${ids.join(', ')}` : ''} (${text.length} characters)` };
   }
 
-  private record(plugin: string, text: string, call: ToolContext): void {
+  /** A message from Protea itself, to where the owner last wrote; false when it could not be sent. */
+  async notifyOwner(text: string): Promise<boolean> {
+    const id = this.lastPlatform ?? [...this.platforms.keys()].sort()[0];
+    const platform = id !== undefined ? this.platforms.get(id) : undefined;
+    if (id === undefined || !platform) return false;
+    try {
+      const result = await platform.send({ text });
+      if (!result.ok) throw new Error(result.error ?? 'the platform did not send it');
+      this.record(id, text, {});
+      return true;
+    } catch (err) {
+      this.o.log.warn({ platform: id, err: errorMessage(err) }, 'could not send a notice to the owner');
+      return false;
+    }
+  }
+
+  private record(plugin: string, text: string, call: Partial<Pick<ToolContext, 'sessionId' | 'batchId'>>): void {
     const at = new Date(this.o.clock.now()).toISOString();
     let id: number | undefined;
     try {
-      id = this.o.outputs?.record({ at, plugin, channel: CHAT_CHANNEL, text, sessionId: call.sessionId, batchId: call.batchId }).id;
+      id = this.o.outputs?.record({ at, plugin, channel: CHAT_CHANNEL, text, ...call }).id;
     } catch (err) {
       this.o.log.warn({ plugin, err: errorMessage(err) }, 'could not store a chat message');
     }
-    this.o.bus.emit('plugin.output', { plugin, channel: CHAT_CHANNEL, text, at, batchId: call.batchId, ...(id !== undefined ? { id } : {}) });
+    this.o.bus.emit('plugin.output', { plugin, channel: CHAT_CHANNEL, text, at, ...(call.batchId !== undefined ? { batchId: call.batchId } : {}), ...(id !== undefined ? { id } : {}) });
   }
 }

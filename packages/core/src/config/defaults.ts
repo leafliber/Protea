@@ -1,3 +1,4 @@
+import { DEFAULT_VISION_SETTINGS } from '../blobs/settings.js';
 import { DEFAULT_TOOL_SEARCH } from '../context/settings.js';
 import { DEFAULT_DREAM, DEFAULT_IDLE_COMPACTION } from '../maintenance/settings.js';
 import { DEFAULT_MCP_SETTINGS } from '../mcp/settings.js';
@@ -43,7 +44,14 @@ export function defaultConfig(): ProteaConfig {
       restartBackoffMs: [...DEFAULT_PLUGIN_HOST_SETTINGS.restartBackoffMs],
       limits: { ...DEFAULT_PLUGIN_HOST_SETTINGS.limits },
     },
-    permissions: { default: 'allow', tools: {}, approvalTtlMs: 86_400_000 },
+    permissions: {
+      default: 'allow',
+      tools: {},
+      approvalTtlMs: 86_400_000,
+      grantMaxMs: 8 * 3_600_000,
+      mode: 'ask',
+      auto: { environment: '', allow: '', ask: '', timeoutMs: 30_000, pauseAfterConsecutive: 3, pauseAfterPerHour: 20 },
+    },
     mcp: { ...DEFAULT_MCP_SETTINGS, servers: {} },
     skills: { disabled: [], mcpPrompts: true },
     context: {
@@ -53,6 +61,7 @@ export function defaultConfig(): ProteaConfig {
       idleCompaction: { ...DEFAULT_IDLE_COMPACTION },
     },
     memory: { nativeTool: false, board: { ...DEFAULT_BOARD }, dream: { ...DEFAULT_DREAM } },
+    vision: { ...DEFAULT_VISION_SETTINGS },
     persona: { dir: 'persona' },
     observability: { logLevel: 'info', logFormat: 'auto', logEventText: false, keepRuns: 20, logRotateMb: 50, logRotateKeep: 4, requiredPlugins: [], recordProvider: 'off' },
   };
@@ -77,7 +86,7 @@ export const STARTER_CONFIG_YAML = `# Protea configuration. Every key is optiona
 
 # providers:                  # model providers; easiest from the console (模型 page) or "protea providers set"
 #   default: claude             # the profile every role uses unless roles says otherwise ("echo": offline development)
-#   roles: { cheap: local }     # optional: a different profile per role (main, fork, cheap)
+#   roles: { cheap: local }     # optional: a different profile per role (main, fork, cheap, judge)
 #   profiles:
 #     claude:
 #       protocol: anthropic     # anthropic | openai-chat | openai-responses | echo
@@ -100,7 +109,17 @@ export const STARTER_CONFIG_YAML = `# Protea configuration. Every key is optiona
 #     config: {}
 
 # permissions:
-#   tools: { tg_send_chat: ask }    # allow | ask | deny; globs like "mcp__*" work too
+#   tools: { tg_send_chat: ask }    # allow | ask | deny; globs like "mcp__*" work too; an ask written here always reaches you
+#   mode: ask                 # who clears the other asks: ask (you), auto (a judge model, the rest come to you), locked (none run)
+#   auto:                     # standing rules for the judge, in plain language
+#     environment: "A personal assistant; the sandbox is disposable."
+#     allow: "Reading and changing files in the workspace."
+#     ask: "Anything posted publicly."
+
+# vision:                     # images in the conversation; a profile's "vision: true" says its models can see them
+#   maxImageKb: 1536
+#   maxImagesPerMessage: 4
+#   blobRetentionDays: 30     # 0 keeps stored images
 
 # mcp:
 #   servers:                  # add with "protea mcp add"; tools appear as mcp__<server>__<tool>

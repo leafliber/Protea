@@ -36,6 +36,7 @@ import { matchesAny } from '../util/glob.js';
 import type { Clock } from '../util/time.js';
 import { mcpOwner, mcpToolName } from './names.js';
 import { FileOAuthProvider } from './oauth.js';
+import { serverWarnings } from './presets.js';
 import type { McpServerSettings, McpSettings } from './settings.js';
 
 type Supervision = Pick<PluginHostSettings, 'restartBackoffMs' | 'maxCrashes' | 'stableAfterMs' | 'initializeTimeoutMs' | 'drainTimeoutMs'> &
@@ -54,6 +55,8 @@ export interface McpManagerOptions {
   pushInternal: (input: Omit<EventInput, 'ts' | 'origin'>) => void;
   /** An event from a server (resource updates), with source `mcp:<id>`. */
   pushEvent: (server: string, input: Omit<EventInput, 'ts' | 'origin'>) => void;
+  /** Stores an image a server returned (base64); without it images stay lines of text. */
+  keepImage?: (data: string, server: string) => { handle: string; mime: string } | { reason: string };
   /** Where the browser returns after an OAuth authorization (`<control>/api/mcp/oauth/callback`). */
   redirectUrl: () => string;
 }
@@ -138,14 +141,27 @@ function contentText(c: ContentLike): string {
   }
 }
 
-/** A CallToolResult as tool-result text. */
-export function renderCallResult(r: Record<string, unknown>): ToolOutcome {
+/** Keeps an image a server returned; without it, or on refusal, the image stays a line of text. */
+export type McpImageSink = (data: string) => { handle: string; mime: string } | { reason: string };
+
+/** A CallToolResult as tool-result text and stored images. */
+export function renderCallResult(r: Record<string, unknown>, keepImage?: McpImageSink): ToolOutcome {
   const content = Array.isArray(r['content']) ? (r['content'] as ContentLike[]) : [];
-  let text = content.map(contentText).filter((t) => t !== '').join('\n');
+  const images: Array<{ handle: string; mime: string }> = [];
+  const render = (c: ContentLike): string => {
+    if (c.type !== 'image' || !keepImage || typeof c.data !== 'string') return contentText(c);
+    const kept = keepImage(c.data);
+    if ('reason' in kept) return `${contentText(c)} (not shown: ${kept.reason})`;
+    images.push(kept);
+    return '';
+  };
+  let text = content.map(render).filter((t) => t !== '').join('\n');
+  if (!text && images.length > 0) return r['isError'] === true ? { text: `[${images.length} image(s)]`, failed: true } : { text: `[${images.length} image(s)]`, images };
   if (!text && r['structuredContent'] !== undefined) text = JSON.stringify(r['structuredContent']);
   if (!text && r['toolResult'] !== undefined) text = JSON.stringify(r['toolResult']);
   if (!text) text = '(no content)';
-  return r['isError'] === true ? { text, failed: true } : { text };
+  if (r['isError'] === true) return { text, failed: true };
+  return images.length > 0 ? { text, images } : { text };
 }
 
 function isConnectionClosed(err: unknown): boolean {
@@ -171,7 +187,10 @@ export class McpManager implements PromptSource {
   constructor(private readonly o: McpManagerOptions) {
     this.watchdog = new MemoryWatchdog({
       limits: () => o.supervision().limits ?? DEFAULT_PROCESS_LIMITS,
-      targets: () => [...this.entries.values()].flatMap((e) => (e.state === 'running' && e.pid !== undefined ? [{ id: e.id, pid: e.pid }] : [])),
+      targets: () =>
+        [...this.entries.values()].flatMap((e) =>
+          e.state === 'running' && e.pid !== undefined ? [{ id: e.id, pid: e.pid, ...(e.settings.memoryMb !== undefined ? { memoryMb: e.settings.memoryMb } : {}) }] : [],
+        ),
       onSample: (samples) => {
         for (const [id, bytes] of samples) {
           const e = this.entries.get(id);
@@ -415,6 +434,7 @@ export class McpManager implements PromptSource {
       ...(e.error ? { error: e.error } : {}),
       ...(e.authorizeUrl && e.state === 'auth_required' ? { authorizeUrl: e.authorizeUrl } : {}),
       ...(avg !== undefined ? { avgLatencyMs: avg } : {}),
+      ...(serverWarnings(e.settings.args).length > 0 ? { warnings: serverWarnings(e.settings.args) } : {}),
     };
   }
 
@@ -557,11 +577,13 @@ export class McpManager implements PromptSource {
       void this.serialize(e, () => this.lost(e, gen, `the server closed the connection${this.stderrHint(e)}`));
     };
     client.onerror = (err) => log.debug({ err: errorMessage(err) }, 'MCP transport error');
-    const workspace = path.join(this.o.dataDir, 'workspace');
-    client.setRequestHandler(ListRootsRequestSchema, () => {
-      fs.mkdirSync(workspace, { recursive: true });
-      return { roots: [{ uri: pathToFileURL(workspace).href, name: 'workspace' }] };
-    });
+    const roots = (e.settings.roots ?? ['workspace']).map((r) => path.join(this.o.dataDir, r));
+    client.setRequestHandler(ListRootsRequestSchema, () => ({
+      roots: roots.map((dir) => {
+        fs.mkdirSync(dir, { recursive: true });
+        return { uri: pathToFileURL(dir).href, name: path.basename(dir) };
+      }),
+    }));
     client.setNotificationHandler(ToolListChangedNotificationSchema, () => this.listChanged(e, gen, 'tools'));
     client.setNotificationHandler(PromptListChangedNotificationSchema, () => this.listChanged(e, gen, 'prompts'));
     client.setNotificationHandler(ResourceListChangedNotificationSchema, () => this.listChanged(e, gen, 'resources'));
@@ -671,7 +693,7 @@ export class McpManager implements PromptSource {
         timeout: e.settings.toolTimeoutMs + 5_000,
         resetTimeoutOnProgress: true,
       });
-      return renderCallResult(r as Record<string, unknown>);
+      return renderCallResult(r as Record<string, unknown>, this.o.keepImage ? (data) => (this.o.keepImage as NonNullable<McpManagerOptions['keepImage']>)(data, e.id) : undefined);
     } catch (err) {
       if (signal.aborted) throw err; // the dispatcher words the timeout or cancellation
       if (isConnectionClosed(err)) return { text: `failed: the MCP server ${e.id} exited during the call; it restarts on its own, so you may retry`, failed: true };

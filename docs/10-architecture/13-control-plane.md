@@ -54,6 +54,7 @@
 | `/api/secrets` | 只能写与列出名称；不可读值 |
 | `/api/permissions` | 规则与每个工具的当前决定；`PATCH` 改规则 |
 | `/api/approvals` | 列表、决定（同意/拒绝） |
+| `/api/permissions/mode` | 查看与切换权限模式 |
 | `/api/audit` | 审计记录 |
 | `/api/memory` | 浏览、读写、检索记忆文件（管理员） |
 | `/api/persona` | 列出与读写人格 Markdown 文件（管理员） |
@@ -107,7 +108,7 @@ WebSocket 客户端发 `{ subscribe: [...], since?, logFilter? }`，每条订阅
 | 插件 | 卡片：状态、来源、工具数、重启次数、最近错误；安装（Git / tarball / 目录）/启用/禁用/重载/卸载；配置表单（由 JSON Schema 生成，标出 `x-hot: false`）与 JSON 编辑；日志；清单 |
 | MCP | 服务器列表、工具、延迟、添加（本地命令或远程 URL，bearer / OAuth）、OAuth 授权 |
 | Skills | 列表、正文预览、诊断、安装、启停、删除 |
-| 审批 | 待处理与历史、审计记录 |
+| 审批 | 权限模式（当前模式、到期时间、判断统计、切换）；待处理与历史、时限授权、审计记录 |
 | 记忆与人格 | 记忆目录树、全文检索、编辑器；人格文件编辑（钩子是代码，不在这里编辑） |
 | 配置 | 生效配置与来源层、按路径或补丁修改；账号（添加、角色、重设密码、删除）与自己的密码；秘密名称管理；权限；预算；调度 |
 | 日志 | 实时尾随（WS）、检索（本次或历次运行）、运行目录的关停记录与崩溃报告 |
@@ -133,7 +134,9 @@ protea config get [path] [--sources]|set <path> <value>|unset <path>
 protea secrets [ls]|set <NAME>|rm <NAME>     # set 从 stdin 读值
 protea scheduler [status]|pause|resume|discard --levels 3,4
 protea budget [release [--levels 2,3,4] [--hard-cap] [--hours 24]]
-protea approvals ls|approve|deny <id>
+protea approvals ls|approve|deny <id> [--for 1h] · grants · revoke <grant>
+protea mcp preset browser [--no-sandbox]
+protea sandbox serve · run <命令>
 protea memory [ls]|cat|put|search
 protea persona [ls]|cat|put
 protea logs [--level --component --plugin --q --since --run] [--follow]

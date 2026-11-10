@@ -1,6 +1,6 @@
 # 部署
 
-> 状态：Accepted（M6）· 更新：2026-11-04 · 决策：[ADR-0007](../20-decisions/ADR-0007-single-image-with-node-and-python.md)、[ADR-0009](../20-decisions/ADR-0009-single-uid-with-process-limits.md)
+> 状态：Accepted（M6）· 更新：2026-11-10 · 决策：[ADR-0007](../20-decisions/ADR-0007-single-image-with-node-and-python.md)、[ADR-0009](../20-decisions/ADR-0009-single-uid-with-process-limits.md)、[ADR-0013](../20-decisions/ADR-0013-sandboxed-shell-and-in-container-browser.md)
 
 > **实现状态（M6）**：`Dockerfile`（仓库根目录，full 与 slim 两个目标）、`docker/entrypoint.sh`、`docker/docker-compose.yml` 与 `docker/Caddyfile`；CLI 的 `migrate`、`healthcheck`、`backup`、`restore`、`replay`；`scripts/container-smoke.sh`（容器冒烟测试）与 `scripts/soak.mjs`（长稳测试）；`.github/workflows/ci.yml` 构建两种镜像、跑冒烟测试并用 Trivy 扫描。镜像还没有发布到镜像仓库，需要自己构建。
 
@@ -12,10 +12,14 @@
 |---|---|---|---|
 | `full`（默认） | Node 22、npm/npx、Python 3.13、uv/uvx、git、ripgrep、jq、curl、openssh-client、tini | 约 550 MB | 约 170 MB |
 | `slim` | Node 22、npm/npx、tini（不能跑 `uvx` 型 MCP 服务器与 Python 插件） | 约 345 MB | 约 95 MB |
+| `browser` | `full` + Chromium、中文字体与固定版本的 Playwright MCP（内置浏览器） | 约 1.4 GB（arm64，2026-11-10） | — |
+
+沙箱容器不需要单独的镜像，用 `full` 或 `browser` 都可以。
 
 ```bash
 docker build -t protea .                       # full
 docker build -t protea:slim --target slim .    # slim
+docker build -t protea:browser --target browser .  # 带 Chromium
 ```
 
 多阶段构建（`Dockerfile`）：
@@ -52,7 +56,27 @@ cd docker && docker compose up -d                                   # 只监听 
 PROTEA_DOMAIN=protea.example.com docker compose --profile tls up -d   # 加 Caddy，自动证书，443
 ```
 
-示例里给出了推荐的容器限制：`mem_limit: 1g`、`cpus: 1`、`pids_limit: 512`、`cap_drop: [ALL]`（只加回入口脚本需要的 `CHOWN`、`DAC_OVERRIDE`、`FOWNER`、`SETUID`、`SETGID`）、`no-new-privileges`、`stop_grace_period: 40s`、日志轮转。秘密放在同目录的 `secrets.env`（可选）。
+示例里给出了推荐的容器限制：`mem_limit: 1g`、`cpus: 1`、`pids_limit: 512`、`cap_drop: [ALL]`（只加回入口脚本需要的 `CHOWN`、`DAC_OVERRIDE`、`FOWNER`、`SETUID`、`SETGID`，以及让 PID 1 的 tini 能把 SIGTERM 转给 uid 1000 进程的 `KILL`）、`no-new-privileges`、`stop_grace_period: 40s`、日志轮转。秘密放在同目录的 `secrets.env`（可选）。
+
+**沙箱（助理的 shell）**：
+
+```bash
+cd docker && docker compose --profile sandbox up -d   # 加上 sandbox 容器
+docker compose exec protea protea sandbox run 'id'    # 确认连得上
+```
+
+然后启用 `shell` 插件。沙箱容器运行 `protea sandbox serve`：没有 `/data`，只在自己的网络 `sandbox-net` 上，和主容器共享三个卷——`protea-workspace`（两边的工作区）、`protea-browser-files`（浏览器的文件，沙箱只读）、`sandbox-run`（unix socket，主容器只读）。它自己的 `sandbox-home` 保存装过的包与 shell 状态。沙箱的出站不受限，要限制就在部署层加防火墙或出口代理。
+
+**内置浏览器**：
+
+```bash
+cd docker && docker compose -f docker-compose.yml -f docker-compose.browser.yml up -d --build
+docker compose exec protea protea mcp preset browser
+```
+
+覆盖文件把主服务换成 `browser` 镜像，内存 2 GB、`pids_limit` 1024、`shm_size` 512 MB，并加上 `seccomp-chromium.json`（Docker 默认配置加上 Chromium 沙箱需要的 `clone`、`unshare`、`setns`、`chroot` 的命名空间用法）。启用浏览器后主容器的最低配置是 2 GB。用 `docker run` 部署时自己加 `--security-opt seccomp=…`、`--shm-size`、`--memory`、`--pids-limit`。
+
+宿主不允许非特权用户命名空间时（部分内核的 `kernel.apparmor_restrict_unprivileged_userns=1` 等），Chromium 的沙箱建不起来，可以 `protea mcp preset browser --no-sandbox`，控制台会持续警告。
 
 ### 2.1 进程树与信号
 
@@ -103,8 +127,9 @@ tini (PID 1, root)
 ├── plugins/                 ← 用户插件
 ├── plugin-data/<id>/        ← 插件私有数据；plugin-data/mcp/<id>/ 是 stdio MCP 服务器的工作目录
 ├── skills/                  ← 用户 Skills
-├── workspace/               ← shell 工具与 MCP roots 的工作区
-├── blobs/                   ← 附件
+├── workspace/               ← MCP roots 的工作区；Compose 部署里是与沙箱共享的卷（内容不可信）
+│   └── browser/             ← 浏览器的截图、PDF、下载；Compose 部署里是沙箱只读的卷
+├── blobs/                   ← 图片（ADR-0014）
 ├── cache/                   ← npm/uv/pip 缓存、backup-git/（Git 备份的工作副本）；可以清空
 ├── overrides/               ← 环境提示等覆盖
 ├── backups/                 ← protea backup 的默认位置；迁移前的快照；restore 移开的旧文件
@@ -112,7 +137,7 @@ tini (PID 1, root)
 └── runs/<runId>/            ← 日志、关停记录、崩溃报告、provider.jsonl（录制模式）
 ```
 
-只有 `/data` 需要持久化。
+需要持久化的是 `/data`；Compose 部署里另有 `protea-workspace`、`protea-browser-files` 与 `sandbox-home`。
 
 ## 4. 配置层叠
 
@@ -185,6 +210,7 @@ docker start protea
 ## 9. 开发与测试
 
 - 本地：`pnpm dev` 以热重载启动守护进程，数据目录 `./.dev-data`；控制台先 `pnpm build` 一次，或 `pnpm web` 起 Vite 开发服务器。
+- 沙箱与浏览器的冒烟测试：`scripts/sandbox-smoke.sh <browser 镜像>`：沙箱非 root、无 capability、看不到 `/data`、连不上控制面；shell 状态跨两边重启；工作区共享、浏览器目录只读；浏览器能开页面和截图，打不开本地文件，Chromium 自带沙箱开启。
 - 容器冒烟测试：`scripts/container-smoke.sh <镜像>`：非 root、健康检查、控制台消息有回复、暂停投递后 `docker stop`/`start` 等待中的事件一个不少并在恢复后送达、有 `shutdown.json`、容器内备份且属主正确、入口脚本做了迁移。CI 对 full 与 slim 都跑。
 - 长稳测试（可选；长时间运行主要靠实际使用中的指标观察）：`node scripts/soak.mjs --url … --token-file … --hours 72 --rate 2`，对使用 echo Provider 的实例持续推送混合等级的事件，按间隔采样 `/metrics`，结束时给出内存增长（%/天）、数据库增长与延迟 P95；超过 `--max-growth`（默认 5 %/天）时退出码为 1。
 - 容器内调试：`docker exec -it protea protea status`、`docker exec -it protea sh`。

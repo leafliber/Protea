@@ -59,7 +59,9 @@
 |---|---|---|
 | GET | `/api/events?level=&source=&state=&type=&since=&until=&cursor=&limit=&order=` | `{ events, nextCursor }`。默认新的在前；`cursor` 取比它旧的一页，`nextCursor` 为 null 表示没有更多。`level` 是最大等级，`state` 可逗号分隔，`limit` ≤ 1000 |
 | GET | `/api/events/:cursor` | `{ event, delivery }`（信封 + 投递记录） |
-| POST | `/api/chat/messages` | 主人在 `webchat` 里说话：`{ text, trigger?: flush \| interrupt }` → 同 `POST /api/events` 的回执 |
+| GET | `/api/blobs/:handle` | 图片内容（仅管理员，`x-content-type-options: nosniff`）；不存在或已过期 404 |
+| POST | `/api/blobs` | 存一张图片（仅管理员）：`{ dataBase64 }` → 201 `{ handle, mime, size }`；类型按内容判断，不是图片或超过 `vision.maxImageKb` 时 422 |
+| POST | `/api/chat/messages` | 主人在 `webchat` 里说话：`{ text, images?: [{ handle, mime }], trigger?: flush \| interrupt }`（有图片时 `text` 可为空；图片要先上传，否则 400）→ 同 `POST /api/events` 的回执 |
 | GET | `/api/chat?platform=&before=&limit=` | 一个对话的历史（`platform` 默认 `webchat`，`all` 为全部平台）：`ChatHistoryResponse` `{ items, batches, before }`。`items` 由旧到新，每条带 `platform`，是 `chat.message` 事件（`kind: owner`，带 `cursor`、`state`、`sender`）与 `chat_send` 发出的消息（`kind: reply`，审批提示为 `notice`）；分界之前的 `console` 对话算作 `webchat`；`batches` 是这些条目所在批的结局（`endReason`、`sources`、`replied`，`model_error` 时带 `error`）。`before` 取更早的一页（为 null 表示没有更多），`limit` ≤ 200，默认 50 |
 | GET | `/api/chat/batches?ids=a,b` | `{ batches }`：这些批的结局（同上；至多 100 个，未知的省略）。控制台在 `batch.ended` 后用它刷新状态 |
 | POST | `/api/events` | 推送 `{ text, level?, trigger?, tags? }`（来源固定为 `console`，senderKey 为 `api:admin`、`console:<用户名>` 或 `console:admin`）→ 201 `PushEventResponse` |
@@ -94,6 +96,7 @@
 | GET | `/api/plugins/:id/logs?limit=&level=&q=&since=` | `{ logs }`：本次运行中带该插件字段的日志 |
 | GET | `/api/mcp/servers` · `/api/mcp/servers/:id` | `{ servers: McpServerStatus[] }` · `McpServerStatus` |
 | POST | `/api/mcp/servers` | `{ id, ...配置项 }`（同 `mcp.servers.<id>`）：校验、写回 `config.yaml`、启动并等它就绪或失败；新建 201、替换 200；配置无效 400 |
+| POST | `/api/mcp/presets/browser` | 写入并启动内置浏览器（`mcp.servers.browser`）：`{ noSandbox?: boolean }` → 201 `McpServerStatus`；镜像里没有浏览器时 409 |
 | DELETE | `/api/mcp/servers/:id` | 停止、移除工具、从 `config.yaml` 删除 |
 | POST | `/api/mcp/servers/:id/enable` · `/disable` · `/restart` | 返回 `McpServerStatus`；`restart` 从 failed 恢复 |
 | GET | `/api/mcp/servers/:id/tools` | `{ tools: McpToolInfo[] }`（含被 allow/deny 过滤掉的，标 `filtered`） |
@@ -116,7 +119,11 @@
 | GET | `/api/permissions` | `{ settings, tools: [{ name, owner, policy, rule }] }`：规则与每个工具当前的决定 |
 | PATCH | `/api/permissions` | `permissions` 分节的 Merge Patch（如 `{ tools: { chat_send: ask } }`，`null` 删除规则），经 `PATCH /api/config` → 合并后的结果 |
 | GET | `/api/approvals?state=pending` | `{ approvals: ApprovalInfo[] }`（state：pending、approved、denied、expired、used） |
-| POST | `/api/approvals/:id/decide` | `{ decision: approve\|deny, note? }`；决定者记为 `console:admin`；已决定或已过期 → 409 |
+| GET | `/api/permissions/mode` | `PermissionModeInfo`：`{ mode, baseline, override?: { mode, until, by, setAt }, paused?: { at, reason }, auto: { since, allowed, held, judge: { model, ready, problem? } }, bypassMaxMs }` |
+| POST | `/api/permissions/mode` | `{ mode: ask\|auto\|bypass\|locked, forMs? }`，返回 `PermissionModeInfo`；不带 `forMs` 写成基线，`bypass` 必须带 `forMs`，否则 400 |
+| GET | `/api/approvals/grants` | `{ grants: ApprovalGrantInfo[] }`：时限授权，新的在前 |
+| POST | `/api/approvals/grants/:id/revoke` | 提前结束授权，返回 `ApprovalGrantInfo` |
+| POST | `/api/approvals/:id/decide` | `{ decision: approve\|deny, grantMs?, note? }`；`grantMs`：同意时还在这段时间内放行同一组工具（上限 `permissions.grantMaxMs`）；决定者记为 `console:admin`；已决定或已过期 → 409 |
 | GET | `/api/budget` | `{ settings, status: BudgetStatus }`。`status`：`enforced`、`dailyUsd`、`hardDailyUsd`、`spentUsd`（24 h 合计）、`hardCapReached`、`hardCapReleasedUntil?`，`levels.<L>`：`spentUsd`、`tokens`、`limitUsd`、`usedRatio`、`held?`（被预算改了投递方式且仍在等的事件数）、`releasedUntil?` |
 | PATCH | `/api/budget` | `budget` 分节的 Merge Patch（热更新） |
 | POST | `/api/budget/release` | `{ levels?: [2,3,4], hardCap?: boolean, hours?: number }`（默认 L2–L4、设置了硬上限时连同硬上限、24 h；`hours` ≤ 168）：在这段时间内不对这些等级强制执行，被扣住的事件恢复原来的投递方式 → `{ levels, hardCap, untilMs, until, promoted: number[] }`；记 L4 事件 `budget.released`。放行记在 kv，重启后仍有效（M6） |
@@ -191,7 +198,7 @@
 
 - 连接后服务端先发 `{ topic: 'hello', data: { runId, role } }`。
 - 客户端发 `WsClientMessage`：`{ subscribe: WsTopic[], since?: cursor, logFilter?: { level?, component?, plugin?, q? } }`；每条替换之前的订阅，服务端回 `{ topic: 'subscribed', data: { topics } }`；未知分组回 `{ topic: 'error', data: { message } }`。
-- 分组 `WS_TOPICS`：`events`（`event`、`settled`、`promoted`）、`phase`（`phase`、`batch.*`）、`scheduler`、`output`、`changes`（`fork`、`plugin`、`approval`、`mcp`、`skills`、`handoff`、`persona`）、`usage`（`UsageInfo`）、`logs`（`log`，`LogRecord`）。 `trace`（`model.request`、`model.delta`、`model.response`、`tool.call`，运行流；载荷见 `@protea/protocol` 的 `TraceMessage`）。
+- 分组 `WS_TOPICS`：`events`（`event`、`settled`、`promoted`）、`phase`（`phase`、`batch.*`）、`scheduler`、`output`、`changes`（`fork`、`plugin`、`approval`、`permission`、`mcp`、`skills`、`handoff`、`persona`）、`usage`（`UsageInfo`）、`logs`（`log`，`LogRecord`）。 `trace`（`model.request`、`model.delta`、`model.response`、`tool.call`，运行流；载荷见 `@protea/protocol` 的 `TraceMessage`）。
 - 带 `since` 且订阅了 `events` 时，先补发游标之后存储的全部事件，期间的实时消息暂存后放出；同一游标不会发两次。
 - 服务端每 30 s ping，一个周期内没有 pong 的连接被终止；未发出的数据超过 8 MB 时以 1013 关闭。
 

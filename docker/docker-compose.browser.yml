@@ -1,0 +1,18 @@
+# The daemon with the bundled browser (docs/40-plan/08-sandbox-browser-vision.md §3):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.browser.yml up -d --build
+#   docker compose exec protea protea mcp preset browser
+#
+# Chromium needs memory, processes and shared memory the 1 GB baseline does not have. The seccomp
+# profile is Docker's default plus what Chromium's own sandbox needs (user namespaces and chroot).
+services:
+  protea:
+    image: ${PROTEA_IMAGE:-protea:browser}
+    build:
+      context: ..
+      target: browser
+    mem_limit: 2g
+    pids_limit: 1024
+    shm_size: 512m
+    security_opt:
+      - seccomp:./seccomp-chromium.json

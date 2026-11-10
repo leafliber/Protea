@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { isToolResultBlock, type ContentBlock, type Effort, type HandoffKind, type Level, type TranscriptMessage } from '@protea/protocol';
+import { isImageBlock, isToolResultBlock, type ContentBlock, type Effort, type HandoffKind, type Level, type TranscriptMessage } from '@protea/protocol';
 import { stripThinking } from '../context/prefix.js';
 import { isBoardText } from '../memory/board.js';
 import { MAX_MEMORY_FILE_BYTES, MEMORY_ROOT, type MemoryStore } from '../memory/store.js';
@@ -70,6 +70,12 @@ const RAW_CLIPS: RenderClips = { text: Number.POSITIVE_INFINITY, toolInput: RAW_
 /** Longest notes text carried into the new conversation. */
 const MAX_NOTES_IN_CONTEXT = 8_000;
 
+/** A block without text, as a line; a stored image keeps its handle so `view_image` can bring it back. */
+function imageLine(b: ContentBlock): string {
+  if (isImageBlock(b) && b.source.type === 'blob') return `[image ${b.source.media_type}, ${b.source.handle}]`;
+  return `[${b.type}]`;
+}
+
 function renderParts(messages: readonly TranscriptMessage[], clips: RenderClips): string[] {
   const parts: string[] = [];
   for (const m of messages) {
@@ -79,10 +85,10 @@ function renderParts(messages: readonly TranscriptMessage[], clips: RenderClips)
       else if (b.type === 'tool_use') lines.push(`[tool call ${String(b['name'])}] ${clip(JSON.stringify(b['input'] ?? {}), clips.toolInput)}`);
       else if (b.type === 'tool_result') {
         const c = b['content'];
-        const text = typeof c === 'string' ? c : Array.isArray(c) ? (c as ContentBlock[]).map((x) => (x.type === 'text' ? String(x['text']) : `[${x.type}]`)).join(' ') : '';
+        const text = typeof c === 'string' ? c : Array.isArray(c) ? (c as ContentBlock[]).map((x) => (x.type === 'text' ? String(x['text']) : imageLine(x))).join(' ') : '';
         lines.push(`[tool result${b['is_error'] ? ' (error)' : ''}] ${clip(text, clips.toolResult)}`);
       } else if (b.type === 'compaction') lines.push(`[earlier summary] ${clip(String(b['content'] ?? ''), 20_000)}`);
-      else if (b.type !== 'thinking' && b.type !== 'redacted_thinking' && b.type !== 'fallback') lines.push(`[${b.type}]`);
+      else if (b.type !== 'thinking' && b.type !== 'redacted_thinking' && b.type !== 'fallback') lines.push(imageLine(b));
     }
     if (lines.length > 0) parts.push(`--- ${m.role === 'user' ? 'runtime → assistant' : 'assistant'} ---\n${lines.join('\n')}`);
   }

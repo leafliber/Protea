@@ -4,6 +4,9 @@ import { fileURLToPath } from 'node:url';
 import {
   AccountStore,
   ApprovalService,
+  JudgeContextSource,
+  ModelPermissionJudge,
+  PermissionModes,
   AuditLog,
   Bus,
   BatchRepo,
@@ -81,6 +84,10 @@ import {
   gitBackup,
   isoInZone,
   kernelTools,
+  BlobStore,
+  ImageResolvingProvider,
+  browserPreset,
+  viewImageTool,
   kvNamespace,
   listBackups,
   loadConfig,
@@ -152,6 +159,12 @@ function setupBanner(url: string, code: string): string {
     '',
     '',
   ].join('\n');
+}
+
+/** The port of an address like "0.0.0.0:7788". */
+function listenPort(listen: string): number | undefined {
+  const n = Number(listen.slice(listen.lastIndexOf(':') + 1));
+  return Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
 export interface DaemonOptions {
@@ -345,9 +358,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const pushInternal = (input: InternalEventInput) => gateway.pushInternal(input);
   // Invariant I-7: no request carries a secret value, whatever path it took into the context.
   const redactedNames = new Set<string>();
+  const blobs = new BlobStore({ dir: path.join(dataDir, 'blobs'), db, clock, maxImageBytes: () => config.vision.maxImageKb * 1024 });
   // Profiles per role (providers.*); rebuilt when their settings or keys change, no restart needed.
   const router: ProviderRouter | null = opts.provider ? null : createProvider(() => config.providers, secrets);
-  const baseProvider: Provider = opts.provider ?? (router as ProviderRouter);
+  // Innermost wrapper: nothing outside it sees image bytes.
+  const baseProvider: Provider = new ImageResolvingProvider(opts.provider ?? (router as ProviderRouter), blobs, (role) => (router ? router.visionFor(role) : true));
   const fallbackProfile = defaultProfile('anthropic');
   const effortOf = (role: ModelRole, level: Level = 2) =>
     router ? router.effort(role, level) : role === 'main' ? fallbackProfile.effort.main[level] : fallbackProfile.effort[role];
@@ -382,6 +397,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   };
   const chat = new ChatHub({ tools, bus, outputs, log: log.child({ component: 'chat' }), clock });
   const plugins = new PluginHost({
+    blobs,
     chat,
     store,
     bus,
@@ -426,6 +442,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   // MCP servers (docs/10-architecture/09-mcp-integration.md); they start in the background below.
   let controlUrl = '';
   const mcp = new McpManager({
+    keepImage: (data, server) => {
+      const r = blobs.putImage(Buffer.from(data, 'base64'), `mcp:${server}`);
+      return r.ok ? { handle: r.blob.handle, mime: r.blob.mime } : { reason: r.reason };
+    },
     tools,
     bus,
     log: log.child({ component: 'mcp' }),
@@ -455,11 +475,54 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     clock,
     log: log.child({ component: 'approvals' }),
     ttlMs: () => config.permissions.approvalTtlMs,
+    grantMaxMs: () => config.permissions.grantMaxMs,
     deliver: (a) => plugins.requestApproval(a),
     pushInternal,
     redact: (text) => secrets.redact(text),
   });
   plugins.attachApprovals(approvals);
+  // ask / auto / bypass / locked (docs/20-decisions/ADR-0015-permission-modes-and-auto-review.md).
+  const modes = new PermissionModes({
+    kv: kvNamespace(kv, 'permissions'),
+    audit,
+    bus,
+    clock,
+    log: log.child({ component: 'permissions' }),
+    settings: () => config.permissions,
+    persistBaseline: async (mode) => {
+      replaceConfigValue(dataDir, ['permissions', 'mode'], mode, env);
+      await reloadConfig();
+    },
+    judgeStatus: () => {
+      const health = router ? router.healthFor('judge') : provider.health();
+      return { model: provider.modelFor('judge'), ready: health.ready, ...(health.problem !== undefined ? { problem: health.problem } : {}) };
+    },
+    notifyOwner: (text) => void chat.notifyOwner(text),
+  });
+  plugins.attachPermissionModes(modes);
+  const judge = new ModelPermissionJudge({
+    provider,
+    effort: () => effortOf('judge'),
+    settings: () => config.permissions.auto,
+    onUsage: (res, req) => {
+      const now = clock.now();
+      const rec = {
+        at: new Date(now).toISOString(),
+        atMs: now,
+        provider: res.provider ?? provider.id,
+        model: res.model,
+        role: 'judge' as const,
+        sessionId: req.sessionId,
+        batchId: req.batchId,
+        level: req.level,
+        ...res.usage,
+        stopReason: res.stopReason,
+        ...(res.costUsd !== undefined ? { costUsd: res.costUsd } : {}),
+      };
+      usage.record(rec);
+      bus.emit('usage.recorded', rec);
+    },
+  });
 
   const personaDir = path.resolve(dataDir, config.persona.dir);
   if (ensurePersona(personaDir, path.join(assets, 'personas', 'default')).created) log.info({ dir: personaDir }, 'installed the default persona');
@@ -518,7 +581,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     timezone: tz,
     overridesDir: path.join(dataDir, 'overrides'),
     log: log.child({ component: 'context' }),
-    permissions: () => policy.summary(tools.list()),
+    permissions: () => policy.summary(tools.list(), modes.current()),
     extraEnv: () => mcp.envSegments(),
     skills: () => skills.catalog(),
   });
@@ -545,7 +608,17 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     else applyPublishedIndex();
   };
   const dispatcher = new ToolDispatcher(tools, log.child({ component: 'tools' }));
-  dispatcher.setGuard(opts.toolGuard ?? new PermissionGuard(policy, approvals, audit));
+  dispatcher.setImageLimit(() => config.vision.maxImagesPerMessage);
+  bus.on('permission.mode', () => segments.refresh());
+  dispatcher.setGuard(
+    opts.toolGuard ??
+      new PermissionGuard(policy, approvals, audit, modes, {
+        judge,
+        context: new JudgeContextSource({ db, parentBatch: (id) => forks.parentBatch(id) }),
+        timeoutMs: () => config.permissions.auto.timeoutMs,
+        refusal: (level) => budget.forkRefusal(level),
+      }),
+  );
   const outbound = new OutboundLimiter({
     perMinute: () => config.pluginHost.outboundPerMinute,
     isConnector: (owner) => plugins.get(owner)?.kind === 'connector',
@@ -675,8 +748,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     };
   };
   for (const spec of kernelTools({ store, status })) tools.register('core', spec);
+  tools.register('core', viewImageTool({ blobs, workspace: path.join(dataDir, 'workspace'), maxBytes: () => config.vision.maxImageKb * 1024 }));
   for (const spec of forkTools(forks, { maxTurns: config.scheduler.forks.maxTurns })) tools.register('core', spec);
-  for (const spec of approvalTools({ approvals, policy, tools })) tools.register('core', spec);
+  for (const spec of approvalTools({ approvals, policy, tools, modes })) tools.register('core', spec);
   for (const spec of skillTools(skills)) tools.register('core', spec);
   for (const spec of memoryTools({ store: memory, index: memoryIndex, board, clock, timezone: tz, nativeType: config.memory.nativeTool })) tools.register('core', spec);
   await plugins.startAll();
@@ -684,6 +758,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const mcpReady = mcp.apply(config.mcp.servers).catch((err: unknown) => log.error({ err: errorMessage(err) }, 'MCP servers not applied'));
 
   main = new MainSession({
+    maxImagesPerEvent: () => config.vision.maxImagesPerMessage,
     transcript,
     store,
     batches,
@@ -1101,8 +1176,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     secrets: secretOps,
     permissions: () => ({
       settings: config.permissions,
+      mode: modes.info(),
       tools: tools.list().map((t) => ({ name: t.name, owner: t.owner, ...policy.decide(t) })),
     }),
+    permissionModes: modes,
     budget: () => ({ settings: config.budget, status: budget.status() }),
     budgetRelease: (o) =>
       budget.release({
@@ -1202,7 +1279,16 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         ...(req.trigger !== undefined ? { trigger: req.trigger } : {}),
         ...(req.tags !== undefined ? { tags: req.tags } : {}),
       }),
-    pushChat: (req, senderKey) => webchatPlugin.receive(req.text, { senderKey, ...(req.trigger ? { trigger: req.trigger } : {}) }),
+    pushChat: (req, senderKey) => webchatPlugin.receive(req.text, { senderKey, ...(req.trigger ? { trigger: req.trigger } : {}), ...(req.images ? { blobs: req.images } : {}) }),
+    blobs,
+    browserPreset: (o) =>
+      browserPreset({
+        dataDir,
+        ...(o.noSandbox ? { noSandbox: true } : {}),
+        ...(listenPort(config.control.listen) !== undefined ? { controlPort: listenPort(config.control.listen) as number } : {}),
+        ...(env['PLAYWRIGHT_BROWSERS_PATH'] ? { browsersPath: env['PLAYWRIGHT_BROWSERS_PATH'] } : {}),
+      }),
+    browserAvailable: () => env['PROTEA_IMAGE'] === undefined || env['PROTEA_IMAGE'] === 'browser',
   });
   let server: ControlServer;
   try {
@@ -1269,8 +1355,24 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       onError: (err) => log.warn({ err: err.message }, 'memory directory watcher error'),
     }),
   ];
-  const expiry = setInterval(() => approvals.expireDue(), 60_000);
+  const expiry = setInterval(() => {
+    approvals.expireDue();
+    modes.current();
+  }, 60_000);
   expiry.unref();
+  const sweepBlobs = (): void => {
+    const days = config.vision.blobRetentionDays;
+    if (days <= 0) return;
+    try {
+      const removed = blobs.sweep(days * 86_400_000);
+      if (removed > 0) log.info({ removed }, 'expired images removed');
+    } catch (err) {
+      log.warn({ err: errorMessage(err) }, 'could not remove expired images');
+    }
+  };
+  sweepBlobs();
+  const blobSweep = setInterval(sweepBlobs, 3_600_000);
+  blobSweep.unref();
   log.info(
     { url: server.url, dataDir, provider: router?.profileFor('main') ?? provider.id, model: provider.modelFor('main'), config: sources, providerReady: provider.health().ready },
     'daemon started',
@@ -1294,6 +1396,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       const before = { phase: main.phase, batchId: main.currentBatchId, pending: store.pendingCounts(), forks: forks.activeCount() };
       for (const off of unwatch) off();
       clearInterval(expiry);
+      clearInterval(blobSweep);
       maintenance.stop();
       dream.stop();
       pushInternal({ type: 'daemon.stopping', level: 4, trigger: 'store', text: `Daemon stopping: ${reason}.` });

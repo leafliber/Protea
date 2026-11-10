@@ -8,8 +8,8 @@ const SECRET_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
 /** The built-in profile behind `providers.default: echo` (offline development). */
 export const ECHO_PROFILE_ID = 'echo';
 
-/** Claude models per role: the defaults of an Anthropic profile. */
-export const CLAUDE_MODELS: Record<ModelRole, string> = { main: 'claude-opus-5-5', fork: 'claude-sonnet-5-5', cheap: 'claude-haiku-5-5' };
+/** Claude models per role: the defaults of an Anthropic profile. An empty judge follows the main model. */
+export const CLAUDE_MODELS: Record<ModelRole, string> = { main: 'claude-opus-5-5', fork: 'claude-sonnet-5-5', cheap: 'claude-haiku-5-5', judge: '' };
 
 /** Where each protocol goes when the profile has no baseUrl. */
 export const PROTOCOL_DEFAULT_URL: Record<ProviderProtocol, string | null> = {
@@ -35,14 +35,15 @@ export function defaultProfile(protocol: ProviderProtocol, id: string = protocol
     protocol,
     baseUrl: null,
     apiKeySecret: protocol === 'echo' ? null : providerKeySecretName(id),
-    models: protocol === 'anthropic' ? { ...CLAUDE_MODELS } : protocol === 'echo' ? { main: 'echo', fork: 'echo', cheap: 'echo' } : { main: '', fork: '', cheap: '' },
-    effort: { main: { 0: 'high', 1: 'medium', 2: 'high', 3: 'high', 4: 'high' }, fork: 'high', cheap: 'low' },
+    models: protocol === 'anthropic' ? { ...CLAUDE_MODELS } : protocol === 'echo' ? { main: 'echo', fork: 'echo', cheap: 'echo', judge: 'echo' } : { main: '', fork: '', cheap: '', judge: '' },
+    effort: { main: { 0: 'high', 1: 'medium', 2: 'high', 3: 'high', 4: 'high' }, fork: 'high', cheap: 'low', judge: 'medium' },
     maxOutputTokens: protocol === 'anthropic' ? 64_000 : 8_192,
     contextWindow: null,
     timeoutMs: 600_000,
     maxRetries: 2,
     headers: {},
     pricing: {},
+    vision: { main: protocol === 'anthropic', fork: protocol === 'anthropic', cheap: protocol === 'anthropic', judge: false },
     anthropic: { features: 'full', fallbacks: 'default', thinkingDisplay: 'omitted', cacheTtl: '1h', thinkingMismatch: 'drop_block' },
     openai: { reasoningEffort: false, maxTokensField: 'max_tokens', promptCacheKey: null },
     echo: { delayMs: 0 },
@@ -71,10 +72,16 @@ export function normalizeProviderProfile(id: string, raw: unknown): ProviderProf
   const protocol = raw['protocol'] ?? 'anthropic';
   if (!PROVIDER_PROTOCOLS.includes(protocol as ProviderProtocol)) throw new Error(`${at}.protocol must be one of ${PROVIDER_PROTOCOLS.join(', ')}`);
   const p = merge(defaultProfile(protocol as ProviderProtocol, id), raw);
+  if (typeof p.vision === 'boolean') {
+    const all = p.vision as boolean;
+    p.vision = { main: all, fork: all, cheap: all, judge: all };
+  }
+  for (const role of MODEL_ROLES) if (typeof p.vision?.[role] !== 'boolean') throw new Error(`${at}.vision must be true, false or a boolean per role`);
   for (const role of MODEL_ROLES) {
     if (typeof p.models[role] !== 'string') throw new Error(`${at}.models.${role} must be a model name`);
     p.models[role] = p.models[role].trim();
   }
+  if (!p.models.judge) p.models.judge = p.models.main;
   if (p.protocol !== 'anthropic') {
     if (!p.models.fork) p.models.fork = p.models.main;
     if (!p.models.cheap) p.models.cheap = p.models.main;
@@ -98,7 +105,7 @@ export function normalizeProviderProfile(id: string, raw: unknown): ProviderProf
     throw new Error(`${at}.apiKeySecret must be a secret name (UPPER_CASE) or null`);
   }
   for (const l of LEVELS) if (!EFFORTS.includes(p.effort.main[l as Level])) throw new Error(`${at}.effort.main.${l} must be one of ${EFFORTS.join(', ')}`);
-  if (!EFFORTS.includes(p.effort.fork) || !EFFORTS.includes(p.effort.cheap)) throw new Error(`${at}.effort.fork and .cheap must be one of ${EFFORTS.join(', ')}`);
+  if (!EFFORTS.includes(p.effort.fork) || !EFFORTS.includes(p.effort.cheap) || !EFFORTS.includes(p.effort.judge)) throw new Error(`${at}.effort.fork, .cheap and .judge must be one of ${EFFORTS.join(', ')}`);
   if (!(Number.isInteger(p.maxOutputTokens) && p.maxOutputTokens >= 16)) throw new Error(`${at}.maxOutputTokens must be an integer of at least 16`);
   if (p.contextWindow !== null && !(Number.isInteger(p.contextWindow) && p.contextWindow >= 1024)) throw new Error(`${at}.contextWindow must be an integer of at least 1024, or null`);
   if (!(Number.isInteger(p.timeoutMs) && p.timeoutMs >= 1000)) throw new Error(`${at}.timeoutMs must be an integer of at least 1000`);
@@ -137,12 +144,14 @@ export function compactProfile(id: string, p: ProviderProfile): Record<string, u
   };
   const out = (diff(p, defaultProfile(p.protocol, id)) as Record<string, unknown> | undefined) ?? {};
   // The protocol always stays visible, and so do the models (the main thing to read in the file).
-  return { protocol: p.protocol, ...out, models: { ...p.models } };
+  // A judge on the main model is left out, so it keeps following the main model.
+  const { judge, ...models } = p.models;
+  return { protocol: p.protocol, ...out, models: judge !== p.models.main ? { ...p.models } : models };
 }
 
 /** Problems that keep a profile from serving requests (no models yet), or null. */
 export function profileProblem(p: ProviderProfile): string | null {
-  const missing = MODEL_ROLES.filter((r) => !p.models[r]);
+  const missing = MODEL_ROLES.filter((r) => r !== 'judge' && !p.models[r]);
   return missing.length > 0 ? `no model set for ${missing.join(', ')}` : null;
 }
 

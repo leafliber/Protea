@@ -5,6 +5,10 @@ import {
   RPC_ERRORS,
   RpcError,
   type ApprovalRequestParams,
+  type PermissionMode,
+  type PermissionModeInfo,
+  type BlobGetResult,
+  type BlobPutResult,
   type ChatSendParams,
   type ChatSendResult,
   type ConfigChangedParams,
@@ -53,7 +57,17 @@ export interface Host<C = Record<string, unknown>> {
   log: Record<LogParams['level'], (msg: string, fields?: Record<string, unknown>) => void>;
   owner: { resolve(senderKey: string): Promise<'owner' | 'unknown'> };
   approvals: {
-    decide(id: string, decision: 'approve' | 'deny', senderKey: string): Promise<{ ok: boolean; state?: string; message?: string }>;
+    /** `grantMs`: with an approval, also allow this tool family for that long. */
+    decide(id: string, decision: 'approve' | 'deny', senderKey: string, opts?: { grantMs?: number }): Promise<{ ok: boolean; state?: string; message?: string }>;
+  };
+  permissions: {
+    /** Read the permission mode, or change it with `mode`; `senderKey` must be the owner. `forMs` makes the change temporary. */
+    mode(senderKey: string, opts?: { mode?: PermissionMode; forMs?: number }): Promise<PermissionModeInfo>;
+  };
+  blobs: {
+    /** Store an image; put the returned handle in a tool result's `images` or an event's `blobs`. */
+    put(data: Uint8Array, mime?: string): Promise<BlobPutResult>;
+    get(handle: string): Promise<{ data: Buffer; mime: string; size: number }>;
   };
   /** A secret the manifest declared; the host injects it into the environment at start. */
   secret(name: string): string | undefined;
@@ -165,7 +179,17 @@ export function servePlugin<C>(peer: RpcPeer, def: PluginDefinition<C>, opts: Se
       resolve: async (senderKey) => (await peer.request<{ role: 'owner' | 'unknown' }>(PLUGIN_TO_HOST.ownerResolve, { senderKey })).role,
     },
     approvals: {
-      decide: (id, decision, senderKey) => peer.request(PLUGIN_TO_HOST.approvalsDecide, { id, decision, senderKey }),
+      decide: (id, decision, senderKey, o) => peer.request(PLUGIN_TO_HOST.approvalsDecide, { id, decision, senderKey, ...(o?.grantMs !== undefined ? { grantMs: o.grantMs } : {}) }),
+    },
+    permissions: {
+      mode: (senderKey, o) => peer.request(PLUGIN_TO_HOST.permissionsMode, { senderKey, ...o }),
+    },
+    blobs: {
+      put: (data, mime) => peer.request<BlobPutResult>(PLUGIN_TO_HOST.blobPut, { dataBase64: Buffer.from(data).toString('base64'), ...(mime ? { mime } : {}) }),
+      get: async (handle) => {
+        const r = await peer.request<BlobGetResult>(PLUGIN_TO_HOST.blobGet, { handle });
+        return { data: Buffer.from(r.dataBase64, 'base64'), mime: r.mime, size: r.size };
+      },
     },
     secret: (name) => env[name],
   };

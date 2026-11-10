@@ -91,6 +91,69 @@ describe('telegram connector', () => {
     expect(tg.reactions.at(-1)).toMatchObject({ chat_id: OWNER, message_id: 5000 });
   });
 
+  it('attaches the owner\'s photo at a size a model can use, and only the owner\'s', async () => {
+    const { tg, host } = await setup();
+    const png = Buffer.from('89504e470d0a1a0a00', 'hex');
+    tg.files.set('photos/mid.bin', png);
+    const photo = [
+      { file_id: 'small', width: 90, height: 60 },
+      { file_id: 'mid', width: 1280, height: 853 },
+      { file_id: 'huge', width: 2560, height: 1706 },
+    ];
+    tg.inject({ fromId: OWNER, extra: { photo, caption: '这是什么' } });
+    tg.inject({ fromId: 77, extra: { photo, caption: 'look at this' } });
+    await waitFor(() => host.events.length === 2);
+    expect(tg.fileRequests).toEqual(['mid']);
+    expect(host.events[0]?.text).toContain('这是什么');
+    expect(host.events[0]?.blobs).toMatchObject([{ size: png.length }]);
+    expect(host.blobs.get(host.events[0]?.blobs?.[0]?.handle as string)?.data.equals(png)).toBe(true);
+    expect(host.events[1]?.blobs).toBeUndefined();
+  });
+
+  it('still delivers the message when the picture cannot be fetched', async () => {
+    const { tg, host } = await setup();
+    tg.inject({ fromId: OWNER, extra: { photo: [{ file_id: 'missing', width: 90, height: 60 }] } });
+    await waitFor(() => host.events.length === 1);
+    expect(host.events[0]?.text).toContain('[photo]');
+    expect(host.events[0]?.blobs).toBeUndefined();
+  });
+
+  it('reads a time limit on /approve', async () => {
+    const { tg, host } = await setup();
+    tg.inject({ fromId: OWNER, text: '/approve a5 2h' });
+    tg.inject({ fromId: OWNER, text: '/approve a6 30' });
+    tg.inject({ fromId: OWNER, text: '/approve a7' });
+    tg.inject({ fromId: OWNER, text: '/deny a8 1h' });
+    await waitFor(() => host.decisions.length === 4);
+    expect(host.decisions.map((d) => [d.id, d.decision, d.grantMs])).toEqual([
+      ['a5', 'approve', 7_200_000],
+      ['a6', 'approve', 1_800_000],
+      ['a7', 'approve', undefined],
+      ['a8', 'deny', undefined],
+    ]);
+    expect(host.events).toEqual([]);
+  });
+
+  it('reads /mode from the owner; anyone else\'s /mode is an ordinary message', async () => {
+    const { tg, host } = await setup();
+    tg.inject({ fromId: OWNER, text: '/mode' });
+    tg.inject({ fromId: OWNER, text: '/mode auto 2h' });
+    tg.inject({ fromId: OWNER, text: '/mode bypass 30' });
+    tg.inject({ fromId: OWNER, text: '/mode locked' });
+    tg.inject({ fromId: OWNER, text: '/mode sideways' });
+    await waitFor(() => tg.sent.filter((m) => m.text.startsWith('Usage')).length === 1);
+    expect(host.modeRequests).toEqual([
+      { senderKey: `telegram:${OWNER}` },
+      { senderKey: `telegram:${OWNER}`, mode: 'auto', forMs: 7_200_000 },
+      { senderKey: `telegram:${OWNER}`, mode: 'bypass', forMs: 1_800_000 },
+      { senderKey: `telegram:${OWNER}`, mode: 'locked' },
+    ]);
+    expect(host.events).toEqual([]);
+    tg.inject({ fromId: 77, text: '/mode bypass 30' });
+    await waitFor(() => host.events.length === 1);
+    expect(host.modeRequests).toHaveLength(4);
+  });
+
   it('handles /approve and /deny from the owner without pushing a message event', async () => {
     const { tg, host } = await setup({}, new Map([['ownerChatId', OWNER]]));
     const delivered = await host.request('approvals/request', { id: 'a3', tool: 'tg_send_chat', summary: 'tg_send_chat {"chat_id":-100}', expiresAt: '2026-11-04T00:00:00Z' });

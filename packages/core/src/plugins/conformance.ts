@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import pino from 'pino';
@@ -78,6 +79,7 @@ export async function checkConformance(dir: string, opts: ConformanceOptions = {
   const kv = new Map<string, unknown>();
   const dataDir = opts.dataDir ?? fs.mkdtempSync(path.join(fs.realpathSync(process.env['TMPDIR'] ?? '/tmp'), `protea-check-${m.id}-`));
 
+  const blobs = new Map<string, Buffer>();
   const handlers: Record<string, RpcHandler> = {
     [PLUGIN_TO_HOST.eventsPush]: (params) => {
       const e = params as EventInput;
@@ -94,6 +96,17 @@ export async function checkConformance(dir: string, opts: ConformanceOptions = {
     [PLUGIN_TO_HOST.secretsExists]: () => ({ exists: false }),
     [PLUGIN_TO_HOST.approvalsDecide]: () => {
       throw new RpcError(RPC_ERRORS.Unauthorized, 'not the owner');
+    },
+    [PLUGIN_TO_HOST.blobPut]: (p) => {
+      const data = Buffer.from((p as { dataBase64: string }).dataBase64, 'base64');
+      const handle = `blob:${crypto.createHash('sha256').update(data).digest('hex')}`;
+      blobs.set(handle, data);
+      return { handle, mime: (p as { mime?: string }).mime ?? 'image/png', size: data.length };
+    },
+    [PLUGIN_TO_HOST.blobGet]: (p) => {
+      const data = blobs.get((p as { handle: string }).handle);
+      if (!data) throw new RpcError(RPC_ERRORS.InvalidParams, 'not stored');
+      return { dataBase64: data.toString('base64'), mime: 'image/png', size: data.length };
     },
   };
 
@@ -184,6 +197,11 @@ export async function checkConformance(dir: string, opts: ConformanceOptions = {
 
     for (const c of probe.calls ?? []) {
       const r = await proc.callTool(c.tool, c.input, ctx, new AbortController().signal).catch((err: Error) => ({ text: err.message, failed: true }));
+      const images = (r as { images?: unknown }).images;
+      if (images !== undefined) {
+        const known = Array.isArray(images) && images.every((i) => blobs.has((i as { handle?: string })?.handle ?? ''));
+        add(`${c.tool} returns images it stored with blob/put`, known, known ? undefined : JSON.stringify(images).slice(0, 200));
+      }
       const ok = !r.failed && (c.expect === undefined || r.text.includes(c.expect));
       add(`${c.tool} ${JSON.stringify(c.input)}${c.expect ? ` → "${c.expect}"` : ''}`, ok, ok ? undefined : JSON.stringify(r));
     }

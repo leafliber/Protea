@@ -1,11 +1,11 @@
-import type { ApprovalInfo, EventInput } from '@protea/protocol';
+import type { ApprovalGrantInfo, ApprovalInfo, EventInput } from '@protea/protocol';
 import type { Bus } from '../bus.js';
 import type { Db } from '../db/database.js';
 import type { Logger } from '../observability/logger.js';
 import { errorMessage } from '../util/errors.js';
 import type { Clock } from '../util/time.js';
 import type { AuditLog } from './audit.js';
-import { inputHash } from './policy.js';
+import { grantFamily, inputHash } from './policy.js';
 
 export interface ApprovalServiceOptions {
   db: Db;
@@ -14,6 +14,8 @@ export interface ApprovalServiceOptions {
   clock: Clock;
   log: Logger;
   ttlMs: () => number;
+  /** The longest grant the owner can give; 0 turns grants off. */
+  grantMaxMs?: () => number;
   /** Send the request to the owner (the channel plugins). Resolves to the plugins that delivered it. */
   deliver: (a: ApprovalInfo) => Promise<string[]>;
   pushInternal: (input: Omit<EventInput, 'ts' | 'origin'> & { ts?: string }) => void;
@@ -36,6 +38,18 @@ interface Row {
   expires_ms: number;
   decided_at: string | null;
   decided_by: string | null;
+  grant_id?: string | null;
+}
+
+interface GrantRow {
+  id: string;
+  family: string;
+  approval_id: string;
+  decided_by: string;
+  created_at: string;
+  expires_at: string;
+  expires_ms: number;
+  revoked_at: string | null;
 }
 
 function toInfo(r: Row): ApprovalInfo {
@@ -49,8 +63,12 @@ function toInfo(r: Row): ApprovalInfo {
     ...(r.reason !== null ? { reason: r.reason } : {}),
     ...(r.decided_at !== null ? { decidedAt: r.decided_at } : {}),
     ...(r.decided_by !== null ? { decidedBy: r.decided_by } : {}),
+    ...(r.grant_id ? { grantId: r.grant_id } : {}),
   };
 }
+
+/** Selects an approval with the grant it created, if any. */
+const WITH_GRANT = 'SELECT a.*, g.id AS grant_id FROM approvals a LEFT JOIN approval_grants g ON g.approval_id = a.id';
 
 const SUMMARY_CHARS = 400;
 
@@ -131,6 +149,18 @@ export class ApprovalService {
     return info;
   }
 
+  /** Remove secret values from text that is stored or shown. */
+  redact(text: string): string {
+    return this.o.redact(text);
+  }
+
+  /** The request already waiting for the owner for this exact call, if there is one. */
+  pending(tool: string, input: unknown): ApprovalInfo | null {
+    this.expireDue();
+    const row = this.o.db.prepare("SELECT * FROM approvals WHERE tool = ? AND input_hash = ? AND state = 'pending' ORDER BY seq DESC LIMIT 1").get(tool, inputHash(tool, input)) as Row | undefined;
+    return row ? toInfo(row) : null;
+  }
+
   /** Use an approval for this exact call, if there is one. Returns its id. */
   consume(tool: string, input: unknown): string | null {
     this.expireDue();
@@ -144,8 +174,11 @@ export class ApprovalService {
     return row.id;
   }
 
-  /** Record the owner's decision. `by` identifies the channel and sender. */
-  decide(id: string, decision: 'approve' | 'deny', by: string): { ok: boolean; state?: ApprovalInfo['state']; message?: string } {
+  /**
+   * Record the owner's decision. `by` identifies the channel and sender. With `grantMs` an
+   * approval also allows the call's whole tool family for that long.
+   */
+  decide(id: string, decision: 'approve' | 'deny', by: string, opts: { grantMs?: number } = {}): { ok: boolean; state?: ApprovalInfo['state']; message?: string; grant?: ApprovalGrantInfo } {
     this.expireDue();
     const row = this.o.db.prepare('SELECT * FROM approvals WHERE id = ?').get(id) as Row | undefined;
     if (!row) return { ok: false, message: `no approval ${id}` };
@@ -153,7 +186,8 @@ export class ApprovalService {
     const state = decision === 'approve' ? 'approved' : 'denied';
     const at = new Date(this.now()).toISOString();
     this.o.db.prepare("UPDATE approvals SET state = ?, decided_at = ?, decided_by = ? WHERE id = ? AND state = 'pending'").run(state, at, by, id);
-    const info: ApprovalInfo = { ...toInfo(row), state, decidedAt: at, decidedBy: by };
+    const grant = state === 'approved' && opts.grantMs !== undefined ? this.createGrant(row, by, opts.grantMs) : null;
+    const info: ApprovalInfo = { ...toInfo(row), state, decidedAt: at, decidedBy: by, ...(grant ? { grantId: grant.id } : {}) };
     this.o.audit.record({ kind: 'approval_decided', tool: row.tool, owner: row.owner, inputHash: row.input_hash, approvalId: id, outcome: state, detail: by });
     this.o.bus.emit('approval.changed', info);
     this.o.pushInternal({
@@ -163,14 +197,66 @@ export class ApprovalService {
       correlation: id,
       text:
         state === 'approved'
-          ? `Approval ${id} was approved by the owner: ${row.summary}. Call ${row.tool} again with exactly the same input to run it; the approval is valid once, until ${row.expires_at}.`
+          ? `Approval ${id} was approved by the owner: ${row.summary}. Call ${row.tool} again with exactly the same input to run it; the approval is valid once, until ${row.expires_at}.${
+              grant ? ` The owner also allowed the tools of ${grant.family} without asking until ${grant.expiresAt}.` : ''
+            }`
           : `Approval ${id} was denied by the owner: ${row.summary}. Do not run it.`,
     });
-    return { ok: true, state };
+    return { ok: true, state, ...(grant ? { grant } : {}) };
+  }
+
+  private createGrant(row: Row, by: string, requestedMs: number): ApprovalGrantInfo | null {
+    const ms = Math.min(requestedMs, this.o.grantMaxMs?.() ?? 0);
+    if (!(ms > 0)) return null;
+    const family = grantFamily({ name: row.tool, owner: row.owner });
+    const now = this.now();
+    const res = this.o.db
+      .prepare("INSERT INTO approval_grants (id, family, approval_id, decided_by, created_at, expires_at, expires_ms) VALUES ('', ?, ?, ?, ?, ?, ?)")
+      .run(family, row.id, by, new Date(now).toISOString(), new Date(now + ms).toISOString(), now + ms);
+    const id = `g${res.lastInsertRowid}`;
+    this.o.db.prepare('UPDATE approval_grants SET id = ? WHERE seq = ?').run(id, res.lastInsertRowid);
+    const grant = this.grantInfo(this.o.db.prepare('SELECT * FROM approval_grants WHERE id = ?').get(id) as GrantRow);
+    this.o.audit.record({ kind: 'approval_grant', tool: row.tool, owner: row.owner, inputHash: row.input_hash, approvalId: row.id, outcome: 'granted', detail: `${id} ${family} until ${grant.expiresAt} by ${by}` });
+    return grant;
+  }
+
+  private grantInfo(r: GrantRow): ApprovalGrantInfo {
+    return {
+      id: r.id,
+      family: r.family,
+      approvalId: r.approval_id,
+      decidedBy: r.decided_by,
+      createdAt: r.created_at,
+      expiresAt: r.expires_at,
+      ...(r.revoked_at !== null ? { revokedAt: r.revoked_at } : {}),
+      active: r.revoked_at === null && r.expires_ms > this.now(),
+    };
+  }
+
+  /** The grant that currently covers a tool family, if any. */
+  activeGrant(family: string): ApprovalGrantInfo | null {
+    const r = this.o.db
+      .prepare('SELECT * FROM approval_grants WHERE family = ? AND revoked_at IS NULL AND expires_ms > ? ORDER BY expires_ms DESC LIMIT 1')
+      .get(family, this.now()) as GrantRow | undefined;
+    return r ? this.grantInfo(r) : null;
+  }
+
+  listGrants(limit = 50): ApprovalGrantInfo[] {
+    return (this.o.db.prepare('SELECT * FROM approval_grants ORDER BY seq DESC LIMIT ?').all(limit) as GrantRow[]).map((r) => this.grantInfo(r));
+  }
+
+  /** End a grant early. */
+  revokeGrant(id: string, by: string): { ok: boolean; message?: string; grant?: ApprovalGrantInfo } {
+    const r = this.o.db.prepare('SELECT * FROM approval_grants WHERE id = ?').get(id) as GrantRow | undefined;
+    if (!r) return { ok: false, message: `no grant ${id}` };
+    if (r.revoked_at !== null) return { ok: false, message: `grant ${id} is already revoked` };
+    this.o.db.prepare('UPDATE approval_grants SET revoked_at = ? WHERE id = ?').run(new Date(this.now()).toISOString(), id);
+    this.o.audit.record({ kind: 'approval_grant', tool: r.family, approvalId: r.approval_id, outcome: 'revoked', detail: `${id} by ${by}` });
+    return { ok: true, grant: this.grantInfo(this.o.db.prepare('SELECT * FROM approval_grants WHERE id = ?').get(id) as GrantRow) };
   }
 
   get(id: string): ApprovalInfo | undefined {
-    const row = this.o.db.prepare('SELECT * FROM approvals WHERE id = ?').get(id) as Row | undefined;
+    const row = this.o.db.prepare(`${WITH_GRANT} WHERE a.id = ?`).get(id) as Row | undefined;
     return row ? toInfo(row) : undefined;
   }
 
@@ -178,8 +264,8 @@ export class ApprovalService {
     this.expireDue();
     const rows = (
       state
-        ? this.o.db.prepare('SELECT * FROM approvals WHERE state = ? ORDER BY seq DESC LIMIT ?').all(state, limit)
-        : this.o.db.prepare('SELECT * FROM approvals ORDER BY seq DESC LIMIT ?').all(limit)
+        ? this.o.db.prepare(`${WITH_GRANT} WHERE a.state = ? ORDER BY a.seq DESC LIMIT ?`).all(state, limit)
+        : this.o.db.prepare(`${WITH_GRANT} ORDER BY a.seq DESC LIMIT ?`).all(limit)
     ) as Row[];
     return rows.map(toInfo);
   }

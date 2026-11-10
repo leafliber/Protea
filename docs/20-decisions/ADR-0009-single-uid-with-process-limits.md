@@ -15,7 +15,7 @@
   1. **环境**：子进程只拿到最小环境、清单声明的秘密与非秘密的缓存/代理变量（M2/M3 已有）；`shell` 工具的命令连这些都要过白名单，HOME 指向工作区。
   2. **资源**：每个插件和 stdio MCP 服务器的进程树都有内存上限（`pluginHost.limits.memoryMb`，默认 512 MB，超过就按崩溃处理并重启）与文件描述符上限（`openFiles`，默认 1024，启动前用 `ulimit` 设置）。
   3. **权限策略**：有第三方或系统副作用的工具默认 `ask`（`sideEffectTools`、MCP 的低信任或破坏性工具）；`shell` 工具默认不启用。
-- 容器层的约束交给部署：`docker-compose.yml` 示例给出 `mem_limit`、`pids_limit`、`cap_drop: [ALL]`（只加回入口脚本需要的几项）与 `no-new-privileges`。
+- 容器层的约束交给部署：`docker-compose.yml` 示例给出 `mem_limit`、`pids_limit`、`cap_drop: [ALL]`（只加回入口脚本需要的几项，以及 tini 转发信号要用的 `KILL`）与 `no-new-privileges`。
 
 ## 备选方案
 

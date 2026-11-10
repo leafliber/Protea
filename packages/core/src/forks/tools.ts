@@ -36,7 +36,7 @@ export function forkTools(forks: ForkManager, opts: { maxTurns: number }): ToolS
       properties: {
         goal: { type: 'string', minLength: 1, description: 'What the fork should achieve and what its final message must contain.' },
         context: { type: 'string', description: 'Facts from this conversation the fork needs.' },
-        tools: { type: 'array', items: { type: 'string' }, description: 'Tool names the fork may call; omit for the default set.' },
+        tools: { type: 'array', items: { type: 'string' }, description: 'Tool names or patterns (mcp__browser__*, sh_*) the fork may call; omit for the default set.' },
         model: { type: 'string', enum: ['fork', 'cheap', 'main'], default: 'fork' },
         level: {
           type: 'integer',

@@ -38,6 +38,9 @@ importers:
       '@protea/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@protea/sandbox':
+        specifier: workspace:*
+        version: link:../../packages/sandbox
       ws:
         specifier: ^8.22.1
         version: 8.22.1
@@ -165,6 +168,12 @@ importers:
 
   packages/protocol: {}
 
+  packages/sandbox:
+    dependencies:
+      '@protea/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+
   plugins/console:
     dependencies:
       '@protea/core':
@@ -234,6 +243,9 @@ importers:
       '@protea/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@protea/sandbox':
+        specifier: workspace:*
+        version: link:../../packages/sandbox
 
   plugins/telegram:
     dependencies:

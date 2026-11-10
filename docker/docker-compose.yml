@@ -3,6 +3,9 @@
 #   cd docker && docker compose up -d                 # the daemon on http://127.0.0.1:7788
 #   PROTEA_DOMAIN=protea.example.com docker compose --profile tls up -d
 #                                                     # + Caddy with an automatic certificate on :443
+#   docker compose --profile sandbox up -d            # + the assistant's shell, in a container of its own
+#   docker compose -f docker-compose.yml -f docker-compose.browser.yml up -d --build
+#                                                     # the daemon with Chromium (image target "browser")
 #
 # Secrets (optional): ./secrets.env (PROVIDER_<ID>_API_KEY=…, PROTEA_ADMIN_TOKEN=…, TELEGRAM_BOT_TOKEN=…); usually
 # simpler: create the admin account with the setup code in "docker compose logs" and add providers in the console
@@ -25,6 +28,11 @@ services:
         required: false
     volumes:
       - protea-data:/data
+      # Shared with the sandbox. The browser's files are read-only there, so the shell cannot plant
+      # a link that the browser, running beside /data, would follow (ADR-0013).
+      - protea-workspace:/data/workspace
+      - protea-browser-files:/data/workspace/browser
+      - sandbox-run:/run/protea-sandbox:ro
     # Without the tls profile the console is reachable on this machine only; use an SSH tunnel
     # from elsewhere (ssh -L 7788:127.0.0.1:7788 host).
     ports:
@@ -38,8 +46,44 @@ services:
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]
-    # The entrypoint hands /data to the protea user and drops root: these are all it needs.
-    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID]
+    # The entrypoint hands /data to the protea user and drops root; KILL lets tini, still root,
+    # pass SIGTERM on to a process of another user (without it `docker stop` kills the daemon).
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, KILL]
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
+  # The assistant's shell: no /data, no route to the daemon, only the workspace and a socket.
+  sandbox:
+    profiles: [sandbox]
+    image: ${PROTEA_SANDBOX_IMAGE:-protea:latest}
+    build:
+      context: ..
+      target: full
+    command: ["sandbox", "serve"]
+    restart: unless-stopped
+    stop_grace_period: 10s
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - sandbox-home:/home/protea
+      - protea-workspace:/workspace
+      - protea-browser-files:/workspace/browser:ro
+      - sandbox-run:/run/protea-sandbox
+    networks: [sandbox-net]
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 512
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    # Only until the entrypoint has handed its volumes over and dropped root (KILL: for tini, as above).
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, KILL]
+    healthcheck:
+      test: ["CMD", "test", "-S", "/run/protea-sandbox/agent.sock"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
     logging:
       driver: json-file
       options: { max-size: "20m", max-file: "5" }
@@ -59,7 +103,14 @@ services:
       - caddy-data:/data
       - caddy-config:/config
 
+networks:
+  sandbox-net:
+
 volumes:
   protea-data:
+  protea-workspace:
+  protea-browser-files:
+  sandbox-home:
+  sandbox-run:
   caddy-data:
   caddy-config:

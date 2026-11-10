@@ -4,6 +4,7 @@ import type { ToolSearchSettings } from '../context/settings.js';
 import type { DreamSettings, IdleCompactionSettings } from '../maintenance/settings.js';
 import type { McpSettings } from '../mcp/settings.js';
 import type { BoardSettings } from '../memory/settings.js';
+import type { VisionSettings } from '../blobs/settings.js';
 import type { PermissionSettings } from '../permissions/policy.js';
 import type { PluginHostSettings } from '../plugins/settings.js';
 
@@ -104,7 +105,7 @@ export interface ProviderProfile {
   /** Secret holding the API key; null for endpoints without one (a local model server). */
   apiKeySecret: string | null;
   models: Record<ModelRole, string>;
-  effort: { main: Record<Level, Effort>; fork: Effort; cheap: Effort };
+  effort: { main: Record<Level, Effort>; fork: Effort; cheap: Effort; judge: Effort };
   maxOutputTokens: number;
   /** Input tokens the models accept; null: known for Claude models, 128000 otherwise. */
   contextWindow: number | null;
@@ -115,6 +116,8 @@ export interface ProviderProfile {
   headers: Record<string, string>;
   /** USD per million tokens by model; overrides the built-in table (Claude models only). */
   pricing: Record<string, ModelPricing>;
+  /** Which roles' models can see images; `vision: true` in config.yaml sets all three. Others get a line of text instead. */
+  vision: Record<ModelRole, boolean>;
   anthropic: AnthropicOptions;
   openai: OpenAiOptions;
   echo: { delayMs: number };
@@ -198,6 +201,7 @@ export interface ProteaConfig {
   skills: SkillsSettings;
   context: ContextSettings;
   memory: MemorySettings;
+  vision: VisionSettings;
   /** Persona directory, relative to the data directory. */
   persona: { dir: string };
   /**

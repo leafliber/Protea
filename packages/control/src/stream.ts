@@ -23,6 +23,7 @@ const PROJECTORS: { [K in BusTopic]: Projector<K> } = {
   'fork.changed': (data) => ({ topic: 'fork', data }),
   'plugin.changed': (data) => ({ topic: 'plugin', data }),
   'approval.changed': (data) => ({ topic: 'approval', data }),
+  'permission.mode': (data) => ({ topic: 'permission', data }),
   'mcp.changed': (data) => ({ topic: 'mcp', data }),
   'skills.changed': (data) => ({ topic: 'skills', data }),
   'session.handoff': (h) => ({ topic: 'handoff', data: { from: base(h.from), to: base(h.to), notes: h.notes, dropped: h.dropped, kept: h.kept } }),

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { isToolResultBlock, isToolUseBlock, isTextBlock, type BatchTraceStep } from '@protea/protocol';
+import { blobImagesIn, isImageBlock, isToolResultBlock, isToolUseBlock, isTextBlock, type BatchTraceStep } from '@protea/protocol';
 import type { OutputRecord } from '../events/outputs.js';
 import { publicContent } from './trace.js';
 import type { MarkRecord, MsgRecord, TranscriptRecord } from './transcript.js';
@@ -70,8 +70,9 @@ function msgSteps(rec: MsgRecord, names: Map<string, string>, round: { n: number
   if (rec.cursors && rec.cursors.length > 0) steps.push({ kind: 'events', at: rec.at, cursors: rec.cursors });
   for (const b of rec.content) {
     if (!isToolResultBlock(b)) continue;
-    const text = typeof b.content === 'string' ? b.content : b.content.map((c) => (isTextBlock(c) ? c.text : JSON.stringify(c))).join('\n');
-    steps.push({ kind: 'tool_result', at: rec.at, callId: b.tool_use_id, name: names.get(b.tool_use_id) ?? '?', text, isError: b.is_error === true });
+    const text = typeof b.content === 'string' ? b.content : b.content.map((c) => (isTextBlock(c) ? c.text : isImageBlock(c) ? '[image]' : JSON.stringify(c))).join('\n');
+    const images = typeof b.content === 'string' ? [] : blobImagesIn(b.content);
+    steps.push({ kind: 'tool_result', at: rec.at, callId: b.tool_use_id, name: names.get(b.tool_use_id) ?? '?', text, isError: b.is_error === true, ...(images.length > 0 ? { images } : {}) });
   }
   return steps;
 }

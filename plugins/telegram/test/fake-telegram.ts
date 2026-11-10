@@ -16,6 +16,9 @@ export class FakeTelegram {
   readonly sent: SentMessage[] = [];
   readonly reactions: Array<Record<string, unknown>> = [];
   readonly calls: string[] = [];
+  /** What getFile serves, by "photos/<file_id>.bin". */
+  readonly files = new Map<string, Buffer>();
+  readonly fileRequests: string[] = [];
   private updates: Array<{ update_id: number; message: Record<string, unknown> }> = [];
   private waiters: Array<() => void> = [];
   private nextUpdate = 100;
@@ -39,7 +42,7 @@ export class FakeTelegram {
   }
 
   /** Queue an incoming text message. Returns its update id. */
-  inject(m: { fromId: number; chatId?: number; chatType?: string; title?: string; text: string; username?: string; replyToFrom?: number }): number {
+  inject(m: { fromId: number; chatId?: number; chatType?: string; title?: string; text?: string; username?: string; replyToFrom?: number; extra?: Record<string, unknown> }): number {
     const id = this.nextUpdate++;
     this.updates.push({
       update_id: id,
@@ -48,7 +51,8 @@ export class FakeTelegram {
         date: Math.floor(Date.now() / 1000),
         chat: { id: m.chatId ?? m.fromId, type: m.chatType ?? 'private', ...(m.title ? { title: m.title } : {}) },
         from: { id: m.fromId, is_bot: false, first_name: 'User', ...(m.username ? { username: m.username } : {}) },
-        text: m.text,
+        ...(m.text !== undefined ? { text: m.text } : {}),
+        ...m.extra,
         ...(m.replyToFrom ? { reply_to_message: { message_id: 1, date: 0, chat: { id: m.chatId }, from: { id: m.replyToFrom, is_bot: true } } } : {}),
       },
     });
@@ -60,6 +64,13 @@ export class FakeTelegram {
     const chunks: Buffer[] = [];
     for await (const c of req) chunks.push(c as Buffer);
     const params = chunks.length ? (JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>) : {};
+    const file = /^\/file\/bot[^/]+\/(.+)$/.exec(req.url ?? '');
+    if (file) {
+      const body = this.files.get(file[1] as string);
+      res.writeHead(body ? 200 : 404);
+      res.end(body);
+      return;
+    }
     const match = /^\/bot([^/]+)\/(\w+)$/.exec(req.url ?? '');
     const reply = (status: number, body: unknown): void => {
       if (res.writableEnded) return;
@@ -70,6 +81,10 @@ export class FakeTelegram {
     const method = match[2] as string;
     this.calls.push(method);
     switch (method) {
+      case 'getFile': {
+        this.fileRequests.push(String(params['file_id']));
+        return reply(200, { ok: true, result: { file_id: params['file_id'], file_path: `photos/${String(params['file_id'])}.bin` } });
+      }
       case 'getMe':
         return reply(200, { ok: true, result: { id: 999, is_bot: true, first_name: 'Protea', username: 'protea_bot' } });
       case 'getUpdates': {

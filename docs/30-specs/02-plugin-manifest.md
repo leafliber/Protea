@@ -18,7 +18,7 @@
 | `runtime.env` | object | 否 | 额外的环境变量；值中的 `${pluginDir}`、`${dataDir}` 被替换为插件目录与插件数据目录 |
 | `runtime.dev` | `{ exec?, args? }` | 否 | 开发模式下内置插件改用的命令（例如 `{"args": ["src/main.ts"]}`，直接跑源码） |
 | `runtime.inproc` | boolean | 否 | 保留给编译进守护进程的插件；在清单里写 `true` 会被判为 `invalid` |
-| `level` | 1–4 | source/connector 必需 | 可声明的最高等级 |
+| `level` | 1–4 | source/connector 必需 | 可声明的最高等级；`tool` 插件要推事件时也用它（如 `shell` 的 3） |
 | `triggers` | string[] | 否 | 允许申请的投递模式；默认按等级表 |
 | `tools` | string[] | 否 | 声明的工具名；运行时 `tools/list` 返回的名称若不在此列表 → 警告但生效 |
 | `sideEffectTools` | string[] | 否 | 默认策略 `ask` 的工具 |

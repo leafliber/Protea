@@ -19,6 +19,7 @@
     "web": "pnpm --filter @protea/web dev",
     "docker:build": "scripts/docker-build.sh full",
     "docker:build:slim": "scripts/docker-build.sh slim",
+    "docker:build:browser": "scripts/docker-build.sh browser",
     "docker:build:all": "scripts/docker-build.sh all"
   },
   "devDependencies": {

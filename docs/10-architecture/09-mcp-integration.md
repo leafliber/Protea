@@ -57,9 +57,11 @@ mcp:
 | **Prompts** | 作为**只读 Skill** 注入 Skills 目录（`mcp:<server>/<prompt>`，`skills.mcpPrompts: false` 可关闭），`skill_load` 时调用 `prompts/get`（`arguments` 由模型传入，缺必填参数时回执列出参数） |
 | **Sampling**（服务器请求模型） | 不声明该能力；服务器若仍请求，SDK 以 MethodNotFound 回绝 |
 | **Elicitation**（服务器向用户提问） | 不声明该能力（未实现；设计是转为审批/提问事件发给主人） |
-| **Roots** | 声明 `/data/workspace` 为唯一根（`roots.listChanged: false`） |
+| **Roots** | 默认声明 `/data/workspace` 为唯一根，`roots` 可按服务器改（相对数据目录，`roots.listChanged: false`） |
 | **Logging** | 服务器日志进入结构化日志，带 `mcp=<server>` 字段 |
-| **结果内容** | 文本原样；图片/音频写成 `[image image/png, N bytes]`；资源链接与嵌入资源写成 `[resource …]`（文本资源附正文）；没有文本时用 `structuredContent` 的 JSON；`isError` → 失败回执 |
+| **结果内容** | 文本原样；图片存进 blob 并随回执给模型（[ADR-0014](../20-decisions/ADR-0014-images-as-blob-references.md)），超限或不是图片时写成 `[image image/png, N bytes]`；音频写成同样的占位；资源链接与嵌入资源写成 `[resource …]`（文本资源附正文）；没有文本时用 `structuredContent` 的 JSON；`isError` → 失败回执 |
+
+**内置浏览器**（`mcp.servers.browser`，[ADR-0013](../20-decisions/ADR-0013-sandboxed-shell-and-in-container-browser.md)）：`protea mcp preset browser` 或控制台 MCP 页写入这个条目，stdio 运行镜像目标 `browser` 里固定版本的 Playwright MCP。预设固定了：禁用 `browser_run_code_unsafe`；根目录只有 `workspace/browser`（Playwright MCP 默认只能访问根目录内的文件、不能打开 `file://`）；开启 Chromium 自带沙箱；内存上限 1536 MB。用 `--no-sandbox` 启动时 `McpServerStatus.warnings` 持续报告。
 
 ## 5. 工具表与缓存
 

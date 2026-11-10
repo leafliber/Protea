@@ -1,4 +1,4 @@
-import type { ToolCallTrace, ToolResultBlock, ToolUseBlock } from '@protea/protocol';
+import { blobImageBlock, blobImagesIn, type ContentBlock, type ToolCallTrace, type ToolResultBlock, type ToolUseBlock } from '@protea/protocol';
 import type { Logger } from '../observability/logger.js';
 import type { GuardDecision, ToolGuard } from '../permissions/guard.js';
 import { errorMessage } from '../util/errors.js';
@@ -52,6 +52,7 @@ export class ToolDispatcher {
   private observer: ToolCallObserver | null = null;
   private limiter: ToolLimiter | null = null;
   private trace: ((t: ToolCallTrace) => void) | null = null;
+  private maxImages: () => number = () => 4;
 
   constructor(
     private readonly registry: ToolRegistry,
@@ -76,6 +77,24 @@ export class ToolDispatcher {
   /** Outbound rate limits (docs/10-architecture/14-security-and-permissions.md §7). */
   setLimiter(limiter: ToolLimiter | null): void {
     this.limiter = limiter;
+  }
+
+  /** How many images one tool result may carry (vision.maxImagesPerMessage). */
+  setImageLimit(limit: () => number): void {
+    this.maxImages = limit;
+  }
+
+  /** The text and the images a call returned, as tool-result content. */
+  private resultContent(outcome: ToolOutcome): string | ContentBlock[] {
+    const text = truncate(outcome.text);
+    // The Messages API accepts only text in a tool result marked as an error.
+    const all = outcome.failed ? [] : (outcome.images ?? []);
+    if (all.length === 0) return text;
+    const max = this.maxImages();
+    const dropped = all.length - max;
+    const note = dropped > 0 ? `[${dropped} more image(s) not shown]` : '';
+    const body = [text, note].filter(Boolean).join('\n');
+    return [...(body ? [{ type: 'text', text: body }] : []), ...all.slice(0, max).map((i) => blobImageBlock(i.handle, i.mime))];
   }
 
   async runAll(uses: readonly ToolUseBlock[], ctx: DispatchContext): Promise<DispatchResult> {
@@ -108,8 +127,18 @@ export class ToolDispatcher {
     const input = JSON.stringify(use.input ?? null);
     this.emitTrace({ ...head, at: new Date(started).toISOString(), phase: 'start', input: input.length > TRACE_CHARS ? { _truncated: input.slice(0, TRACE_CHARS) } : use.input });
     const r = await this.runOne(use, ctx);
-    const text = typeof r.block.content === 'string' ? r.block.content : JSON.stringify(r.block.content);
-    this.emitTrace({ ...head, at: new Date().toISOString(), phase: 'end', ms: Date.now() - started, isError: r.block.is_error === true, result: text.slice(0, TRACE_CHARS), truncated: text.length > TRACE_CHARS });
+    const text = typeof r.block.content === 'string' ? r.block.content : r.block.content.map((b) => (b.type === 'text' ? String(b['text'] ?? '') : `[${b.type}]`)).join('\n');
+    const images = typeof r.block.content === 'string' ? [] : blobImagesIn(r.block.content);
+    this.emitTrace({
+      ...head,
+      at: new Date().toISOString(),
+      phase: 'end',
+      ms: Date.now() - started,
+      isError: r.block.is_error === true,
+      result: text.slice(0, TRACE_CHARS),
+      truncated: text.length > TRACE_CHARS,
+      ...(images.length > 0 ? { images } : {}),
+    });
     return r;
   }
 
@@ -133,7 +162,7 @@ export class ToolDispatcher {
 
     let decision: GuardDecision | null = null;
     if (this.guard) {
-      const gctx = { sessionId: ctx.sessionId, batchId: ctx.batchId };
+      const gctx = { sessionId: ctx.sessionId, batchId: ctx.batchId, level: ctx.batchLevel, signal: interrupt ? AbortSignal.any([ctx.signal, interrupt]) : ctx.signal };
       try {
         decision = await this.guard.check(def, use, gctx);
       } catch (err) {
@@ -146,6 +175,9 @@ export class ToolDispatcher {
         if (decision.isError) block.is_error = true;
         return { block, endsTurn: false };
       }
+      // An automatic review can take seconds.
+      if (ctx.signal.aborted) return fail('not run: the turn was cancelled');
+      if (interrupt?.aborted) return fail('not run: the turn was interrupted');
       const r = await this.execute(def, use, ctx, interrupt);
       try {
         this.guard.after(def, use, gctx, decision, r.block);
@@ -196,7 +228,7 @@ export class ToolDispatcher {
       const outcome: ToolOutcome = typeof raced === 'string' ? { text: raced } : raced;
       this.log.info({ tool: use.name, callId: use.id, ms: Date.now() - started, failed: !!outcome.failed, resultChars: outcome.text.length }, 'tool done');
       this.notify(use.name, Date.now() - started, !!outcome.failed);
-      const block: ToolResultBlock = { type: 'tool_result', tool_use_id: use.id, content: truncate(outcome.text) };
+      const block: ToolResultBlock = { type: 'tool_result', tool_use_id: use.id, content: this.resultContent(outcome) };
       if (outcome.failed) block.is_error = true;
       return { block, endsTurn: !outcome.failed && (!!def.flags?.endsTurn || !!outcome.endsTurn) };
     } catch (err) {

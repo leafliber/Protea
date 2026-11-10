@@ -258,7 +258,7 @@ describe('M6: shell tool', () => {
     ]);
     process.env['SHELL_PEN_TOKEN'] = 'in-the-daemon-environment';
     try {
-      const dir = dataDir('plugins:\n  shell:\n    enabled: true\n');
+      const dir = dataDir('plugins:\n  shell:\n    enabled: true\n    config: { backend: local }\n');
       const d = await start(dir, provider);
       await waitUntil(() => d.plugins.get('shell')?.state === 'running', 'the shell plugin');
       d.console.receive('run the check', { senderKey: 'local' });

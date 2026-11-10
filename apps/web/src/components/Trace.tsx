@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import type { BatchTraceResponse, ContentBlock, SessionContextResponse } from '@protea/protocol';
+import { blobImagesIn, type BatchTraceResponse, type ContentBlock, type SessionContextResponse } from '@protea/protocol';
 import { enc, qs, useApi } from '../api';
+import { BlobImages } from '../images';
 import { useReloadOn } from '../live';
 import { Badge, Button, Card, Drawer, ErrorText, KV, LevelBadge, StateBadge, clock, compact, dateTime, oneLine } from './ui';
 
@@ -27,14 +28,18 @@ export function BlockView({ b, showThinking }: { b: Block; showThinking: boolean
       );
     case 'tool_result': {
       const content = b['content'];
-      const text = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
+      const blocks = Array.isArray(content) ? (content as ContentBlock[]) : [];
+      const text = typeof content === 'string' ? content : blocks.map((x) => (x.type === 'text' ? String(x['text'] ?? '') : `[${x.type}]`)).join('\n');
       return (
         <details className={`msg-tool ${b['is_error'] ? 'msg-error' : ''}`}>
           <summary>← {oneLine(text, 120)}</summary>
           <pre>{text}</pre>
+          <BlobImages images={blobImagesIn(blocks)} />
         </details>
       );
     }
+    case 'image':
+      return <BlobImages images={blobImagesIn([b])} />;
     default:
       return <div className="muted small">[{b.type}]</div>;
   }
@@ -104,6 +109,7 @@ export function BatchTrace({ id, onClose }: { id: string; onClose: () => void })
                       <span className="tl-time">{clock(s.at)}</span> ← <code>{s.name}</code> {oneLine(s.text, 100)}
                     </summary>
                     <pre>{s.text}</pre>
+                    <BlobImages images={s.images} />
                   </details>
                 </li>
               );

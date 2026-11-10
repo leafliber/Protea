@@ -1,5 +1,6 @@
 /** Out-of-process plugin contract: manifest and protocol messages (docs/30-specs/02, 03). */
 import type { EventInput, Level, TerminalOutcome, Trigger } from './events.js';
+import type { PermissionMode } from './control.js';
 import type { RunPhase } from './session.js';
 
 export const PLUGIN_API_VERSION = 1;
@@ -120,12 +121,19 @@ export interface ToolCallParams {
   context: { sessionId: string; batchId: string; batchLevel: Level; correlation?: string };
 }
 
+/** An image a tool returns: first stored with `blob/put`. */
+export interface ToolImageRef {
+  handle: string;
+}
+
 export interface ToolCallResult {
   text: string;
   failed?: boolean;
   partial?: boolean;
   endsTurn?: boolean;
   meta?: Record<string, unknown>;
+  /** Images that go to the model with the text (not on a failed call). */
+  images?: ToolImageRef[];
 }
 
 export interface EnvPromptResult {
@@ -212,6 +220,40 @@ export interface ApprovalDecideParams {
   decision: 'approve' | 'deny';
   /** Who decided; must resolve to the owner for this plugin. */
   senderKey: string;
+  /** With an approval: also allow this tool family for this long (capped by permissions.grantMaxMs). */
+  grantMs?: number;
+}
+
+/** `permissions/mode`: read the permission mode, or change it with `mode`. */
+export interface PermissionModeParams {
+  /** Who asked; must resolve to the owner for this plugin. */
+  senderKey: string;
+  mode?: PermissionMode;
+  /** With `mode`: a temporary mode for this long. Without it the mode becomes the baseline. */
+  forMs?: number;
+}
+
+/** `blob/put`: store an image. Only images are accepted; the type is read from the bytes. */
+export interface BlobPutParams {
+  dataBase64: string;
+  /** What the plugin believes it is; the bytes decide. */
+  mime?: string;
+}
+
+export interface BlobPutResult {
+  handle: string;
+  mime: string;
+  size: number;
+}
+
+export interface BlobGetParams {
+  handle: string;
+}
+
+export interface BlobGetResult {
+  dataBase64: string;
+  mime: string;
+  size: number;
 }
 
 export const HOST_TO_PLUGIN = {
@@ -244,6 +286,9 @@ export const PLUGIN_TO_HOST = {
   ownerResolve: 'owner/resolve',
   secretsExists: 'secrets/exists',
   approvalsDecide: 'approvals/decide',
+  permissionsMode: 'permissions/mode',
+  blobPut: 'blob/put',
+  blobGet: 'blob/get',
 } as const;
 
 /** Lifecycle states (docs/10-architecture/07-plugin-system.md §4). */

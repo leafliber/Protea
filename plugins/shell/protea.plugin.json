@@ -4,11 +4,37 @@
   "api": 1,
   "version": "0.1.0",
   "displayName": "Shell",
-  "description": "Runs shell commands in the data volume's workspace (/data/workspace), with a timeout, an output cap and no secrets in the environment.",
-  "runtime": { "exec": "node", "args": ["dist/main.js"], "dev": { "args": ["src/main.ts"] } },
-  "level": 4,
-  "tools": ["sh_run"],
-  "sideEffectTools": ["sh_run"],
+  "description": "Shell commands for the assistant: in the separate sandbox container (state carried between commands, background jobs), or without isolation in the daemon's container (backend: local).",
+  "runtime": {
+    "exec": "node",
+    "args": [
+      "dist/main.js"
+    ],
+    "dev": {
+      "args": [
+        "src/main.ts"
+      ]
+    }
+  },
+  "level": 3,
+  "tools": [
+    "sh_run",
+    "sh_job_start",
+    "sh_job_list",
+    "sh_job_logs",
+    "sh_job_stop",
+    "sh_reset"
+  ],
+  "sideEffectTools": [
+    "sh_run",
+    "sh_job_start",
+    "sh_job_stop",
+    "sh_reset"
+  ],
   "configSchema": "./config.schema.json",
-  "envPrompt": "./ENV_PROMPT.md"
+  "envPrompt": "./ENV_PROMPT.md",
+  "triggers": [
+    "piggyback",
+    "flush"
+  ]
 }

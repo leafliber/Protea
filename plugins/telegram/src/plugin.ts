@@ -1,5 +1,5 @@
 import { definePlugin, type Host, type PluginDefinition } from '@protea/plugin-sdk';
-import { CHAT_MESSAGE_EVENT, type EventInput } from '@protea/protocol';
+import { CHAT_MESSAGE_EVENT, type EventInput, type PermissionMode, type PermissionModeInfo } from '@protea/protocol';
 
 export interface TelegramConfig {
   apiBase?: string;
@@ -31,6 +31,17 @@ interface TgMessage {
   reply_to_message?: TgMessage;
   [k: string]: unknown;
 }
+interface TgPhotoSize {
+  file_id: string;
+  width: number;
+  height: number;
+  file_size?: number;
+}
+interface TgDocument {
+  file_id: string;
+  mime_type?: string;
+  file_size?: number;
+}
 interface TgUpdate {
   update_id: number;
   message?: TgMessage;
@@ -47,12 +58,32 @@ export class TelegramError extends Error {
   }
 }
 
+/** The longest edge worth sending to a model: larger photos are scaled down by the provider anyway. */
+const MAX_PHOTO_EDGE = 1568;
+const MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024;
+
+/** The largest size of a photo that fits, or the smallest there is. */
+export function pickPhotoSize(sizes: readonly TgPhotoSize[]): TgPhotoSize | undefined {
+  const byEdge = [...sizes].sort((a, b) => Math.max(a.width, a.height) - Math.max(b.width, b.height));
+  return byEdge.filter((s) => Math.max(s.width, s.height) <= MAX_PHOTO_EDGE).at(-1) ?? byEdge[0];
+}
+
 /** Minimal Bot API client (https://core.telegram.org/bots/api). */
 export class TelegramClient {
   constructor(
     private readonly base: string,
     private readonly token: string,
   ) {}
+
+  /** The bytes of a file the Bot API knows by id. */
+  async download(fileId: string): Promise<Buffer> {
+    const { file_path: filePath, file_size: size } = await this.call<{ file_path?: string; file_size?: number }>('getFile', { file_id: fileId });
+    if (!filePath) throw new TelegramError('Telegram did not give a file path');
+    if (size !== undefined && size > MAX_DOWNLOAD_BYTES) throw new TelegramError(`the file is too large (${size} bytes)`);
+    const res = await fetch(`${this.base.replace(/\/$/, '')}/file/bot${this.token}/${filePath}`);
+    if (!res.ok) throw new TelegramError(`download failed: HTTP ${res.status}`, res.status);
+    return Buffer.from(await res.arrayBuffer());
+  }
 
   async call<T>(method: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
     const res = await fetch(`${this.base.replace(/\/$/, '')}/bot${this.token}/${method}`, {
@@ -111,6 +142,30 @@ const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
     signal.addEventListener('abort', () => (clearTimeout(t), resolve()), { once: true });
   });
 
+/** The reply to /mode. */
+function describeMode(i: PermissionModeInfo): string {
+  const lines = [`Permission mode: ${i.mode}${i.override ? ` until ${i.override.until}, then ${i.baseline}` : ''}.`];
+  if (i.paused) lines.push(`Auto is paused: ${i.paused.reason}. Send /mode auto to resume.`);
+  if (i.mode === 'auto' || i.paused) {
+    const { judge, since, allowed, held } = i.auto;
+    lines.push(`Judge: ${judge.model}${judge.ready ? '' : ` (not ready: ${judge.problem ?? 'unknown'})`}.`, `Since ${since}: ${allowed} allowed, ${held} sent to you.`);
+  }
+  return lines.join('\n');
+}
+
+/** "/mode", "/mode auto", "/mode auto 2h", "/mode bypass 30m". A bare number means minutes. */
+async function modeCommand(host: Pick<Host, 'permissions'>, senderKey: string, text: string): Promise<string> {
+  const m = /^\/mode(?:\s+(ask|auto|bypass|locked)(?:\s+(\d+)\s*(m|min|h|hr)?)?)?\s*$/i.exec(text);
+  if (!m) return 'Usage: /mode, /mode ask|auto|locked [30m|2h], /mode bypass 30m';
+  const mode = m[1]?.toLowerCase() as PermissionMode | undefined;
+  const forMs = m[2] ? Number(m[2]) * (/^h/i.test(m[3] ?? '') ? 3_600_000 : 60_000) : undefined;
+  try {
+    return describeMode(await host.permissions.mode(senderKey, { ...(mode !== undefined ? { mode } : {}), ...(forMs !== undefined ? { forMs } : {}) }));
+  } catch (err) {
+    return `Could not change the mode: ${(err as Error).message}`;
+  }
+}
+
 /**
  * The Telegram connector: long-polls getUpdates, turns messages into events (owner
  * private messages at L1, strangers at L2, groups at L2 when mentioned, otherwise
@@ -144,6 +199,20 @@ export function createTelegramPlugin(): PluginDefinition<TelegramConfig> {
     return ids;
   }
 
+  /** The owner's picture, stored for the model. A failure leaves the message as text: it should still arrive. */
+  async function ownerImages(host: Host<TelegramConfig>, m: TgMessage): Promise<NonNullable<EventInput['blobs']>> {
+    const doc = m['document'] as TgDocument | undefined;
+    const fileId = pickPhotoSize((m['photo'] as TgPhotoSize[] | undefined) ?? [])?.file_id ?? (doc?.mime_type?.startsWith('image/') ? doc.file_id : undefined);
+    if (!fileId) return [];
+    try {
+      const put = await host.blobs.put(await needClient().download(fileId));
+      return [{ handle: put.handle, mime: put.mime, size: put.size }];
+    } catch (err) {
+      host.log.warn('could not fetch the image of a message', { messageId: m.message_id, err: (err as Error).message });
+      return [];
+    }
+  }
+
   async function handle(host: Host<TelegramConfig>, u: TgUpdate): Promise<void> {
     const m = u.message ?? u.edited_message;
     if (!m || !m.from || m.from.is_bot) return;
@@ -169,16 +238,23 @@ export function createTelegramPlugin(): PluginDefinition<TelegramConfig> {
           ownerChatId = m.chat.id;
           await host.kv.set('ownerChatId', m.chat.id);
         }
-        const cmd = /^\/(approve|deny)\s+(a\d+)\b/i.exec(text.trim());
+        const cmd = /^\/(approve|deny)\s+(a\d+)(?:\s+(\d+)\s*(m|min|h|hr)?)?\s*$/i.exec(text.trim());
         if (cmd && !edited) {
           const decision = (cmd[1] as string).toLowerCase() === 'approve' ? 'approve' : 'deny';
-          const r = await host.approvals.decide(cmd[2] as string, decision, senderKey).catch((err: Error) => ({ ok: false, message: err.message }));
-          await send(m.chat.id, r.ok ? `${cmd[2]} ${decision === 'approve' ? 'approved' : 'denied'}.` : `Could not ${decision} ${cmd[2]}: ${r.message ?? 'unknown error'}`, m.message_id);
+          // "/approve a12 1h": also allow this tool family for an hour. A bare number means minutes.
+          const grantMs = cmd[3] && decision === 'approve' ? Number(cmd[3]) * (/^h/i.test(cmd[4] ?? '') ? 3_600_000 : 60_000) : undefined;
+          const r = await host.approvals.decide(cmd[2] as string, decision, senderKey, grantMs !== undefined ? { grantMs } : {}).catch((err: Error) => ({ ok: false, message: err.message }));
+          await send(m.chat.id, r.ok ? `${cmd[2]} ${decision === 'approve' ? `approved${grantMs !== undefined ? ` (and its tools for ${cmd[3]}${cmd[4] ?? 'm'})` : ''}` : 'denied'}.` : `Could not ${decision} ${cmd[2]}: ${r.message ?? 'unknown error'}`, m.message_id);
+          return;
+        }
+        if (/^\/mode(\s|$)/i.test(text.trim()) && !edited) {
+          await send(m.chat.id, await modeCommand(host, senderKey, text.trim()), m.message_id);
           return;
         }
         const stopWords = (host.config.stopWords ?? DEFAULT_STOP_WORDS).map((w) => w.toLowerCase());
         const isStop = stopWords.includes(text.trim().toLowerCase().replace(/[.!。！]+$/u, ''));
-        await host.events.push({ ...base, type: ownerType, level: 1, trigger: isStop && !edited ? 'interrupt' : 'flush', text: `Message from owner in private chat (${ref}):\n${text}` });
+        const blobs = await ownerImages(host, m);
+        await host.events.push({ ...base, ...(blobs.length > 0 ? { blobs } : {}), type: ownerType, level: 1, trigger: isStop && !edited ? 'interrupt' : 'flush', text: `Message from owner in private chat (${ref}):\n${text}` });
         return;
       }
       await host.events.push({
@@ -306,7 +382,7 @@ export function createTelegramPlugin(): PluginDefinition<TelegramConfig> {
     envPromptVars: () => ({ ownerChatKnown: ownerChatId !== null, botUsername: me?.username ?? '' }),
     async onApprovalRequest(_host, req) {
       if (ownerChatId === null || !client) return { delivered: false };
-      const text = `Approval ${req.id} requested: ${req.summary}${req.reason ? `\nReason: ${req.reason}` : ''}\nReply /approve ${req.id} or /deny ${req.id} (expires ${req.expiresAt}).`;
+      const text = `Approval ${req.id} requested: ${req.summary}${req.reason ? `\nReason: ${req.reason}` : ''}\nReply /approve ${req.id} or /deny ${req.id} (expires ${req.expiresAt}). /approve ${req.id} 1h also allows these tools for an hour.`;
       await send(ownerChatId, text.slice(0, MAX_TEXT));
       return { delivered: true };
     },

@@ -6,12 +6,14 @@ import {
   isLevel,
   isTextBlock,
   isTrigger,
+  type ApprovalGrantInfo,
   type ApprovalInfo,
   type ContentBlock,
   type EventEnvelope,
   type ForkInfo,
   type McpServerStatus,
   type McpToolInfo,
+  type PermissionModeInfo,
   type PluginStatus,
   type SkillInfo,
   type PushEventResponse,
@@ -49,12 +51,12 @@ Usage:
   protea providers [ls]                         model provider profiles, the default, per-role choices
   protea providers presets                      vendors with their protocol and endpoint
   protea providers set <id> [--preset P] [--protocol anthropic|openai-chat|openai-responses|echo]
-                         [--base-url URL] [--model M | --main M --fork M --cheap M] [--key-stdin] [--no-key]
+                         [--base-url URL] [--model M | --main M --fork M --cheap M --judge M] [--key-stdin] [--no-key]
                          [--label TEXT] [--default]
                                                 add or change a provider (the first one becomes the default),
                                                 e.g. protea providers set deepseek --model deepseek-chat --key-stdin
   protea providers use <id>                     make it the default
-  protea providers role main|fork|cheap <id|default>
+  protea providers role main|fork|cheap|judge <id|default>
                                                 a different provider for one role
   protea providers test <id> | models <id>      a tiny test request, or the endpoint's model names
   protea providers rm <id>
@@ -100,7 +102,12 @@ Usage:
   protea skills enable|disable <name>           show or hide a skill in the catalog
   protea skills rm <name>                       remove an installed skill
   protea approvals [ls] [--state S]             list approval requests
-  protea approvals approve|deny <id>            decide an approval request
+  protea approvals approve|deny <id> [--for 1h]  decide an approval request; --for also allows its tool family for that long
+  protea approvals grants                       list time-limited grants
+  protea approvals revoke <grant>               end a grant early
+  protea mcp preset browser [--no-sandbox]      add the bundled browser (image target "browser")
+  protea sandbox serve [--socket P] [--workspace P] [--home P]   run the sandbox agent (the sandbox container's command)
+  protea sandbox run <command>                  run a command in the sandbox from here (operators; a session of its own)
   protea config get [path] [--sources [--all]]  effective configuration (secrets redacted) or where values come from
   protea config set <path> <value>              change config.yaml (validated; JSON values, e.g. 500, true, [1,2])
   protea config unset <path>
@@ -118,6 +125,8 @@ Usage:
                                                 daemon logs through the API (--follow streams over WebSocket)
   protea logq [same filters] [--run ID | --all] read <data>/runs/*/log.jsonl directly (no daemon needed)
   protea runs                                   run directories (logs, shutdown records, crash reports)
+  protea mode [ask|auto|bypass|locked] [--for 2h]
+                                                show or switch who clears calls that need approval; --for makes it temporary (bypass requires it)
   protea audit [--kind K] [--limit N]           side effects, approvals and control API writes
   protea dev-plugin <dir> [--check] [--config JSON] [--owner KEY]
                                                 run a plugin under a minimal host (or check its protocol conformance)
@@ -165,6 +174,11 @@ const { values, positionals } = parseArgs({
     to: { type: 'string' },
     from: { type: 'string' },
     'include-workspace': { type: 'boolean' },
+    for: { type: 'string' },
+    'no-sandbox': { type: 'boolean' },
+    socket: { type: 'string' },
+    home: { type: 'string' },
+    workspace: { type: 'string' },
     'include-runs': { type: 'boolean' },
     archive: { type: 'boolean' },
     force: { type: 'boolean' },
@@ -197,6 +211,7 @@ const { values, positionals } = parseArgs({
     main: { type: 'string' },
     fork: { type: 'string' },
     cheap: { type: 'string' },
+    judge: { type: 'string' },
     label: { type: 'string' },
     'key-stdin': { type: 'boolean' },
     'no-key': { type: 'boolean' },
@@ -512,6 +527,13 @@ async function mcp(sub: string | undefined, args: string[]): Promise<number> {
   if (!id) throw new Error(`mcp ${sub} needs a server id`);
   const path = `/api/mcp/servers/${encodeURIComponent(id)}`;
   switch (sub) {
+    case 'preset': {
+      if (id !== 'browser') throw new Error(`unknown preset ${id}; there is: browser`);
+      const s = await api<McpServerStatus>(o, 'POST', '/api/mcp/presets/browser', values['no-sandbox'] ? { noSandbox: true } : {});
+      console.log(formatMcp(s));
+      for (const w of s.warnings ?? []) console.log(yellow(w));
+      return s.state === 'running' ? 0 : 1;
+    }
     case 'add': {
       const entry: Record<string, unknown> = {};
       if (values.http) {
@@ -600,6 +622,13 @@ async function skills(sub: string | undefined, args: string[]): Promise<number> 
   throw new Error(`unknown skills command: ${sub}`);
 }
 
+/** "90", "30m", "1h" as milliseconds. A bare number means minutes. */
+function parseDuration(text: string): number {
+  const m = /^(\d+)\s*(m|min|h|hr)?$/i.exec(text.trim());
+  if (!m || Number(m[1]) <= 0) throw new Error(`--for needs a duration like 30m or 1h (got ${text})`);
+  return Number(m[1]) * (/^h/i.test(m[2] ?? '') ? 3_600_000 : 60_000);
+}
+
 async function approvals(sub: string | undefined, id: string | undefined): Promise<number> {
   const o = client();
   if (sub === undefined || sub === 'ls') {
@@ -609,9 +638,44 @@ async function approvals(sub: string | undefined, id: string | undefined): Promi
     for (const a of all) console.log(formatApproval(a));
     return 0;
   }
+  if (sub === 'grants') {
+    const { grants } = await api<{ grants: ApprovalGrantInfo[] }>(o, 'GET', '/api/approvals/grants');
+    if (grants.length === 0) console.log(dim('no grants'));
+    for (const g of grants) console.log(`${g.id} ${g.active ? green('active') : dim(g.revokedAt ? 'revoked' : 'ended')} ${g.family} until ${g.expiresAt} ${dim(`from ${g.approvalId} by ${g.decidedBy}`)}`);
+    return 0;
+  }
+  if (sub === 'revoke') {
+    if (!id) throw new Error('approvals revoke needs a grant id');
+    const g = await api<ApprovalGrantInfo>(o, 'POST', `/api/approvals/grants/${encodeURIComponent(id)}/revoke`);
+    console.log(`${g.id} revoked (${g.family})`);
+    return 0;
+  }
   if (sub !== 'approve' && sub !== 'deny') throw new Error(`unknown approvals command: ${sub}`);
   if (!id) throw new Error(`approvals ${sub} needs an id`);
-  console.log(formatApproval(await api<ApprovalInfo>(o, 'POST', `/api/approvals/${encodeURIComponent(id)}/decide`, { decision: sub })));
+  console.log(
+    formatApproval(
+      await api<ApprovalInfo>(o, 'POST', `/api/approvals/${encodeURIComponent(id)}/decide`, {
+        decision: sub,
+        ...(values.for !== undefined && sub === 'approve' ? { grantMs: parseDuration(values.for) } : {}),
+      }),
+    ),
+  );
+  return 0;
+}
+
+async function permissionMode(mode: string | undefined): Promise<number> {
+  const o = client();
+  const i =
+    mode === undefined
+      ? await api<PermissionModeInfo>(o, 'GET', '/api/permissions/mode')
+      : await api<PermissionModeInfo>(o, 'POST', '/api/permissions/mode', { mode, ...(values.for !== undefined ? { forMs: parseDuration(values.for) } : {}) });
+  console.log(`${bold(i.mode)}${i.override ? ` until ${i.override.until}, then ${i.baseline} ${dim(`(set by ${i.override.by})`)}` : ''}`);
+  if (i.paused) console.log(yellow(`auto is paused: ${i.paused.reason}; run "protea mode auto" to resume`));
+  if (i.mode === 'auto' || i.paused) {
+    const { judge, since, allowed, held } = i.auto;
+    console.log(`judge ${judge.model}${judge.ready ? '' : ` ${red(`not ready: ${judge.problem ?? 'unknown'}`)}`}`);
+    console.log(dim(`since ${since}: ${allowed} allowed, ${held} sent to you`));
+  }
   return 0;
 }
 
@@ -691,6 +755,36 @@ async function main(): Promise<number> {
       return skills(sub, rest);
     case 'approvals':
       return approvals(sub, rest[0]);
+    case 'mode':
+      return permissionMode(sub);
+    case 'sandbox': {
+      const { SandboxAgent, SandboxClient, DEFAULT_SANDBOX_SOCKET } = await import('@protea/sandbox');
+      if (sub === 'run') {
+        if (rest.length === 0) throw new Error('sandbox run needs a command');
+        const client = new SandboxClient({ socket: values.socket ?? process.env['PROTEA_SANDBOX_SOCKET'] ?? DEFAULT_SANDBOX_SOCKET, connectWaitMs: 5000 });
+        client.start();
+        try {
+          const r = await client.run({ runId: 'cli', session: 'operator', command: rest.join(' '), timeoutMs: 120_000, captureBytes: 1 << 20 });
+          process.stdout.write(r.stdout);
+          process.stderr.write(r.stderr);
+          return r.exitCode ?? 1;
+        } finally {
+          client.stop();
+        }
+      }
+      if (sub !== 'serve') break;
+      const agent = new SandboxAgent({
+        socket: values.socket ?? process.env['PROTEA_SANDBOX_SOCKET'] ?? DEFAULT_SANDBOX_SOCKET,
+        home: values.home ?? process.env['HOME'] ?? '/home/protea',
+        workspace: values.workspace ?? '/workspace',
+        log: (msg, fields) => console.error(`[sandbox] ${msg}${fields ? ` ${JSON.stringify(fields)}` : ''}`),
+      });
+      await agent.start();
+      const stop = (): void => void agent.stop().finally(() => process.exit(0));
+      process.once('SIGTERM', stop);
+      process.once('SIGINT', stop);
+      return -1;
+    }
     case 'dev-plugin':
       if (!sub) break;
       return devPlugin(sub, {

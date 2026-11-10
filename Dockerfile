@@ -4,12 +4,14 @@
 #
 #   docker build -t protea .                     # full: Node + Python + uv + git + rg + jq + curl
 #   docker build -t protea:slim --target slim .  # Node only (no uvx MCP servers, no Python plugins)
+#   docker build -t protea:browser --target browser .  # full + Chromium for the browser tools
 #
-# Stages: builder (install, build, deploy) → assets (what the daemon ships) → slim → full.
+# Stages: builder (install, build, deploy) → assets (what the daemon ships) → slim → full → browser.
 
 ARG NODE_VERSION=22
 ARG DEBIAN=trixie
 ARG UV_VERSION=0.9.30
+ARG PLAYWRIGHT_MCP_VERSION=0.0.85
 
 # —— builder ——
 FROM node:${NODE_VERSION}-${DEBIAN}-slim AS builder
@@ -84,7 +86,8 @@ RUN apt-get update \
  && rm -rf /usr/local/lib/node_modules/corepack /usr/local/bin/corepack /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg /root/.npm \
  # The base image's uid/gid 1000 becomes "protea".
  && groupmod -n protea node && usermod -l protea -d /home/protea -m node \
- && mkdir -p /data && chown protea:protea /data
+ && mkdir -p /data /workspace /run/protea-sandbox \
+ && chown protea:protea /data /workspace /run/protea-sandbox
 ENV NODE_ENV=production \
     PROTEA_DATA_DIR=/data \
     PROTEA_ASSETS_DIR=/app/assets \
@@ -112,3 +115,19 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=uv /uv /uvx /usr/local/bin/
 ENV PROTEA_IMAGE=full
+
+# —— browser: full + Chromium, for the bundled browser tools (ADR-0013) ——
+FROM full AS browser
+ARG PLAYWRIGHT_MCP_VERSION
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    PROTEA_IMAGE=browser
+# The browser comes from the Playwright this version of the server was built against.
+RUN npm install -g --no-fund --no-audit "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}" \
+ && apt-get update \
+ && node /usr/local/lib/node_modules/@playwright/mcp/node_modules/playwright/cli.js install --with-deps --no-shell chromium \
+ && apt-get install -y --no-install-recommends fonts-noto-cjk fonts-noto-color-emoji \
+ && rm -rf /var/lib/apt/lists/* /root/.npm \
+ && chmod -R a+rX /ms-playwright
+
+# The default target stays `full`: a plain `docker build .` takes the last stage.
+FROM full

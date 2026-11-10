@@ -222,6 +222,36 @@ describe('forks', () => {
     }
   });
 
+  it('takes patterns in a fork\'s tool list, side effects included, and refuses one that matches nothing', async () => {
+    let forkTools: string[] = [];
+    const h = makeHarness({
+      steps: [
+        route(
+          (req) => {
+            if (req.messages.length === 1) {
+              return reply([toolCall('fork_spawn', { goal: 'by pattern', tools: ['sa?', 'events_*'] }), toolCall('fork_spawn', { goal: 'nothing', tools: ['nope_*'] })]);
+            }
+            return reply([toolCall('idle', {})]);
+          },
+          (req) => {
+            forkTools = req.tools.map((t) => t.name);
+            return textReply('ok');
+          },
+        ),
+      ],
+    });
+    try {
+      h.push({ text: 'tick', level: 3, trigger: 'flush' }, 'cron', 3);
+      await waitFor(() => forkTools.length > 0);
+      await h.idle();
+      expect(forkTools.sort()).toEqual(['events_promote', 'events_query', 'say']);
+      const results = h.transcript.messages.flatMap((m) => m.content.filter(isToolResultBlock));
+      expect(results[1]).toMatchObject({ is_error: true, content: 'fork not started: these tools are not available to forks: nope_*' });
+    } finally {
+      await h.close();
+    }
+  });
+
   it('clamps the level of a spawned fork and rejects tools forks may not use', async () => {
     const h = makeHarness({
       steps: [

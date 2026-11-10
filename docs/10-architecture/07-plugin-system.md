@@ -10,7 +10,7 @@
 |---|---|---|---|
 | `source` | 事件（入站） | `cron`、`webhook`、`imap`、`rss`、`filewatch` | 进程外（默认）/ 进程内（内核自带） |
 | `connector` | 事件 + 出口工具（入站 + 出站） | `telegram`、`slack`、`discord`、`console` | 进程外 |
-| `tool` | 纯工具（无事件） | `shell`（内置，M6）、`http`、`calendar` | 进程外 |
+| `tool` | 工具（可推少量事件，如后台任务结束） | `shell`（内置，M6）、`http`、`calendar` | 进程外 |
 | `mcp` | 一个 MCP 服务器的声明（Core 作为 MCP 客户端） | `mcp-server-fetch`、`filesystem` | MCP stdio / HTTP |
 | `skill` | 一个 Skill 目录 | `pdf`、`weekly-report` | 不运行；按需读取 |
 | `provider` | 模型提供方 | `anthropic`（内核自带）、`openai-compat` | 进程内（需审计） |
@@ -126,7 +126,7 @@ stateDiagram-v2
 | 插件→宿主 | `events/push(envelope, {trigger})` → cursor | 推事件 |
 | | `events/pushDeferred` / `events/pushCandidate` | 延迟/候选 |
 | | `events/withdraw(cursor)` / `events/promote(cursor, trigger)` | 撤回/升级 |
-| | `blob/put(bytes, mime)` → handle · `blob/get(handle)` | 附件 |
+| | `blob/put(bytes)` → handle · `blob/get(handle)` | 图片（工具回执的 `images`、事件的 `blobs` 用句柄引用） |
 | | `log(level, msg, fields)` | 结构化日志（带插件 ID 与关联 ID） |
 | | `usage/report(...)` | 外部 API 用量 |
 | | `kv/get` / `kv/set`（命名空间 = 插件 ID） | 小状态 |

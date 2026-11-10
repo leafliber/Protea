@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -59,6 +60,7 @@ export async function devPlugin(dir: string, opts: { check: boolean; config?: Re
   for (const w of loaded.warnings) console.error(yellow(`manifest: ${w}`));
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), `protea-dev-${m.id}-`));
   const kv = new Map<string, unknown>();
+  const blobs = new Map<string, { data: Buffer; mime: string }>();
   let cursor = 0;
   const levelCap = (m.level ?? 4) as Level;
   const owners = new Set(opts.owners);
@@ -80,6 +82,19 @@ export async function devPlugin(dir: string, opts: { check: boolean; config?: Re
     [PLUGIN_TO_HOST.kvDelete]: (p) => (kv.delete((p as { key: string }).key), {}),
     [PLUGIN_TO_HOST.ownerResolve]: (p) => ({ role: owners.has((p as { senderKey: string }).senderKey) ? 'owner' : 'unknown' }),
     [PLUGIN_TO_HOST.secretsExists]: (p) => ({ exists: process.env[(p as { name: string }).name] !== undefined }),
+    [PLUGIN_TO_HOST.blobPut]: (p) => {
+      const data = Buffer.from((p as { dataBase64: string }).dataBase64, 'base64');
+      const handle = `blob:${createHash('sha256').update(data).digest('hex')}`;
+      const mime = (p as { mime?: string }).mime ?? 'image/png';
+      blobs.set(handle, { data, mime });
+      console.log(dim(`▣ image ${handle.slice(0, 16)}… ${data.length} bytes`));
+      return { handle, mime, size: data.length };
+    },
+    [PLUGIN_TO_HOST.blobGet]: (p) => {
+      const b = blobs.get((p as { handle: string }).handle);
+      if (!b) throw new RpcError(RPC_ERRORS.InvalidParams, 'not stored');
+      return { dataBase64: b.data.toString('base64'), mime: b.mime, size: b.data.length };
+    },
     [PLUGIN_TO_HOST.approvalsDecide]: (p) => {
       const d = p as { id: string; decision: string; senderKey: string };
       if (!owners.has(d.senderKey)) throw new RpcError(RPC_ERRORS.Unauthorized, 'only the owner can decide approvals');

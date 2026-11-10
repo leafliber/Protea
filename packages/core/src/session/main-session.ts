@@ -17,7 +17,7 @@ import type { Bus } from '../bus.js';
 import { mergeConsecutive, type ContextAssembler } from '../context/assembler.js';
 import { prefixFingerprint } from '../context/prefix.js';
 import type { BatchRepo, UsageRepo } from '../db/repos.js';
-import { renderEventsBlock, renderStatusBlock, type StatusSnapshot } from '../events/render.js';
+import { renderEventImages, renderEventsBlock, renderStatusBlock, type StatusSnapshot } from '../events/render.js';
 import type { Board } from '../memory/board.js';
 import { MEMORY_ROOT } from '../memory/store.js';
 import type { EventStore } from '../events/store.js';
@@ -60,6 +60,8 @@ export interface BatchFeed {
 }
 
 export interface MainSessionOptions {
+  /** vision.maxImagesPerMessage. */
+  maxImagesPerEvent?: () => number;
   transcript: Transcript;
   store: EventStore;
   batches: BatchRepo;
@@ -260,7 +262,8 @@ export class MainSession {
   /** Append events (and the status snapshot) to the transcript, then mark them delivered. */
   private eventBlocks(batch: Batch, events: EventEnvelope[], extra?: TextBlock): ContentBlock[] {
     if (events.length === 0) return [];
-    return [renderEventsBlock(events, batch.id), ...(extra ? [extra] : []), renderStatusBlock(this.o.status())];
+    // The status block stays last so everything before it can be cached.
+    return [renderEventsBlock(events, batch.id), ...renderEventImages(events, this.o.maxImagesPerEvent?.() ?? 4), ...(extra ? [extra] : []), renderStatusBlock(this.o.status())];
   }
 
   /** The whiteboard, when someone other than this session changed it since this conversation last saw it. */

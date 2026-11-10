@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { CHAT_MESSAGE_EVENT, type BatchEndReason, type ChatBatch, type ChatHistoryResponse, type ChatItem, type EventState } from '@protea/protocol';
+import { CHAT_MESSAGE_EVENT, type BatchEndReason, type BlobImageRef, type ChatBatch, type ChatHistoryResponse, type ChatItem, type EventState } from '@protea/protocol';
 import type { Db } from '../db/database.js';
 
 export interface OutputRecord {
@@ -23,6 +23,7 @@ interface ChatRow {
   channel: string | null;
   batch_id: string | null;
   platform: string;
+  blobs?: string | null;
 }
 
 /** Where the console and the conversation were separated: everything up to here came from the old console chat. */
@@ -111,16 +112,16 @@ export class OutputLog {
     const rows = this.db
       .prepare(
         `SELECT * FROM (
-           SELECT received_at AS at, 0 AS k, cursor AS id, text, state, sender_key AS who, NULL AS channel, batch_id, source AS platform
+           SELECT received_at AS at, 0 AS k, cursor AS id, text, state, sender_key AS who, NULL AS channel, batch_id, source AS platform, blobs
              FROM events WHERE type = '${CHAT_MESSAGE_EVENT}' ${all ? '' : 'AND source = ?'}
            UNION ALL
-           SELECT at, 1 AS k, id, text, NULL AS state, NULL AS who, channel, batch_id, plugin AS platform
+           SELECT at, 1 AS k, id, text, NULL AS state, NULL AS who, channel, batch_id, plugin AS platform, NULL AS blobs
              FROM outputs WHERE channel IN (${channels}) ${all ? '' : 'AND plugin = ?'}
            ${split ? `UNION ALL
-           SELECT received_at AS at, 0 AS k, cursor AS id, text, state, sender_key AS who, NULL AS channel, batch_id, '${LEGACY_PLATFORM}' AS platform
+           SELECT received_at AS at, 0 AS k, cursor AS id, text, state, sender_key AS who, NULL AS channel, batch_id, '${LEGACY_PLATFORM}' AS platform, NULL AS blobs
              FROM events WHERE source = 'console' AND type = 'console.message' AND cursor <= ?
            UNION ALL
-           SELECT at, 1 AS k, id, text, NULL AS state, NULL AS who, channel, batch_id, '${LEGACY_PLATFORM}' AS platform
+           SELECT at, 1 AS k, id, text, NULL AS state, NULL AS who, channel, batch_id, '${LEGACY_PLATFORM}' AS platform, NULL AS blobs
              FROM outputs WHERE plugin = 'console' AND id <= ?` : ''}
          ) ${before ? 'WHERE (at, k, id) < (?, ?, ?)' : ''}
          ORDER BY at DESC, k DESC, id DESC LIMIT ?`,
@@ -213,6 +214,13 @@ export class OutputLog {
   }
 }
 
+/** The images among an event's stored attachments. */
+function eventImages(blobs: string | null | undefined): { images?: BlobImageRef[] } {
+  if (!blobs) return {};
+  const images = (JSON.parse(blobs) as BlobImageRef[]).filter((b) => b.mime.startsWith('image/')).map((b) => ({ handle: b.handle, mime: b.mime }));
+  return images.length > 0 ? { images } : {};
+}
+
 function toItem(r: ChatRow): ChatItem {
   if (r.k === 0) {
     return {
@@ -225,6 +233,7 @@ function toItem(r: ChatRow): ChatItem {
       state: r.state as EventState,
       ...(r.who !== null ? { sender: r.who } : {}),
       ...(r.batch_id !== null ? { batchId: r.batch_id } : {}),
+      ...eventImages(r.blobs),
     };
   }
   return {

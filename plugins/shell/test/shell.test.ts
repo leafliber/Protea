@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FakeHost } from '@protea/plugin-sdk/testing';
+import { SandboxAgent } from '@protea/sandbox';
 import { clipOutput, commandEnv, createShellPlugin, resolveCwd, runCommand } from '../src/plugin.js';
 
 const hosts: FakeHost[] = [];
@@ -87,7 +88,7 @@ describe('shell helpers', () => {
 describe('sh_run', () => {
   it('runs in the workspace and reports exit code, stdout and stderr', async () => {
     const dir = dataDir();
-    const h = new FakeHost(createShellPlugin(), { id: 'shell', hostDataDir: dir, config: { maxOutputKb: 1 } });
+    const h = new FakeHost(createShellPlugin(), { id: 'shell', hostDataDir: dir, config: { backend: 'local', maxOutputKb: 1 } });
     hosts.push(h);
     await h.start();
     const ok = await h.callTool('sh_run', { command: 'pwd; echo "$HOME"; echo oops >&2; echo hi > note.txt' });
@@ -114,5 +115,69 @@ describe('sh_run', () => {
     expect(slow.text).toMatch(/^timed out after 1s/);
 
     expect(await h.callTool('sh_run', { command: 'ls', cwd: '../..' })).toMatchObject({ failed: true });
+  });
+});
+
+describe('sh_* through the sandbox', () => {
+  async function withSandbox() {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-'));
+    const socket = path.join(root, 'a.sock');
+    const home = path.join(root, 'home');
+    fs.mkdirSync(home);
+    const agent = new SandboxAgent({ socket, home, workspace: path.join(root, 'ws'), env: { PATH: process.env['PATH'] as string } });
+    await agent.start();
+    const h = new FakeHost(createShellPlugin(), { id: 'shell', levelCap: 3, hostDataDir: dataDir(), config: { socket } });
+    hosts.push(h);
+    await h.start();
+    return {
+      h,
+      stop: () => agent.stop(),
+    };
+  }
+
+  it('keeps the shell going, runs jobs, and tells the session when one ends', async () => {
+    const { h, stop } = await withSandbox();
+    try {
+      await h.callTool('sh_run', { command: 'mkdir -p sub && cd sub && export X=1' });
+      const r = await h.callTool('sh_run', { command: 'basename "$PWD"; echo "X=$X"' });
+      expect(r.failed).toBeFalsy();
+      expect(r.text).toMatch(/^exit code 0 · .* · cwd .*\/sub\n/);
+      expect(r.text).toContain('sub\nX=1');
+
+      const started = await h.callTool('sh_job_start', { command: 'echo done-output', name: 'quick' });
+      expect(started.text).toMatch(/^started j1 quick/);
+      await vi.waitFor(() => expect(h.events.length).toBe(1), { timeout: 5000 });
+      expect(h.violations).toEqual([]);
+      expect(h.events[0]).toMatchObject({ type: 'shell.job_exited', level: 3, trigger: 'flush', correlation: 'j1' });
+      expect(h.events[0]?.text).toContain('done-output');
+      expect(h.events[0]?.dedupeKey).toMatch(/^job:[a-f0-9]+:j1:exited$/);
+
+      expect((await h.callTool('sh_job_list', {})).text).toContain('j1 quick [exited (exit 0)]');
+      expect((await h.callTool('sh_job_logs', { id: 'j1' })).text).toContain('done-output');
+      await h.callTool('sh_reset', {});
+      expect((await h.callTool('sh_run', { command: 'echo "X=[$X]"' })).text).toContain('X=[]');
+    } finally {
+      await h.stop();
+      await stop();
+    }
+  });
+
+  it('fails with a reason when the sandbox is not there, and never runs the command here', async () => {
+    const dir = dataDir();
+    const marker = path.join(dir, 'ran');
+    const h = new FakeHost(createShellPlugin(), { id: 'shell', hostDataDir: dir, config: { socket: path.join(dir, 'nope.sock') } });
+    hosts.push(h);
+    await h.start();
+    const r = await h.callTool('sh_run', { command: `touch ${marker}` });
+    expect(r).toMatchObject({ failed: true });
+    expect(r.text).toContain('the sandbox is not reachable');
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it('has background jobs only with the sandbox', async () => {
+    const h = new FakeHost(createShellPlugin(), { id: 'shell', hostDataDir: dataDir(), config: { backend: 'local' } });
+    hosts.push(h);
+    await h.start();
+    expect(await h.callTool('sh_job_start', { command: 'true' })).toMatchObject({ failed: true });
   });
 });

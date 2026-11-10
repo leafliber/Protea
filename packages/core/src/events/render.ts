@@ -1,4 +1,4 @@
-import { type EventEnvelope, type Level, type RunPhase, type TextBlock, LEVELS } from '@protea/protocol';
+import { blobImageBlock, type ContentBlock, type EventEnvelope, type Level, type RunPhase, type TextBlock, LEVELS } from '@protea/protocol';
 import { escapeStructural } from '../util/escape.js';
 
 export { escapeStructural };
@@ -35,6 +35,23 @@ export function renderEventsBlock(events: readonly EventEnvelope[], batchId: str
   const sorted = [...events].sort((a, b) => a.cursor - b.cursor);
   const body = sorted.map(renderEvent).join('\n');
   return { type: 'text', text: `<events batch="${attr(batchId)}" count="${sorted.length}">\n${body}\n</events>` };
+}
+
+/**
+ * The images attached to a batch's events, after the events' text: each group is labelled with
+ * its event so the model can tell whose picture it is looking at. `origin` carries over.
+ */
+export function renderEventImages(events: readonly EventEnvelope[], maxPerEvent: number): ContentBlock[] {
+  const out: ContentBlock[] = [];
+  for (const e of [...events].sort((a, b) => a.cursor - b.cursor)) {
+    const images = (e.blobs ?? []).filter((b) => b.mime.startsWith('image/'));
+    if (images.length === 0) continue;
+    const shown = images.slice(0, maxPerEvent);
+    const omitted = images.length - shown.length;
+    out.push({ type: 'text', text: `<event_images cursor="${e.cursor}" origin="${attr(e.origin)}" count="${shown.length}"${omitted > 0 ? ` omitted="${omitted}"` : ''}/>` });
+    for (const b of shown) out.push(blobImageBlock(b.handle, b.mime));
+  }
+  return out;
 }
 
 export interface StatusSnapshot {

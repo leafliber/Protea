@@ -16,20 +16,44 @@ RUN_AS="${PROTEA_RUN_AS:-1000:1000}"
 uid="${RUN_AS%%:*}"
 gid="${RUN_AS##*:}"
 
+# A fresh named volume mounted on a directory the image does not have belongs to root. Only the
+# directory itself changes hands: the workspace can be written from the sandbox, and nothing in
+# it should be followed as root.
+own_dir() {
+  mkdir -p "$1"
+  if [ "$(stat -c %u:%g "$1")" != "$uid:$gid" ]; then chown "$uid:$gid" "$1"; fi
+}
+
 if [ "$(id -u)" = "0" ] && [ "${PROTEA_ALLOW_ROOT:-0}" != "1" ]; then
+  if [ "${1:-}" = "sandbox" ]; then
+    # The sandbox container has no /data; it gets its own three directories.
+    own_dir /workspace
+    own_dir /run/protea-sandbox
+    own_dir "${PROTEA_HOME:-/home/protea}"
+    export HOME="${PROTEA_HOME:-/home/protea}"
+    exec setpriv --reuid="$uid" --regid="$gid" --init-groups "$0" "$@"
+  fi
   mkdir -p "$DATA"
   if [ "$(stat -c %u:%g "$DATA")" != "$uid:$gid" ]; then
     echo "protea-entrypoint: giving $DATA to uid $uid (it belonged to $(stat -c %u:%g "$DATA"))" >&2
     chown -R "$uid:$gid" "$DATA"
   fi
+  if mountpoint -q "$DATA/workspace" 2>/dev/null; then own_dir "$DATA/workspace"; fi
+  if mountpoint -q "$DATA/workspace/browser" 2>/dev/null; then own_dir "$DATA/workspace/browser"; fi
   export HOME="${PROTEA_HOME:-/home/protea}"
   exec setpriv --reuid="$uid" --regid="$gid" --init-groups "$0" "$@"
+fi
+
+if [ "${1:-}" = "sandbox" ]; then
+  exec protea "$@"
 fi
 
 if ! [ -w "$DATA" ]; then
   echo "protea-entrypoint: $DATA is not writable by uid $(id -u); fix its owner or run the container as root so the entrypoint can" >&2
   exit 1
 fi
+
+mkdir -p "$DATA/workspace/browser"
 
 # npx/uvx/pip caches live on the volume, so MCP servers do not download again after a restart.
 mkdir -p "$DATA/cache/npm" "$DATA/cache/uv" "$DATA/cache/pip" "$DATA/workspace"

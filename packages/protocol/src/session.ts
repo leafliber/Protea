@@ -2,7 +2,7 @@
 
 export type RunPhase = 'idle' | 'delivering' | 'model' | 'tools' | 'backoff' | 'handoff';
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-export const MODEL_ROLES = ['main', 'fork', 'cheap'] as const;
+export const MODEL_ROLES = ['main', 'fork', 'cheap', 'judge'] as const;
 export type ModelRole = (typeof MODEL_ROLES)[number];
 
 /**
@@ -34,6 +34,14 @@ export interface ToolResultBlock extends ContentBlock {
   is_error?: boolean;
 }
 
+/** Where an image is: transcripts hold a reference, only requests to a provider hold the bytes (ADR-0014). */
+export type ImageSource = { type: 'blob'; handle: string; media_type: string } | { type: 'base64'; media_type: string; data: string };
+
+export interface ImageBlock extends ContentBlock {
+  type: 'image';
+  source: ImageSource;
+}
+
 export interface TranscriptMessage {
   role: 'user' | 'assistant';
   content: ContentBlock[];
@@ -49,6 +57,25 @@ export function isToolUseBlock(b: ContentBlock): b is ToolUseBlock {
 
 export function isToolResultBlock(b: ContentBlock): b is ToolResultBlock {
   return b.type === 'tool_result' && typeof b['tool_use_id'] === 'string';
+}
+
+export function isImageBlock(b: ContentBlock): b is ImageBlock {
+  return b.type === 'image' && typeof b['source'] === 'object' && b['source'] !== null;
+}
+
+/** The transcript form of a stored image. */
+export function blobImageBlock(handle: string, mime: string): ImageBlock {
+  return { type: 'image', source: { type: 'blob', handle, media_type: mime } };
+}
+
+/** The stored images among blocks, tool results included: what the console shows. */
+export function blobImagesIn(blocks: readonly ContentBlock[]): Array<{ handle: string; mime: string }> {
+  const out: Array<{ handle: string; mime: string }> = [];
+  for (const b of blocks) {
+    if (isImageBlock(b) && b.source.type === 'blob') out.push({ handle: b.source.handle, mime: b.source.media_type });
+    else if (isToolResultBlock(b) && Array.isArray(b.content)) out.push(...blobImagesIn(b.content));
+  }
+  return out;
 }
 
 export type BatchReason = 'window' | 'flush' | 'resume';

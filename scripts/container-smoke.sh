@@ -41,7 +41,7 @@ docker volume create "$VOL" >/dev/null
 docker run -d --name "$NAME" \
   -v "$VOL:/data" -p "127.0.0.1:$PORT:7788" \
   -e PROTEA_PROVIDERS__DEFAULT=echo \
-  -e PROTEA_PLUGINS__SHELL__ENABLED=true \
+  -e PROTEA_PLUGINS__SHELL__ENABLED=true -e PROTEA_PLUGINS__SHELL__CONFIG__BACKEND=local \
   --health-interval 2s --health-start-period 5s \
   --memory 1g --cpus 1 --stop-timeout 40 \
   "$IMAGE" >/dev/null

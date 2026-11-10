@@ -8,14 +8,15 @@ pnpm workspace，TypeScript ESM，Node 22。
 Protea/
 ├── package.json                 workspace 根：build / typecheck / test / dev / protea
 ├── pnpm-workspace.yaml          packages/*、plugins/*、apps/*、examples/plugins/*；allowBuilds（better-sqlite3、esbuild）
-├── Dockerfile                   镜像（M6）：builder → slim → full（默认）
+├── Dockerfile                   镜像（M6）：builder → slim → full（默认）→ browser
 ├── .dockerignore
-├── .github/workflows/ci.yml     CI（M6）：类型检查、测试、构建、pnpm audit；构建 full/slim 镜像、容器冒烟测试、Trivy 扫描
+├── .github/workflows/ci.yml     CI（M6）：类型检查、测试、构建、pnpm audit；构建 full/slim/browser 镜像、容器冒烟测试、Trivy 扫描
 ├── SECURITY.md                  漏洞报告渠道与响应时限（M6）
 ├── scripts/
 │   ├── bundle-plugin.mjs        把进程外插件打包成单文件 dist/main.js（esbuild）
 │   ├── container-smoke.sh       容器冒烟测试（M6）
-│   ├── docker-build.sh          本地构建镜像并按版本与提交打标签（pnpm docker:build[:slim|:all]）
+│   ├── docker-build.sh          本地构建镜像并按版本与提交打标签（pnpm docker:build[:slim|:browser|:all]）
+│   ├── sandbox-smoke.sh         沙箱隔离与浏览器的容器冒烟测试
 │   └── soak.mjs                 长稳测试：模拟来源 + 指标采样 + 增长报告（M6，无依赖）；--rate 0 只采样
 ├── tsconfig.base.json           各包共享的编译选项
 ├── tsconfig.json                全仓类型检查（paths 指向各包 src，noEmit）
@@ -25,6 +26,7 @@ Protea/
 ├── packages/
 │   ├── protocol/                @protea/protocol：事件、会话、控制 API、插件清单与协议的类型，事件 JSON Schema，JSON-RPC 对等端（rpc.ts，无运行时依赖）
 │   ├── plugin-sdk/              @protea/plugin-sdk：definePlugin / runPlugin，测试用 FakeHost（@protea/plugin-sdk/testing）
+│   ├── sandbox/                 @protea/sandbox：沙箱代理（agent.ts：unix socket、会话状态、后台任务）、客户端（client.ts）、命令执行（exec.ts）
 │   ├── core/                    @protea/core：内核
 │   │   ├── src/
 │   │   │   ├── events/          校验（ajv）、门禁、事件网关（gateway.ts，所有事件的唯一入口）、主人映射、事件库、输出记录与对话历史、渲染
@@ -32,10 +34,11 @@ Protea/
 │   │   │   ├── forks/           Fork 管理器（排队、让渡/恢复、检查点、重启恢复）与 fork_* 工具
 │   │   │   ├── session/         主会话循环、转录与修复（含 thinking 截止标记）、启动对账、容量交接（handoff.ts）、回放的数据读取（replay-source.ts）
 │   │   │   ├── context/         系统分段、运行时说明、环境提示模板、请求装配、工具搜索（tool-search.ts）、前缀指纹（prefix.ts）
+│   │   │   ├── blobs/           图片的内容寻址存储（store.ts）与 view_image（tools.ts）
 │   │   │   ├── tools/           工具注册表、分发器、内核工具、外发限速（outbound.ts）
 │   │   │   ├── providers/       Provider 接口、按角色路由（router.ts）、供应商档案与预设（profiles.ts）、工厂与连接测试（factory.ts）、anthropic、OpenAI Chat / Responses（openai.ts、http.ts）、echo、scripted、价格表、秘密扫描包装（redact.ts）、录制与回放（recorder.ts）
 │   │   │   ├── plugins/         PluginHost（生命周期、监督）、清单与发现、子进程运行时、一致性检查、开发加载器
-│   │   │   ├── permissions/     权限策略、审批、审计、权限守卫、approval_request 工具
+│   │   │   ├── permissions/     权限策略、权限模式（modes.ts）、判断模型（judge.ts）、审批、审计、权限守卫、approval_request 工具
 │   │   │   ├── mcp/             MCP 客户端管理器（连接、监督、工具命名与注册、资源与 prompts、OAuth）
 │   │   │   ├── skills/          SKILL.md 解析、Skills 注册表与目录段、skill_load / skill_read
 │   │   │   ├── persona/         人格文件加载与热重载、可选钩子（hooks.*）
@@ -59,7 +62,7 @@ Protea/
 │   ├── filewatch/               进程外来源：监视 /data/inbox
 │   ├── rss/                     进程外来源：RSS / Atom 订阅
 │   ├── imap/                    进程外来源：IMAP 邮箱（imapflow + mailparser；测试用假 IMAP 服务器）
-│   └── shell/                   进程外工具：sh_run（工作区、超时、输出截断、环境白名单；默认不启用，M6）
+│   └── shell/                   进程外工具：sh_run、sh_job_*、sh_reset；默认经 unix socket 调沙箱容器，backend: local 在主容器内（默认不启用，ADR-0013）
 ├── skills/                      内置 Skills（protea-self-ops、daily-brief、memory-dream）
 ├── apps/
 │   ├── daemon/                  组装 Core + 控制平面 + 内置插件；单实例锁；离线回放（replay.ts）；端到端与安全检查清单测试
@@ -69,7 +72,9 @@ Protea/
 ├── examples/plugins/            py-notes（Python）、ts-notes（TypeScript）示例插件与一致性探针
 └── docker/
     ├── entrypoint.sh            容器入口：准备 /data、降权、迁移、exec 守护进程（M6）
-    ├── docker-compose.yml       示例部署，tls 档带 Caddy（M6）
+    ├── docker-compose.yml       示例部署，tls 档带 Caddy（M6），sandbox 档带 shell 容器
+    ├── docker-compose.browser.yml  覆盖文件：主容器换成带 Chromium 的镜像并调高资源
+    ├── seccomp-chromium.json    Docker 默认的 seccomp 配置，加上 Chromium 沙箱需要的系统调用
     ├── Caddyfile
     └── observability/           Prometheus 抓取配置与 Grafana 示例面板（M5）
 ```
