@@ -31,7 +31,7 @@ function host(config: Record<string, unknown> = {}) {
   const plugins = new PluginHost({
     store,
     bus,
-    gateway: new EventGateway({ store, owner, log: silentLogger(), clock: systemClock }),
+    gateway: new EventGateway({ store, owner, log: silentLogger(), clock: systemClock, timezone: 'Asia/Shanghai' }),
     owner,
     kv: new KvRepo(db),
     tools,

@@ -1,6 +1,6 @@
 # 会话与代理循环
 
-> 状态：Accepted（M0–M4；未实现的子项在文中标注）· 更新：2026-11-08 · 决策：[ADR-0003](../20-decisions/ADR-0003-own-agent-loop-over-agent-sdk.md) · [ADR-0008](../20-decisions/ADR-0008-append-only-history-and-handoff.md)
+> 状态：Accepted（M0–M4；未实现的子项在文中标注）· 更新：2026-11-10 · 决策：[ADR-0003](../20-decisions/ADR-0003-own-agent-loop-over-agent-sdk.md) · [ADR-0008](../20-decisions/ADR-0008-append-only-history-and-handoff.md)
 
 ## 1. 会话种类
 
@@ -106,7 +106,7 @@ M1 实现的子集：`goal`、`context`、`tools`、`model`、`level`、`maxTurn
 
 - **工具**：默认是工具表中没有 `sideEffect`、没有 `endsTurn`、不是 `fork_*` 的全部工具；显式列出时可以包含有副作用的工具，但 `endsTurn` 工具（`idle`、`sleep_until`）和 `fork_*` 永远不给 Fork。
 - **等级**：默认取派生批的等级；只能更低（数值更大），且至少为 L1。
-- **上下文**：Fork 的系统前缀是 identity → Fork 运行时说明 → owner（所有 Fork 共用，可缓存）；首条 user 消息是 `<fork id level max_rounds>` 包裹的目标与上下文。Fork 看不到主会话的对话，也不接收事件（I-1）。
+- **上下文**：Fork 的系统前缀是 identity → Fork 运行时说明 → owner（所有 Fork 共用，可缓存）；首条 user 消息是 `<fork id level max_rounds now>` 包裹的目标与上下文；`now` 是派生时刻（守护进程时区），因为 Fork 没有 `<status>` 快照，这是它唯一的时间来源，运行中不更新。Fork 看不到主会话的对话，也不接收事件（I-1）。
 - **结果**：最后一条不含工具调用的 assistant 消息是结果，作为 `fork.completed` 事件回到主会话；失败为 `fork.failed`；取消不报告。
 
 ### 5.2 生命周期

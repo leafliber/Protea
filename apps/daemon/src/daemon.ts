@@ -354,7 +354,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   };
   const owner = new OwnerRegistry(ownerIdentities(config.owner.identities));
   if (!owner.hasAny()) log.warn('owner.identities is empty: no event can reach level 1');
-  const gateway = new EventGateway({ store, owner, log: log.child({ component: 'events' }), clock });
+  const gateway = new EventGateway({ store, owner, log: log.child({ component: 'events' }), clock, timezone: tz });
   const pushInternal = (input: InternalEventInput) => gateway.pushInternal(input);
   // Invariant I-7: no request carries a secret value, whatever path it took into the context.
   const redactedNames = new Set<string>();
@@ -658,6 +658,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     dispatcher,
     log: log.child({ component: 'forks' }),
     clock,
+    timezone: tz,
     settings: config.scheduler.forks,
     backoffMs: config.session.backoffMs,
     effortFor: (role) => effortOf(role),

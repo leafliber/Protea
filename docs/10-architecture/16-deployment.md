@@ -175,7 +175,7 @@ tini → protea-entrypoint
 - **地址白名单**：`control.allowCidrs` 限制能访问控制平面的地址（回环总是允许，`/hooks/*` 不受限）。经反向代理时守护进程看到的是代理的地址，白名单应设在代理上。
 - **监控**：Prometheus 抓 `/metrics`，用只读令牌（秘密 `PROTEA_READONLY_TOKEN`）作 Bearer；示例抓取配置与 Grafana 面板在 `docker/observability/`。
 - **资源**：最小 1 vCPU / 1 GB；MCP 服务器多时建议 2 GB。守护进程常驻内存约 130 MB，其中约 60 MB 是 Node 程序文件的映射，V8 堆约 35 MB（M6 长稳测试的负载下，见 [../40-plan/01-roadmap.md](../40-plan/01-roadmap.md) M6）；每个 Node 插件进程约 50 MB。
-- **时区**：`TZ` 环境变量；事件 `ts` 一律带时区偏移。
+- **时区**：`TZ` 环境变量；事件 `ts` 入库时一律写成该时区的本地时间加偏移。
 - **时钟**：VPS 时钟漂移会影响 cron 与 `sleep_until`；建议开启 NTP。
 
 ## 7. 升级

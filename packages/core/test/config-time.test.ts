@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { SecretStore, deepMerge, envOverlay, isoInZone, loadConfig, parseDateTime, tzOffsetMinutes } from '../src/index.js';
+import { SecretStore, deepMerge, envOverlay, isoInZone, loadConfig, parseDateTime, stampInZone, tzOffsetMinutes } from '../src/index.js';
 import { tmpDir } from './helpers.js';
 
 describe('config', () => {
@@ -74,5 +74,12 @@ describe('time zones', () => {
     expect(parseDateTime('2026-11-03T08:00:00Z', 'Asia/Shanghai')).toBe(Date.UTC(2026, 10, 3, 8));
     expect(parseDateTime('2026-11-03T08:00+02:00', 'UTC')).toBe(Date.UTC(2026, 10, 3, 6));
     expect(parseDateTime('tomorrow', 'UTC')).toBeNull();
+  });
+
+  it('rewrites a timestamp in the zone without moving the instant', () => {
+    expect(stampInZone('2026-11-03T01:02:03.456Z', 'Asia/Shanghai')).toBe('2026-11-03T09:02:03+08:00');
+    expect(stampInZone('2026-11-03T09:02:03+08:00', 'Asia/Shanghai')).toBe('2026-11-03T09:02:03+08:00');
+    expect(stampInZone('2026-11-02T20:02:03-05:00', 'Asia/Shanghai')).toBe('2026-11-03T09:02:03+08:00');
+    expect(stampInZone('tomorrow', 'Asia/Shanghai')).toBe('tomorrow');
   });
 });
