@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { ValidateFunction } from 'ajv';
 import {
+  CHAT_MARKDOWN,
   LEVEL_TRIGGERS,
   PLUGIN_API_VERSION,
   PLUGIN_KINDS,
@@ -56,6 +57,7 @@ const KNOWN_FIELDS = new Set([
   'configSchema',
   'envPrompt',
   'skills',
+  'chat',
   'healthcheck',
   'resources',
   'mcp',
@@ -147,6 +149,17 @@ export function loadManifest(dir: string, origin: LoadedManifest['origin']): Loa
   if (side !== undefined) {
     if (!isStringArray(side)) errors.push('sideEffectTools must be a list of names');
     else for (const t of side) if (!isStringArray(tools) || !tools.includes(t)) out.warnings.push(`sideEffectTools lists "${t}", which is not in tools`);
+  }
+  const chat = m['chat'];
+  if (chat !== undefined) {
+    const c = chat as Record<string, unknown>;
+    if (typeof chat !== 'object' || chat === null || Array.isArray(chat)) errors.push('chat must be an object');
+    else {
+      if (m['kind'] !== 'connector') errors.push('chat is only for plugins of kind connector');
+      if (c['displayName'] !== undefined && typeof c['displayName'] !== 'string') errors.push('chat.displayName must be a string');
+      if (c['markdown'] !== undefined && !(CHAT_MARKDOWN as readonly unknown[]).includes(c['markdown'])) errors.push(`chat.markdown must be one of ${CHAT_MARKDOWN.join(', ')}`);
+      if (c['maxChars'] !== undefined && (!Number.isInteger(c['maxChars']) || (c['maxChars'] as number) < 1)) errors.push('chat.maxChars must be a positive integer');
+    }
   }
   if (m['secrets'] !== undefined && (!isStringArray(m['secrets']) || !m['secrets'].every((s) => /^[A-Z][A-Z0-9_]{0,63}$/.test(s)))) {
     errors.push('secrets must be a list of UPPER_CASE names');

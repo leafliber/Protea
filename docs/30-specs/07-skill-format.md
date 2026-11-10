@@ -53,7 +53,7 @@ scripts/collect.py (3.1 KB)
 
 Read these with skill_read {"name": "weekly-report", "path": "<file>"}.
 
-Suggested tools: mcp__github__*, tg_send
+Suggested tools: mcp__github__*, chat_send
 ```
 
 `## Files` 只在有其他文件时出现（按路径排序，跳过点文件，最多 100 个）；`Suggested tools` 只在声明了 `allowed-tools` 时出现。

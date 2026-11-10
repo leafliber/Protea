@@ -32,7 +32,7 @@ const request: ProviderRequest = {
     { id: 'runtime', text: 'Runtime notes.' },
   ],
   messages: [{ role: 'user', content: [{ type: 'text', text: '<events/>' }] }],
-  tools: [{ name: 'con_send', description: 'send', inputSchema: { type: 'object', properties: { text: { type: 'string' } } } }],
+  tools: [{ name: 'chat_send', description: 'send', inputSchema: { type: 'object', properties: { text: { type: 'string' } } } }],
 };
 
 describe('AnthropicProvider.buildParams', () => {
@@ -46,7 +46,7 @@ describe('AnthropicProvider.buildParams', () => {
     expect(p.cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
     expect(p.thinking).toEqual({ type: 'adaptive', display: 'omitted', block_binding: { prefix_mismatch_behavior: 'drop_block' } });
     expect(p.output_config).toEqual({ effort: 'medium' });
-    expect(p.tools?.[0]).toMatchObject({ name: 'con_send', eager_input_streaming: true });
+    expect(p.tools?.[0]).toMatchObject({ name: 'chat_send', eager_input_streaming: true });
     expect(p.fallbacks).toBe('default');
     expect(p.betas).toEqual(['thinking-binding-controls-2026-08-01', 'server-side-fallback-2026-07-01']);
     expect(p).not.toHaveProperty('tool_choice');
@@ -109,7 +109,7 @@ describe('AnthropicProvider.generate against a local Messages API', () => {
             ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } }],
             ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig123' } }],
             ['content_block_stop', { type: 'content_block_stop', index: 0 }],
-            ['content_block_start', { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'toolu_1', name: 'con_send', input: {} } }],
+            ['content_block_start', { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'toolu_1', name: 'chat_send', input: {} } }],
             ['content_block_delta', { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"text":"你' } }],
             ['content_block_delta', { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '好"}' } }],
             ['content_block_stop', { type: 'content_block_stop', index: 1 }],
@@ -130,7 +130,7 @@ describe('AnthropicProvider.generate against a local Messages API', () => {
     const res = await p.generate(request, { signal: new AbortController().signal });
     expect(res.stopReason).toBe('tool_use');
     expect(res.content[0]).toMatchObject({ type: 'thinking', signature: 'sig123' });
-    expect(res.content[1]).toMatchObject({ type: 'tool_use', id: 'toolu_1', name: 'con_send', input: { text: '你好' } });
+    expect(res.content[1]).toMatchObject({ type: 'tool_use', id: 'toolu_1', name: 'chat_send', input: { text: '你好' } });
     expect(res.usage).toEqual({ inputTokens: 12, outputTokens: 40, cacheReadTokens: 3000, cacheWriteTokens: 200 });
     // 12*4 + 40*20 + 3000*0.2 + 200*4*2, per million tokens
     expect(res.costUsd).toBeCloseTo((12 * 4 + 40 * 20 + 3000 * 0.2 + 200 * 8) / 1e6, 10);

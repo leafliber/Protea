@@ -2272,3 +2272,37 @@ ul.plain {
     flex: none;
   }
 }
+
+/* Run stream: model output and tool calls. */
+.tl-model-body {
+  flex: 1 1 100%;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tl-model-thinking .tl-model-body {
+  color: var(--muted);
+}
+.tl-model-body pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 6px 0 0;
+}
+.tl-model,
+.tl-tool {
+  flex-wrap: wrap;
+}
+.trace-steps {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.trace-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}

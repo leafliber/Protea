@@ -66,7 +66,7 @@ describe('crash recovery (real process, SIGKILL)', () => {
     await until(async () => (await fetch(`${url}/healthz`)).ok);
     const token = fs.readFileSync(path.join(dataDir, 'secrets', 'PROTEA_ADMIN_TOKEN'), 'utf8').trim();
     const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
-    const pushed = (await (await fetch(`${url}/api/events`, { method: 'POST', headers, body: JSON.stringify({ text: 'survive the crash' }) })).json()) as {
+    const pushed = (await (await fetch(`${url}/api/chat/messages`, { method: 'POST', headers, body: JSON.stringify({ text: 'survive the crash' }) })).json()) as {
       cursor: number;
     };
     const transcript = path.join(dataDir, 'sessions', 'main.0001.jsonl');

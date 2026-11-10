@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ScriptedProvider, reply, sleep, textReply, toolCall, type ProviderRequest } from '@protea/core';
 import type { EventInput, SchedulerAction } from '@protea/protocol';
-import { ConsolePlugin } from '@protea/plugin-console';
 import { CronPlugin } from '@protea/plugin-cron';
 import { createFilewatchPlugin } from '../../../plugins/filewatch/src/plugin.js';
 import { createImapPlugin } from '../../../plugins/imap/src/plugin.js';
@@ -125,7 +124,7 @@ describe('M6 penetration cases', () => {
 
 describe('M6 default policy review', () => {
   /** Side-effect tools that are allowed by default: messages to the owner themself. Everything else with effects asks. */
-  const OWNER_FACING = new Set(['con_send', 'tg_send', 'tg_react']);
+  const OWNER_FACING = new Set(['chat_send', 'tg_react']);
 
   it('every side-effect tool of a built-in plugin asks by default, except messages to the owner', () => {
     const defs: Array<[string, Array<{ name: string; flags?: { sideEffect?: boolean } }>]> = [
@@ -147,8 +146,8 @@ describe('M6 default policy review', () => {
         if (!OWNER_FACING.has(t.name)) expect(manifest.sideEffectTools ?? [], `${t.name} must ask by default`).toContain(t.name);
       }
     }
-    expect(reviewed.sort()).toEqual(['sh_run', 'tg_react', 'tg_send', 'tg_send_chat']);
-    for (const p of [new ConsolePlugin(), new CronPlugin()]) {
+    expect(reviewed.sort()).toEqual(['sh_run', 'tg_react', 'tg_send_chat']);
+    for (const p of [new CronPlugin()]) {
       for (const t of p.tools()) if (t.flags?.sideEffect) expect(OWNER_FACING.has(t.name) || ((p as { sideEffectTools?: readonly string[] }).sideEffectTools ?? []).includes(t.name), t.name).toBe(true);
     }
   });

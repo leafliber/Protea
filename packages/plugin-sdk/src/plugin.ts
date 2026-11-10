@@ -5,6 +5,8 @@ import {
   RPC_ERRORS,
   RpcError,
   type ApprovalRequestParams,
+  type ChatSendParams,
+  type ChatSendResult,
   type ConfigChangedParams,
   type EventInput,
   type HealthResult,
@@ -83,6 +85,8 @@ export interface PluginDefinition<C = Record<string, unknown>> {
   shutdownVerify?(host: Host<C>): Record<string, unknown> | Promise<Record<string, unknown>>;
   /** Deliver an approval request to the owner. Declaring it advertises the `approvals` capability. */
   onApprovalRequest?(host: Host<C>, req: ApprovalRequestParams): Promise<{ delivered: boolean }> | { delivered: boolean };
+  /** Makes the plugin a chat platform (with the manifest block `chat`): `chat_send` reaches the owner through it. */
+  chat?: { send(host: Host<C>, req: ChatSendParams): Promise<ChatSendResult> | ChatSendResult };
   /** Webhook names this plugin serves under `/hooks/<name>`, decided from the initial config. */
   hooks?(config: C): string[];
   onHttpRequest?(host: Host<C>, req: HttpRequestParams): Promise<HttpResponse> | HttpResponse;
@@ -186,6 +190,7 @@ export function servePlugin<C>(peer: RpcPeer, def: PluginDefinition<C>, opts: Se
           runPhase: def.onRunPhase !== undefined,
           shutdownVerify: def.shutdownVerify !== undefined,
           ...(def.onApprovalRequest ? { approvals: true } : {}),
+          ...(def.chat ? { chat: true } : {}),
           ...(hooks.length > 0 ? { hooks } : {}),
           ...def.capabilities,
         },
@@ -226,6 +231,15 @@ export function servePlugin<C>(peer: RpcPeer, def: PluginDefinition<C>, opts: Se
         return { text: err instanceof Error ? err.message : String(err), failed: true } satisfies ToolCallResult;
       } finally {
         calls.delete(p.callId);
+      }
+    })
+    .handle(HOST_TO_PLUGIN.chatSend, async (params): Promise<ChatSendResult> => {
+      needInit();
+      if (!def.chat) throw new RpcError(RPC_ERRORS.MethodNotFound, 'this plugin is not a chat platform');
+      try {
+        return await def.chat.send(host, params as ChatSendParams);
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
       }
     })
     .handle(HOST_TO_PLUGIN.toolsCancel, (params) => {

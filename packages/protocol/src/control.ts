@@ -1,7 +1,8 @@
 /** Control API request/response shapes (docs/30-specs/05-control-api.md). */
 import type { EventEnvelope, EventState, Level, TerminalOutcome, Trigger } from './events.js';
 import type { PluginState } from './plugin.js';
-import type { BatchEndReason, BatchReason, CancelKind, ForkState, ModelRole, RunPhase } from './session.js';
+import type { ChatMarkdown } from './plugin.js';
+import type { BatchEndReason, BatchReason, CancelKind, ContentBlock, Effort, ForkState, ModelRole, RunPhase, TranscriptMessage } from './session.js';
 
 /** M5: who a control API request acts as. `readonly` may only read (and never memory, persona or secrets). */
 export type ControlRole = 'admin' | 'readonly';
@@ -21,14 +22,31 @@ export interface PushEventResponse {
   warnings: string[];
 }
 
+/** POST /api/chat/messages: the owner writes in the web chat. */
+export interface ChatMessageRequest {
+  text: string;
+  /** `interrupt` stops what is running and handles this first. */
+  trigger?: 'flush' | 'interrupt';
+}
+
+/** A chat platform that is running (`chat_send` can reach it). */
+export interface ChatPlatformInfo {
+  id: string;
+  displayName: string;
+  markdown: ChatMarkdown;
+  maxChars?: number;
+}
+
 /**
- * One line of the console conversation (GET /api/chat): an operator message (a console event),
- * an assistant reply (`con_send`) or another console notice (approval requests).
+ * One line of a conversation (GET /api/chat): the owner's message (a `chat.message` event),
+ * an assistant reply (`chat_send`) or a notice (approval requests).
  */
 export interface ChatItem {
   /** `e<cursor>` for a message, `o<id>` for a reply or notice. */
   key: string;
   kind: 'owner' | 'reply' | 'notice';
+  /** Chat platform it belongs to (`webchat`, `telegram`, …). */
+  platform: string;
   at: string;
   text: string;
   /** owner: the event. */
@@ -36,7 +54,7 @@ export interface ChatItem {
   state?: EventState;
   /** owner: who sent it (`console:<user>`, `api:admin`). */
   sender?: string;
-  /** reply / notice: the output channel (`console`, `approvals`). */
+  /** reply / notice: the output channel (`chat`, `approvals`; `console` on replies from before the split). */
   channel?: string;
   batchId?: string;
 }
@@ -48,7 +66,7 @@ export interface ChatBatch {
   endedAt: string | null;
   /** Sources of the events it delivered (`console`, `cron`, …). */
   sources: string[];
-  /** It sent at least one console reply. */
+  /** It sent at least one chat reply. */
   replied: boolean;
   /** model_error: what failed. */
   error?: string;
@@ -242,6 +260,8 @@ export interface StatusResponse {
   /** Non-terminal forks first, then the most recently ended ones. */
   forks: ForkInfo[];
   budget: BudgetStatus;
+  /** Chat platforms that are running, and where the owner last wrote. */
+  chat: { platforms: ChatPlatformInfo[]; last?: string };
 }
 
 export interface ForkInfo {
@@ -302,6 +322,96 @@ export interface BatchStartedData {
   cursors: number[];
 }
 
+/** Sizes of what one model request carries (`model.request`). */
+export interface ContextSummary {
+  segments: Array<{ id: string; tokens: number }>;
+  systemTokens: number;
+  toolTokens: number;
+  messageTokens: number;
+  estimatedTokens: number;
+  tools: number;
+  deferredTools: number;
+  messages: number;
+  /** The cached prefix changed since the previous request. */
+  prefixChanged: boolean;
+}
+
+export interface ModelRequestTrace {
+  sessionId: string;
+  batchId: string;
+  attempt: number;
+  round?: number;
+  role?: ModelRole;
+  model?: string;
+  context?: ContextSummary;
+}
+
+/** Part of a reply as it streams; coalesced, not stored. */
+export interface ModelDeltaTrace {
+  sessionId: string;
+  batchId: string;
+  round?: number;
+  kind: 'text' | 'thinking';
+  text: string;
+}
+
+/** A finished model reply. Thinking carries its summary text only, never the signature. */
+export interface ModelResponseTrace {
+  sessionId: string;
+  batchId: string;
+  round?: number;
+  at: string;
+  model: string;
+  stopReason: string;
+  content: ContentBlock[];
+  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
+}
+
+/** One tool call, once when it starts and once when it ends (also when it was refused). */
+export type ToolCallTrace = { sessionId: string; batchId: string; callId: string; name: string; at: string } & (
+  | { phase: 'start'; input: unknown }
+  | { phase: 'end'; ms: number; isError: boolean; result: string; truncated: boolean }
+);
+
+export type TraceMessage =
+  | { topic: 'model.request'; data: ModelRequestTrace }
+  | { topic: 'model.delta'; data: ModelDeltaTrace }
+  | { topic: 'model.response'; data: ModelResponseTrace }
+  | { topic: 'tool.call'; data: ToolCallTrace };
+
+/** One step of a batch, rebuilt from its transcript and outputs (GET /api/batches/:id/trace). */
+export type BatchTraceStep =
+  | { kind: 'events'; at: string; cursors: number[] }
+  | { kind: 'model'; at: string; round: number; content: ContentBlock[]; model?: string; stopReason?: string; usage?: ModelResponseTrace['usage'] }
+  | { kind: 'tool_result'; at: string; callId: string; name: string; text: string; isError: boolean }
+  | { kind: 'output'; at: string; plugin: string; channel?: string; text: string }
+  | { kind: 'mark'; at: string; mark: string; detail: Record<string, unknown> };
+
+export interface BatchTraceResponse {
+  batch: BatchInfo;
+  events: EventEnvelope[];
+  steps: BatchTraceStep[];
+}
+
+/** GET /api/sessions/:id/context: what the next model request of this session would carry. */
+export interface SessionContextResponse {
+  sessionId: string;
+  role: ModelRole;
+  effort: Effort;
+  model: string;
+  system: Array<{ id: string; text: string; tokens: number }>;
+  tools: Array<{ name: string; description: string; owner?: string; tokens: number; deferred: boolean }>;
+  /** A page of the merged messages, oldest first. */
+  messages: TranscriptMessage[];
+  from: number;
+  totalMessages: number;
+  totals: { systemTokens: number; toolTokens: number; messageTokens: number; estimatedTokens: number };
+  /** main: where a handoff starts. */
+  limits?: { softTokens: number; hardTokens: number };
+  /** Share of the prompt read from the cache on the last call of this run. */
+  cacheHitRatio?: number | null;
+}
+
 export type StreamMessage =
   | { topic: 'event'; data: EventEnvelope }
   | { topic: 'settled'; data: { cursors: number[]; outcome: TerminalOutcome; batchId?: string } }
@@ -350,7 +460,7 @@ export type WsExtraMessage =
   | { topic: 'log'; data: LogRecord }
   | { topic: 'error'; data: { message: string } };
 
-export type WsServerMessage = StreamMessage | WsExtraMessage;
+export type WsServerMessage = StreamMessage | TraceMessage | WsExtraMessage;
 
 /**
  * WebSocket `/ws` subscription groups (docs/30-specs/05-control-api.md): each covers some
@@ -364,6 +474,8 @@ export const WS_TOPICS = {
   changes: ['fork', 'plugin', 'approval', 'mcp', 'skills', 'handoff', 'persona'],
   usage: ['usage'],
   logs: ['log'],
+  /** The run stream: heavy, so only pages that show it subscribe. */
+  trace: ['model.request', 'model.delta', 'model.response', 'tool.call'],
 } as const satisfies Record<string, ReadonlyArray<WsServerMessage['topic']>>;
 export type WsTopic = keyof typeof WS_TOPICS;
 

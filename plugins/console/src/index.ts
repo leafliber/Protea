@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
-import { isoInZone, type InprocPlugin, type PluginContext, type PushResult, type ToolSpec } from '@protea/core';
-import type { ApprovalRequestParams, Level, Trigger } from '@protea/protocol';
+import { isoInZone, type InprocPlugin, type PluginContext, type PushResult } from '@protea/core';
+import type { Level, Trigger } from '@protea/protocol';
 
 export interface ConsoleMessageOptions {
   senderKey: string;
@@ -10,12 +10,13 @@ export interface ConsoleMessageOptions {
 }
 
 /**
- * The operator's channel: input comes from the control API (POST /api/events),
- * output goes to stream subscribers (CLI, web console) via `con_send`.
+ * Operator injection (POST /api/events, the run stream's input box, `protea events push`): an
+ * event at any allowed level and trigger, for testing and operations. It is not a conversation:
+ * nothing here reaches the chat, and the model's answer is its text, shown on the run stream.
  */
 export class ConsolePlugin implements InprocPlugin {
   readonly id = 'console';
-  readonly kind = 'connector' as const;
+  readonly kind = 'source' as const;
   readonly levelCap = 1 as const;
   readonly envPromptFile = fileURLToPath(new URL('../ENV_PROMPT.md', import.meta.url));
   private ctx: PluginContext | null = null;
@@ -42,39 +43,7 @@ export class ConsolePlugin implements InprocPlugin {
     });
   }
 
-  tools(): ToolSpec<never>[] {
-    const send: ToolSpec<{ text: string }> = {
-      name: 'con_send',
-      description: 'Send a message to the console, where the owner reads it.',
-      inputSchema: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['text'],
-        properties: { text: { type: 'string', minLength: 1, maxLength: 20_000 } },
-      },
-      flags: { sideEffect: true, barrierAfter: true },
-      handler: (input, call) => {
-        const ctx = this.ctx;
-        if (!ctx) return { text: 'console is not running', failed: true };
-        ctx.emitOutput({ channel: 'console', text: input.text, batchId: call.batchId, sessionId: call.sessionId });
-        return `sent to the console (${input.text.length} characters)`;
-      },
-    };
-    return [send as unknown as ToolSpec<never>];
-  }
-
   envPromptVars(): Record<string, unknown> {
     return {};
-  }
-
-  /** Approval requests are shown to the operator; they decide with `protea approvals approve|deny <id>`. */
-  onApprovalRequest(req: ApprovalRequestParams): { delivered: boolean } {
-    const ctx = this.ctx;
-    if (!ctx) return { delivered: false };
-    ctx.emitOutput({
-      channel: 'approvals',
-      text: `Approval ${req.id} requested: ${req.summary}${req.reason ? ` (${req.reason})` : ''}. Decide with: protea approvals approve ${req.id} | protea approvals deny ${req.id} (expires ${req.expiresAt}).`,
-    });
-    return { delivered: true };
   }
 }

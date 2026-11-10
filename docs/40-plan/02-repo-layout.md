@@ -51,7 +51,8 @@ Protea/
 │   │   └── test/                单元、组件、属性测试与测试夹具（含可编排的 MCP 测试服务器与假 OAuth 服务器）
 │   └── control/                 @protea/control：Hono HTTP API（app.ts、ops.ts）、鉴权、账号、初始化与会话 cookie（auth.ts）、供应商（providers.ts）、地址白名单（allow.ts）、SSE/WS 共用的总线投影（stream.ts）、WebSocket（ws.ts）、控制台托管（static.ts）
 ├── plugins/
-│   ├── console/                 进程内连接器：控制台输入、con_send 输出、审批请求显示
+│   ├── console/                 进程内来源：运维注入（没有回复工具）
+│   ├── webchat/                 进程内对话平台：网页对话窗口与 protea chat、审批通知
 │   ├── cron/                    进程内来源：日程与 sleep_until
 │   ├── telegram/                进程外连接器（protea.plugin.json + src/ + test/，含模拟 Bot API）
 │   ├── webhook/                 进程外来源：/hooks/<name>

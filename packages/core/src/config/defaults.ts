@@ -18,7 +18,7 @@ export function defaultConfig(): ProteaConfig {
       publicMetrics: false,
       allowCidrs: [],
     },
-    owner: { identities: [{ plugin: 'console', senderKey: '*' }] },
+    owner: { identities: [{ plugin: 'console', senderKey: '*' }, { plugin: 'webchat', senderKey: '*' }] },
     scheduler: {
       levels: {
         0: { debounceMs: 0, maxWaitMs: 0 },
@@ -68,6 +68,7 @@ export const STARTER_CONFIG_YAML = `# Protea configuration. Every key is optiona
 # owner:
 #   identities:
 #     - { plugin: console, senderKey: "*" }
+#     - { plugin: webchat, senderKey: "*" }
 
 # budget:
 #   dailyUsd: 5              # pools per level (L1 60 %, L2 20 %, L3 15 %, L4 5 %) over the rolling 24 h;

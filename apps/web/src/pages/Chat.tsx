@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import type { ApprovalInfo, BatchEndReason, ChatBatch, ChatHistoryResponse, ChatItem, PushEventResponse, RunPhase, StatusResponse, Trigger, WhoAmIResponse } from '@protea/protocol';
+import type { ApprovalInfo, BatchEndReason, ChatBatch, ChatHistoryResponse, ChatItem, ChatMessageRequest, PushEventResponse, RunPhase, StatusResponse, WhoAmIResponse } from '@protea/protocol';
 import { get, post, qs, useApi } from '../api';
 import { Rich } from '../components/Rich';
 import { UserMenu } from '../components/UserMenu';
@@ -19,6 +19,9 @@ const PHASE_TEXT: Partial<Record<RunPhase, string>> = {
   backoff: '模型暂时不可用，正在重试…',
   handoff: '正在整理较早的对话…',
 };
+
+/** This window is the web chat; the other platforms are their own conversations. */
+const PLATFORM = 'webchat';
 
 const SOURCE_LABEL: Record<string, string> = { cron: '定时提醒', core: '后台任务', telegram: 'Telegram', rss: '订阅更新', imap: '新邮件', webhook: 'Webhook', filewatch: '文件变化', shell: '命令' };
 
@@ -183,7 +186,7 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
   };
 
   const loadLatest = (first: boolean) =>
-    get<ChatHistoryResponse>(`/api/chat${qs({ limit: PAGE })}`).then(
+    get<ChatHistoryResponse>(`/api/chat${qs({ limit: PAGE, platform: PLATFORM })}`).then(
       (r) => {
         setItems((old) => merge(old, r.items));
         addBatches(r.batches);
@@ -220,9 +223,9 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
     switch (m.topic) {
       case 'event': {
         const e = m.data;
-        if (e.source !== 'console' || e.type !== 'console.message') return;
+        if (e.source !== PLATFORM || e.type !== 'chat.message') return;
         setItems((old) =>
-          merge(old, [{ key: `e${e.cursor}`, kind: 'owner', at: e.receivedAt, text: e.text, cursor: e.cursor, state: e.state, ...(e.senderKey ? { sender: e.senderKey } : {}), ...(e.batchId ? { batchId: e.batchId } : {}) }]),
+          merge(old, [{ key: `e${e.cursor}`, kind: 'owner', platform: PLATFORM, at: e.receivedAt, text: e.text, cursor: e.cursor, state: e.state, ...(e.senderKey ? { sender: e.senderKey } : {}), ...(e.batchId ? { batchId: e.batchId } : {}) }]),
         );
         break;
       }
@@ -237,12 +240,12 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
       }
       case 'output': {
         const o = m.data;
-        if (o.plugin !== 'console') return;
+        if (o.plugin !== PLATFORM) return;
         const key = o.id !== undefined ? `o${o.id}` : `o${Date.parse(o.at)}.${Math.random().toString(36).slice(2, 6)}`;
         setItems((old) =>
-          merge(old, [{ key, kind: !o.channel || o.channel === 'console' ? 'reply' : 'notice', at: o.at, text: o.text, ...(o.channel ? { channel: o.channel } : {}), ...(o.batchId ? { batchId: o.batchId } : {}) }]),
+          merge(old, [{ key, kind: o.channel === 'chat' ? 'reply' : 'notice', platform: PLATFORM, at: o.at, text: o.text, ...(o.channel ? { channel: o.channel } : {}), ...(o.batchId ? { batchId: o.batchId } : {}) }]),
         );
-        if (o.batchId && (!o.channel || o.channel === 'console')) {
+        if (o.batchId && o.channel === 'chat') {
           const id = o.batchId;
           setBatches((old) => ({ ...old, [id]: { ...(old[id] ?? { id, endReason: null, endedAt: null, sources: [] }), replied: true } }));
           // A reply from a batch we have not seen (a reminder): learn what triggered it.
@@ -263,7 +266,7 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
     if (!before || olderBusy) return;
     setOlderBusy(true);
     try {
-      const r = await get<ChatHistoryResponse>(`/api/chat${qs({ limit: PAGE, before })}`);
+      const r = await get<ChatHistoryResponse>(`/api/chat${qs({ limit: PAGE, before, platform: PLATFORM })}`);
       prepend.current = scrollRef.current?.scrollHeight ?? null;
       setItems((old) => merge(old, r.items));
       addBatches(r.batches);
@@ -307,15 +310,15 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
     return new Set(last.values());
   }, [items]);
 
-  const send = async (text: string, trigger?: Trigger): Promise<void> => {
-    const r = await post<PushEventResponse>('/api/events', { text, ...(trigger ? { trigger } : {}) });
+  const send = async (text: string, trigger?: ChatMessageRequest['trigger']): Promise<void> => {
+    const r = await post<PushEventResponse>('/api/chat/messages', { text, ...(trigger ? { trigger } : {}) });
     stick.current = true;
     // The live stream often wins the race (a fast reply arrives before this response): never overwrite it.
     const key = `e${r.cursor}`;
     setItems((old) =>
       old.some((i) => i.key === key)
         ? old
-        : merge(old, [{ key, kind: 'owner', at: new Date().toISOString(), text, cursor: r.cursor, state: r.effectiveTrigger === 'store' ? 'archived' : 'pending', ...(username ? { sender: `console:${username}` } : {}) }]),
+        : merge(old, [{ key, kind: 'owner', platform: PLATFORM, at: new Date().toISOString(), text, cursor: r.cursor, state: r.effectiveTrigger === 'store' ? 'archived' : 'pending', ...(username ? { sender: `console:${username}` } : {}) }]),
     );
   };
 
@@ -348,7 +351,7 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
       return;
     }
     if (i.kind === 'reply') {
-      const cause = batch && batch.sources.length > 0 && !batch.sources.includes('console') ? batch.sources.map((s) => SOURCE_LABEL[s] ?? s).join('、') : null;
+      const cause = batch && batch.sources.length > 0 && !batch.sources.includes(PLATFORM) && !batch.sources.includes('console') ? batch.sources.map((s) => SOURCE_LABEL[s] ?? s).join('、') : null;
       rows.push(
         <div key={i.key} className={cx('cm', 'cm-in', first && 'cm-first', last && 'cm-last')}>
           <div className="cm-avatar">{first && <img src="./favicon.svg" alt="" width="26" height="26" />}</div>
@@ -393,6 +396,11 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
               {oc.settings && canWrite && (
                 <a className="cm-link" href={consoleHref('providers')}>
                   检查模型设置
+                </a>
+              )}
+              {canWrite && i.batchId && batch?.endReason && !batch.replied && (
+                <a className="cm-link" href={consoleHref('events', { batch: i.batchId })}>
+                  在控制台查看这一批
                 </a>
               )}
             </div>
@@ -514,7 +522,7 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
 
 const coarse = typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches;
 
-function Composer({ busy, draft, onDraftUsed, onSend }: { busy: boolean; draft: string; onDraftUsed: () => void; onSend: (text: string, trigger?: Trigger) => Promise<void> }) {
+function Composer({ busy, draft, onDraftUsed, onSend }: { busy: boolean; draft: string; onDraftUsed: () => void; onSend: (text: string, trigger?: ChatMessageRequest['trigger']) => Promise<void> }) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -534,7 +542,7 @@ function Composer({ busy, draft, onDraftUsed, onSend }: { busy: boolean; draft: 
     el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
   }, [text]);
 
-  const submit = async (trigger?: Trigger) => {
+  const submit = async (trigger?: ChatMessageRequest['trigger']) => {
     const body = text.trim();
     if (!body || sending) return;
     setSending(true);

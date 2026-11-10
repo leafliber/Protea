@@ -126,7 +126,14 @@ export class ToolRegistry {
     const v = this.validators.get(name);
     if (!v) return { ok: false, errors: [`unknown tool ${name}`] };
     if (v(input)) return { ok: true };
-    return { ok: false, errors: (v.errors ?? []).map((e) => `${e.instancePath || '/'} ${e.message ?? 'invalid'}`) };
+    return {
+      ok: false,
+      errors: (v.errors ?? []).map((e) => {
+        // Name the choices: the model can correct itself, and a value that just went away is explained.
+        const choices = e.keyword === 'enum' ? `: ${(e.params as { allowedValues: unknown[] }).allowedValues.join(', ')}` : '';
+        return `${e.instancePath || '/'} ${e.message ?? 'invalid'}${choices}`;
+      }),
+    };
   }
 
   /** Changes whenever the tool set changes; lets callers detect cache-affecting edits. */

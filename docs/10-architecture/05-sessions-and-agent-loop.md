@@ -71,7 +71,7 @@ runTurn(session):
 要点：
 
 - **并行工具**：同一条 assistant 消息中的多个 `tool_use` 并行执行，所有 `tool_result` 回到**一条** user 消息（否则模型会学会不再并行）。
-- **`barrierAfter`**：声明了该标志的工具返回前，不开始后续工具（用于有顺序依赖的出口，如先 `tg_send` 再 `tg_pin`）。
+- **`barrierAfter`**：声明了该标志的工具返回前，不开始后续工具（用于有顺序依赖的出口，如先 `chat_send` 再 `tg_pin`）。
 - **`interruptible`**：工具处理器收到 `AbortSignal`；取消后必须返回部分回执 `{ text, partial: true }`（宽限 5 s，超时记为失败回执）。未声明的工具运行到完成（interrupt 会等待它们）；interrupt 之后尚未开始的调用（例如在 `barrierAfter` 之后）回执 `not run: the turn was interrupted`。实现上 `ToolDispatcher.runAll` 区分硬取消 `signal`（停机，全部立即取消）与软取消 `interrupt`。
 - **状态检查**：只执行 `status: completed` 的工具调用；流式中途被取消的 `tool_use` 不执行。
 - **失败回执**：处理器抛错或返回非法形状 → `{ failed: true, text: <错误摘要> }`，`is_error: true` 回传模型；绝不丢弃。

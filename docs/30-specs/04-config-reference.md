@@ -23,7 +23,7 @@ control:
                                        # 回环地址总是允许；/hooks/* 不受限（由插件校验签名）；经反向代理时看到的是代理的地址
 
 owner:
-  identities:                          # 只有匹配的 (plugin, senderKey) 能产生 L1 事件
+  identities:                          # 只有匹配的 (plugin, senderKey) 能产生 L1 事件；默认 console 与 webchat 的所有发送者；只写了 console 时 webchat 按相同发送者补上
     - { plugin: console, senderKey: "*" }
 
 scheduler:

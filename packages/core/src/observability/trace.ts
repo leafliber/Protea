@@ -1,6 +1,6 @@
 import type { Bus } from '../bus.js';
 import type { ModelRole } from '@protea/protocol';
-import type { Provider, ProviderHealth, ProviderRequest, ProviderResponse } from '../providers/types.js';
+import type { GenerateOptions, Provider, ProviderHealth, ProviderRequest, ProviderResponse } from '../providers/types.js';
 import { errorMessage } from '../util/errors.js';
 import type { Logger } from './logger.js';
 
@@ -56,7 +56,7 @@ export class TracingProvider implements Provider {
     return this.inner.countTokens ? this.inner.countTokens(req, opts) : Promise.resolve(undefined);
   }
 
-  async generate(req: ProviderRequest, opts: { signal: AbortSignal; onText?: (delta: string) => void }): Promise<ProviderResponse> {
+  async generate(req: ProviderRequest, opts: GenerateOptions): Promise<ProviderResponse> {
     const t0 = Date.now();
     const base = { role: req.role, messages: req.messages.length, tools: req.tools?.length ?? 0 };
     try {

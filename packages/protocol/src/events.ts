@@ -80,6 +80,9 @@ export interface EventEnvelope extends EventInput {
   batchId?: string;
 }
 
+/** The owner's message on a chat platform, whichever platform it came from (`source` is the platform id). */
+export const CHAT_MESSAGE_EVENT = 'chat.message';
+
 export const EVENT_INPUT_SCHEMA = {
   $id: 'https://protea.dev/schemas/event-input.json',
   type: 'object',

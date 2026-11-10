@@ -73,10 +73,10 @@ pnpm dev
 PROTEA_PROVIDERS__DEFAULT=echo pnpm dev
 ```
 
-另开一个终端与助理对话、观察事件流：
+另开一个终端与助理对话、观察运行过程：
 
 ```bash
-PROTEA_DATA_DIR=.dev-data pnpm protea events push "明天早上 8 点提醒我带伞"
+PROTEA_DATA_DIR=.dev-data pnpm protea chat "明天早上 8 点提醒我带伞"
 ```
 
 ```bash
@@ -86,7 +86,7 @@ PROTEA_DATA_DIR=.dev-data pnpm protea events tail
 让主人的消息打断正在进行的回合（`interrupt`），或查看后台 Fork：
 
 ```bash
-PROTEA_DATA_DIR=.dev-data pnpm protea events push "停下，先回答我" --trigger interrupt
+PROTEA_DATA_DIR=.dev-data pnpm protea chat "停下，先回答我" --interrupt
 ```
 
 ```bash

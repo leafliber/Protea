@@ -215,6 +215,7 @@ export function makeHarness(opts: HarnessOptions = {}) {
 
   const idleNow = (): boolean => !main.busy && !scheduler.isDue;
   return {
+    dispatcher,
     dir,
     db,
     bus,

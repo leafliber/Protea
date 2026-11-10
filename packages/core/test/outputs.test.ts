@@ -15,12 +15,12 @@ function setup() {
   const tick = (ms = 1000) => (now += ms);
   const say = (text: string, over: Partial<GatedEvent> = {}) =>
     store.append({
-      type: 'console.message',
+      type: 'chat.message',
       ts: at(),
       level: 1,
       trigger: 'flush',
       text,
-      source: 'console',
+      source: 'webchat',
       origin: 'external',
       effLevel: 1,
       effTrigger: 'flush',
@@ -31,19 +31,20 @@ function setup() {
 }
 
 describe('OutputLog chat history', () => {
-  it('merges console messages and replies by time, pages backwards, and leaves other sources out', () => {
+  it('merges messages and replies by time, pages backwards, and keeps platforms apart', () => {
     const { store, outputs, batches, at, tick, say } = setup();
     const m1 = say('first');
     batches.start({ id: 'b1', level: 1, reason: 'flush', sessionId: 'main', startedAt: at() });
     store.markDelivering([m1.cursor], 'b1');
     // Same millisecond as the message: the reply still sorts after it.
-    outputs.record({ at: at(), plugin: 'console', channel: 'console', text: 'reply one', batchId: 'b1', sessionId: 'main' });
+    outputs.record({ at: at(), plugin: 'webchat', channel: 'chat', text: 'reply one', batchId: 'b1', sessionId: 'main' });
     store.settle([m1.cursor], 'delivered', { batchId: 'b1', sessionId: 'main' });
     batches.end('b1', 'end_turn', at());
     tick();
-    say('from telegram', { source: 'telegram', type: 'telegram.message' });
-    outputs.record({ at: at(), plugin: 'telegram', text: 'not console' });
-    outputs.record({ at: at(), plugin: 'console', channel: 'approvals', text: 'Approval a1 requested' });
+    say('from telegram', { source: 'telegram' });
+    outputs.record({ at: at(), plugin: 'telegram', channel: 'chat', text: 'telegram reply' });
+    outputs.record({ at: at(), plugin: 'webchat', channel: 'approvals', text: 'Approval a1 requested' });
+    say('an injection', { source: 'console', type: 'console.message' });
     tick();
     const m2 = say('second');
 
@@ -57,7 +58,7 @@ describe('OutputLog chat history', () => {
     expect(all.items[0]).toMatchObject({ key: `e${m1.cursor}`, cursor: m1.cursor, state: 'delivered', sender: 'console:owner', batchId: 'b1' });
     expect(all.items[3]).toMatchObject({ key: `e${m2.cursor}`, state: 'pending' });
     expect(all.before).toBeNull();
-    expect(all.batches).toEqual([{ id: 'b1', endReason: 'end_turn', endedAt: expect.any(String), sources: ['console'], replied: true }]);
+    expect(all.batches).toEqual([{ id: 'b1', endReason: 'end_turn', endedAt: expect.any(String), sources: ['webchat'], replied: true }]);
 
     const p1 = outputs.chat({ limit: 2 });
     expect(p1.items.map((i) => i.text)).toEqual(['Approval a1 requested', 'second']);
@@ -66,6 +67,12 @@ describe('OutputLog chat history', () => {
     expect(p2.items.map((i) => i.text)).toEqual(['first', 'reply one']);
     expect(p2.before).toBeNull();
     expect(outputs.chat({ before: 'garbage' }).items).toHaveLength(4);
+    expect(outputs.chat({ platform: 'telegram' }).items.map((i) => [i.kind, i.text, i.platform])).toEqual([
+      ['owner', 'from telegram', 'telegram'],
+      ['reply', 'telegram reply', 'telegram'],
+    ]);
+    expect(outputs.chat({ platform: 'all' }).items).toHaveLength(6);
+    expect(outputs.lastChatPlatform()).toBeNull(); // no sender_role on these: nothing the owner said
   });
 
   it('explains a batch that failed and one that never replied', () => {
@@ -96,8 +103,8 @@ describe('OutputLog chat history', () => {
 
     const { batches: info } = outputs.chat();
     expect(info).toEqual([
-      { id: 'b9', endReason: 'model_error', endedAt: expect.any(String), sources: ['console'], replied: false, error: 'secret PROVIDER_X_API_KEY is not set' },
-      { id: 'b10', endReason: 'end_turn', endedAt: expect.any(String), sources: ['console'], replied: false },
+      { id: 'b9', endReason: 'model_error', endedAt: expect.any(String), sources: ['webchat'], replied: false, error: 'secret PROVIDER_X_API_KEY is not set' },
+      { id: 'b10', endReason: 'end_turn', endedAt: expect.any(String), sources: ['webchat'], replied: false },
     ]);
     expect(outputs.batches(['nope'])).toEqual([]);
   });
@@ -117,11 +124,31 @@ describe('OutputLog chat history', () => {
     fs.writeFileSync(path.join(dir, 'main.0002.jsonl'), line({ t: 'msg', role: 'assistant', at: '2026-11-02T09:00:00.000Z', content: [toolUse('t4', 'after a handoff')] }));
     fs.writeFileSync(path.join(dir, 'fork-x.jsonl'), line({ t: 'msg', role: 'assistant', at: '2026-11-02T09:00:00.000Z', content: [toolUse('t5', 'not main')] }));
     expect(outputs.backfillFromTranscripts(dir)).toBe(2);
+    outputs.ensureChatSplit();
     expect(outputs.chat().items.map((i) => [i.kind, i.text, i.batchId])).toEqual([
       ['reply', 'earlier reply', 'b_old'],
       ['reply', 'after a handoff', undefined],
     ]);
     expect(outputs.backfillFromTranscripts(dir)).toBe(0);
     expect(outputs.chat().items).toHaveLength(2);
+  });
+
+  it('keeps showing the old console chat as the web chat, but nothing injected after the split', () => {
+    const { outputs, at, tick, say, store } = setup();
+    say('old message', { source: 'console', type: 'console.message' });
+    outputs.record({ at: at(), plugin: 'console', channel: 'console', text: 'old reply', batchId: 'b0' });
+    expect(outputs.ensureChatSplit().outputId).toBe(1);
+    tick();
+    say('injected later', { source: 'console', type: 'console.message' });
+    tick();
+    say('new message');
+    expect(outputs.chat().items.map((i) => [i.kind, i.text, i.platform])).toEqual([
+      ['owner', 'old message', 'webchat'],
+      ['reply', 'old reply', 'webchat'],
+      ['owner', 'new message', 'webchat'],
+    ]);
+    expect(outputs.ensureChatSplit().cursor).toBe(1); // once only
+    expect(outputs.chat({ platform: 'telegram' }).items).toEqual([]);
+    expect(store.query({ type: 'console.message' })).toHaveLength(2); // the log itself is untouched
   });
 });

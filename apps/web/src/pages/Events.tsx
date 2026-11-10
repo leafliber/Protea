@@ -1,15 +1,51 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import type { EventEnvelope, PushEventResponse, SchedulerAction, WsServerMessage } from '@protea/protocol';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import type { ContextSummary, EventEnvelope, ModelRequestTrace, PushEventResponse, SchedulerAction, WsServerMessage } from '@protea/protocol';
 import { enc, get, post, qs, useAction } from '../api';
-import { Badge, Button, Drawer, Empty, ErrorText, Json, KV, LevelBadge, StateBadge, clock, dateTime, oneLine } from '../components/ui';
-import { useLive } from '../live';
+import { Badge, Button, Drawer, Empty, ErrorText, Json, KV, LevelBadge, StateBadge, clock, compact, dateTime, oneLine } from '../components/ui';
+import { BatchTrace } from '../components/Trace';
+import { useLive, useTraceStream } from '../live';
 import { go, useSession } from '../session';
 
 type Row =
   | { kind: 'event'; key: string; at: number; e: EventEnvelope }
   | { kind: 'action'; key: string; at: number; a: SchedulerAction }
-  | { kind: 'output'; key: string; at: number; plugin: string; text: string }
-  | { kind: 'batch'; key: string; at: number; text: string; tone: 'info' | 'muted' | 'warn' };
+  | { kind: 'output'; key: string; at: number; plugin: string; channel?: string; text: string }
+  | { kind: 'batch'; key: string; at: number; batchId: string; text: string; tone: 'info' | 'muted' | 'warn' }
+  | { kind: 'request'; key: string; at: number; t: ModelRequestTrace }
+  | { kind: 'model'; key: string; at: number; part: 'text' | 'thinking'; sessionId: string; text: string; live: boolean }
+  | { kind: 'tool'; key: string; at: number; sessionId: string; name: string; input: unknown; ms?: number; isError?: boolean; result?: string; truncated?: boolean };
+
+type Category = 'input' | 'events' | 'model' | 'tools' | 'outputs' | 'markers';
+const CATEGORIES: Array<[Category, string]> = [
+  ['input', '用户输入'],
+  ['events', '事件'],
+  ['model', '模型输出'],
+  ['tools', '工具'],
+  ['outputs', '发出的消息'],
+  ['markers', '批与调度'],
+];
+
+function categoryOf(r: Row): Category {
+  switch (r.kind) {
+    case 'event':
+      return r.e.type === 'chat.message' || r.e.type === 'console.message' ? 'input' : 'events';
+    case 'request':
+    case 'model':
+      return 'model';
+    case 'tool':
+      return 'tools';
+    case 'output':
+      return 'outputs';
+    default:
+      return 'markers';
+  }
+}
+
+function contextText(c: ContextSummary): string {
+  return `~${compact(c.estimatedTokens)} tokens：系统段 ${compact(c.systemTokens)}（${c.segments.length} 段）· 工具 ${compact(c.toolTokens)}（${c.tools} 个${c.deferredTools ? `，${c.deferredTools} 个按需` : ''}）· 消息 ${compact(c.messageTokens)}（${c.messages} 条）${c.prefixChanged ? ' · 前缀已变' : ''}`;
+}
+
+const sessionTag = (id: string): string => (id === 'main' ? '' : `${id} · `);
 
 const MAX_ROWS = 1500;
 let seq = 0;
@@ -68,7 +104,7 @@ function EventDetail({ cursor, onClose }: { cursor: number; onClose: () => void 
               ['等级 / 触发', <span key="l"><LevelBadge level={e.effLevel} /> {e.effTrigger}{e.level !== e.effLevel ? <span className="muted">（声明 L{e.level}）</span> : null}</span>],
               ['状态', <StateBadge key="s" state={e.state} />],
               ['收到', dateTime(e.receivedAt)],
-              ['批', e.batchId ? <a key="b" href={`#/console/sessions?tab=batches&batch=${enc(e.batchId)}`}>{e.batchId}</a> : '—'],
+              ['批', e.batchId ? <a key="b" href={`#/console/events?batch=${enc(e.batchId)}`}>{e.batchId}</a> : '—'],
               ['投递记录', data?.delivery ? `${data.delivery.outcome} · ${dateTime(data.delivery.at)}` : '—'],
             ]}
           />
@@ -118,7 +154,7 @@ function Composer() {
     <form className="composer" onSubmit={(e) => void submit(e)}>
       <textarea
         rows={2}
-        placeholder="给助理发一条消息（作为 console 来源的事件）… Enter 发送，Shift+Enter 换行"
+        placeholder="运维注入：作为 console 来源的事件发给助理，不进入对话… Enter 发送，Shift+Enter 换行"
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
@@ -165,7 +201,14 @@ export function Events({ params }: { params: URLSearchParams }) {
   const [source, setSource] = useState(params.get('source') ?? '');
   const [state, setState] = useState(params.get('state') ?? '');
   const [q, setQ] = useState('');
-  const [showMarkers, setShowMarkers] = useState(true);
+  const [hidden, setHidden] = useState<ReadonlySet<Category>>(new Set());
+  useTraceStream();
+  /** Per model round, the current attempt: a retried call streams into a new row. */
+  const attempts = useRef(new Map<string, number>());
+  const streamKey = (d: { sessionId: string; batchId: string; round?: number }, part: string): string => {
+    const id = `${d.sessionId}.${d.batchId}.${d.round ?? 0}`;
+    return `m${id}.${attempts.current.get(id) ?? 0}.${part}`;
+  };
   const [error, setError] = useState<string | null>(null);
   const selected = params.get('cursor');
 
@@ -195,7 +238,17 @@ export function Events({ params }: { params: URLSearchParams }) {
   const update = (cursors: number[], fn: (e: EventEnvelope) => EventEnvelope) =>
     setRows((old) => old.map((r) => (r.kind === 'event' && cursors.includes(r.e.cursor) ? { ...r, e: fn(r.e) } : r)));
 
-  useLive(['event', 'settled', 'promoted', 'scheduler', 'output', 'batch.started', 'batch.ended'], (m: WsServerMessage) => {
+  const upsertText = (key: string, part: 'text' | 'thinking', sessionId: string, fn: (old: string) => string, live: boolean, at: number) =>
+    setRows((old) => {
+      const i = old.findIndex((r) => r.key === key);
+      if (i < 0) return [{ kind: 'model', key, at, part, sessionId, text: fn(''), live } as Row, ...old].slice(0, MAX_ROWS);
+      const copy = [...old];
+      const row = copy[i] as Extract<Row, { kind: 'model' }>;
+      copy[i] = { ...row, text: fn(row.text), live };
+      return copy;
+    });
+
+  useLive(['event', 'settled', 'promoted', 'scheduler', 'output', 'batch.started', 'batch.ended', 'model.request', 'model.delta', 'model.response', 'tool.call'], (m: WsServerMessage) => {
     const now = Date.now();
     switch (m.topic) {
       case 'event':
@@ -213,14 +266,46 @@ export function Events({ params }: { params: URLSearchParams }) {
         add({ kind: 'action', key: `a${++seq}`, at: now, a: m.data });
         break;
       case 'output':
-        add({ kind: 'output', key: `o${++seq}`, at: Date.parse(m.data.at) || now, plugin: m.data.plugin, text: m.data.text });
+        add({ kind: 'output', key: `o${++seq}`, at: Date.parse(m.data.at) || now, plugin: m.data.plugin, text: m.data.text, ...(m.data.channel ? { channel: m.data.channel } : {}) });
         break;
+      case 'model.request': {
+        const id = `${m.data.sessionId}.${m.data.batchId}.${m.data.round ?? 0}`;
+        attempts.current.set(id, m.data.attempt);
+        add({ kind: 'request', key: `r${++seq}`, at: now, t: m.data });
+        break;
+      }
+      case 'model.delta': {
+        const d = m.data;
+        upsertText(streamKey(d, d.kind), d.kind, d.sessionId, (old) => old + d.text, true, now);
+        break;
+      }
+      case 'model.response': {
+        const d = m.data;
+        for (const part of ['thinking', 'text'] as const) {
+          const text = d.content
+            .filter((b) => b.type === part)
+            .map((b) => String(b[part === 'text' ? 'text' : 'thinking'] ?? ''))
+            .join('\n');
+          if (text) upsertText(streamKey(d, part), part, d.sessionId, () => text, false, Date.parse(d.at) || now);
+        }
+        break;
+      }
+      case 'tool.call': {
+        const t = m.data;
+        const key = `t${t.callId}`;
+        if (t.phase === 'start') {
+          add({ kind: 'tool', key, at: Date.parse(t.at) || now, sessionId: t.sessionId, name: t.name, input: t.input });
+        } else {
+          setRows((old) => old.map((r) => (r.key === key && r.kind === 'tool' ? { ...r, ms: t.ms, isError: t.isError, result: t.result, truncated: t.truncated } : r)));
+        }
+        break;
+      }
       case 'batch.started':
         update(m.data.cursors, (e) => ({ ...e, state: 'delivering', batchId: m.data.batchId }));
-        add({ kind: 'batch', key: `b${++seq}`, at: now, text: `▶ 批 ${m.data.batchId} 开始（L${m.data.level}，${m.data.reason}，${m.data.cursors.length} 个事件）`, tone: 'info' });
+        add({ kind: 'batch', key: `b${++seq}`, at: now, batchId: m.data.batchId, text: `▶ 批 ${m.data.batchId} 开始（L${m.data.level}，${m.data.reason}，${m.data.cursors.length} 个事件）`, tone: 'info' });
         break;
       case 'batch.ended':
-        add({ kind: 'batch', key: `b${++seq}`, at: now, text: `■ 批 ${m.data.batchId} 结束：${m.data.endReason}，${m.data.rounds} 回合`, tone: ['end_turn', 'ends_turn'].includes(m.data.endReason) ? 'muted' : 'warn' });
+        add({ kind: 'batch', key: `b${++seq}`, at: now, batchId: m.data.batchId, text: `■ 批 ${m.data.batchId} 结束：${m.data.endReason}，${m.data.rounds} 回合`, tone: ['end_turn', 'ends_turn'].includes(m.data.endReason) ? 'muted' : 'warn' });
         break;
     }
   });
@@ -228,10 +313,11 @@ export function Events({ params }: { params: URLSearchParams }) {
   const visible = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return rows.filter((r) => {
-      if (r.kind !== 'event') return showMarkers && (!needle || JSON.stringify(r).toLowerCase().includes(needle));
+      if (hidden.has(categoryOf(r))) return false;
+      if (r.kind !== 'event') return !needle || JSON.stringify(r).toLowerCase().includes(needle);
       return !needle || r.e.text.toLowerCase().includes(needle) || r.e.type.includes(needle);
     });
-  }, [rows, q, showMarkers]);
+  }, [rows, q, hidden]);
 
   return (
     <div className="page">
@@ -255,9 +341,23 @@ export function Events({ params }: { params: URLSearchParams }) {
           <option value="withdrawn,expired,discarded">withdrawn / expired / discarded</option>
         </select>
         <input placeholder="搜索正文" value={q} onChange={(e) => setQ(e.target.value)} />
-        <label className="check">
-          <input type="checkbox" checked={showMarkers} onChange={(e) => setShowMarkers(e.target.checked)} /> 批与调度动作
-        </label>
+        {CATEGORIES.map(([id, label]) => (
+          <label key={id} className="check">
+            <input
+              type="checkbox"
+              checked={!hidden.has(id)}
+              onChange={(e) =>
+                setHidden((old) => {
+                  const next = new Set(old);
+                  if (e.target.checked) next.delete(id);
+                  else next.add(id);
+                  return next;
+                })
+              }
+            />{' '}
+            {label}
+          </label>
+        ))}
       </div>
       <ErrorText error={error} />
       {visible.length === 0 ? (
@@ -292,13 +392,67 @@ export function Events({ params }: { params: URLSearchParams }) {
               return (
                 <li key={r.key} className="tl-marker tl-output">
                   <span className="tl-time">{clock(r.at)}</span>
-                  <Badge tone="info">◂ {r.plugin}</Badge>
+                  <Badge tone="info">◂ {r.plugin}{r.channel && r.channel !== 'chat' ? ` · ${r.channel}` : ''}</Badge>
                   <span className="tl-reply">{r.text}</span>
                 </li>
               );
             }
+            if (r.kind === 'request') {
+              return (
+                <li key={r.key} className="tl-marker tl-request">
+                  <span className="tl-time">{clock(r.at)}</span>
+                  <Badge tone="muted">→ 模型{r.t.attempt > 0 ? ` 重试 ${r.t.attempt}` : ''}</Badge>
+                  <span className="muted small">
+                    {sessionTag(r.t.sessionId)}
+                    {r.t.model} · 第 {r.t.round ?? '?'} 回合{r.t.context ? ` · ${contextText(r.t.context)}` : ''}
+                  </span>
+                </li>
+              );
+            }
+            if (r.kind === 'model') {
+              return (
+                <li key={r.key} className={`tl-marker tl-model tl-model-${r.part}`}>
+                  <span className="tl-time">{clock(r.at)}</span>
+                  <Badge tone="neutral">
+                    {sessionTag(r.sessionId)}
+                    {r.part === 'text' ? '正文' : '思考'}
+                    {r.live ? ' …' : ''}
+                  </Badge>
+                  {r.part === 'thinking' ? (
+                    <details className="tl-model-body" open={r.live}>
+                      <summary>{oneLine(r.text, 120)}</summary>
+                      <div>{r.text}</div>
+                    </details>
+                  ) : (
+                    <div className="tl-model-body">{r.text}</div>
+                  )}
+                </li>
+              );
+            }
+            if (r.kind === 'tool') {
+              return (
+                <li key={r.key} className={`tl-marker tl-tool ${r.isError ? 'tl-tool-error' : ''}`}>
+                  <span className="tl-time">{clock(r.at)}</span>
+                  <Badge tone={r.isError ? 'bad' : 'muted'}>
+                    {sessionTag(r.sessionId)}
+                    {r.name}
+                    {r.ms === undefined ? ' …' : ` · ${r.ms} ms`}
+                  </Badge>
+                  <details className="tl-model-body">
+                    <summary>{oneLine(r.result ?? JSON.stringify(r.input ?? {}), 140)}</summary>
+                    <pre>{JSON.stringify(r.input, null, 2)}</pre>
+                    {r.result !== undefined && (
+                      <pre>
+                        {r.result}
+                        {r.truncated ? '\n…（已截断，完整内容在转录里）' : ''}
+                      </pre>
+                    )}
+                  </details>
+                </li>
+              );
+            }
             return (
-              <li key={r.key} className={`tl-marker tl-batch tl-${r.tone}`}>
+              <li key={r.key} className={`tl-marker tl-batch tl-${r.tone} clickable`} onClick={() => go('events', { ...Object.fromEntries(params), batch: r.batchId })}>
                 <span className="tl-time">{clock(r.at)}</span>
                 <span>{r.text}</span>
               </li>
@@ -312,6 +466,7 @@ export function Events({ params }: { params: URLSearchParams }) {
         </div>
       )}
       {selected && <EventDetail cursor={Number(selected)} onClose={() => go('events', Object.fromEntries([...params].filter(([k]) => k !== 'cursor')))} />}
+      {params.get('batch') && <BatchTrace id={params.get('batch') as string} onClose={() => go('events', Object.fromEntries([...params].filter(([k]) => k !== 'batch')))} />}
     </div>
   );
 }

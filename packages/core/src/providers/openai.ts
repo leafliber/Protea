@@ -6,7 +6,7 @@ import { estimateRequestTokens } from './tokens.js';
 import { estimateCost } from './pricing.js';
 import { joinUrl, parseArguments, request, resultText, sseMessages } from './http.js';
 import { PROTOCOL_DEFAULT_URL } from './profiles.js';
-import { ProviderError, type Provider, type ProviderHealth, type ProviderRequest, type ProviderResponse, type ProviderUsage } from './types.js';
+import { ProviderError, type GenerateOptions, type Provider, type ProviderHealth, type ProviderRequest, type ProviderResponse, type ProviderUsage } from './types.js';
 
 /** Context window assumed for models the profile does not describe. */
 export const DEFAULT_OPENAI_CONTEXT = 128_000;
@@ -110,7 +110,7 @@ abstract class OpenAiStyleProvider implements Provider {
     return list.map((m) => String((m as { id?: unknown }).id ?? (m as { name?: unknown }).name ?? '')).filter(Boolean).sort();
   }
 
-  abstract generate(req: ProviderRequest, opts: { signal: AbortSignal; onText?: (delta: string) => void }): Promise<ProviderResponse>;
+  abstract generate(req: ProviderRequest, opts: GenerateOptions): Promise<ProviderResponse>;
 }
 
 type ChatMessage =
@@ -149,7 +149,7 @@ function chatStop(finish: string | null, hasCalls: boolean): string {
 interface ChatChunk {
   model?: string;
   choices?: Array<{
-    delta?: { content?: string | null; tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> };
+    delta?: { content?: string | null; reasoning_content?: string | null; tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> };
     finish_reason?: string | null;
   }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } | null; prompt_cache_hit_tokens?: number } | null;
@@ -183,7 +183,7 @@ export class OpenAiChatProvider extends OpenAiStyleProvider {
     return body;
   }
 
-  async generate(req: ProviderRequest, opts: { signal: AbortSignal; onText?: (delta: string) => void }): Promise<ProviderResponse> {
+  async generate(req: ProviderRequest, opts: GenerateOptions): Promise<ProviderResponse> {
     this.check();
     const res = await this.post('/chat/completions', this.buildBody(req), opts.signal);
     let text = '';
@@ -220,6 +220,8 @@ export class OpenAiChatProvider extends OpenAiStyleProvider {
             text += d.content;
             opts.onText?.(d.content);
           }
+          // Servers that stream their reasoning beside the answer (DeepSeek and others).
+          if (d?.reasoning_content) opts.onThinking?.(d.reasoning_content);
           for (const tc of d?.tool_calls ?? []) {
             const index = tc.index ?? (tc.id || byIndex.size === 0 ? byIndex.size : byIndex.size - 1);
             let cur = byIndex.get(index);
@@ -295,7 +297,7 @@ export class OpenAiResponsesProvider extends OpenAiStyleProvider {
     return body;
   }
 
-  async generate(req: ProviderRequest, opts: { signal: AbortSignal; onText?: (delta: string) => void }): Promise<ProviderResponse> {
+  async generate(req: ProviderRequest, opts: GenerateOptions): Promise<ProviderResponse> {
     this.check();
     const res = await this.post('/responses', this.buildBody(req), opts.signal);
     let final: ResponsesResult | null = null;
@@ -311,6 +313,7 @@ export class OpenAiResponsesProvider extends OpenAiStyleProvider {
         }
         const type = ev.type ?? m.event;
         if (type === 'response.output_text.delta' && ev.delta) opts.onText?.(ev.delta);
+        else if (type === 'response.reasoning_summary_text.delta' && ev.delta) opts.onThinking?.(ev.delta);
         else if (type === 'response.completed' || type === 'response.incomplete') final = ev.response ?? null;
         else if (type === 'response.failed') {
           const e = ev.response?.error;

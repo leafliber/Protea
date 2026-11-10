@@ -12,6 +12,7 @@ export default defineConfig({
       '@protea/core': r('./packages/core/src/index.ts'),
       '@protea/control': r('./packages/control/src/index.ts'),
       '@protea/plugin-console': r('./plugins/console/src/index.ts'),
+      '@protea/plugin-webchat': r('./plugins/webchat/src/index.ts'),
       '@protea/plugin-cron': r('./plugins/cron/src/index.ts'),
       '@protea/daemon': r('./apps/daemon/src/index.ts'),
     },

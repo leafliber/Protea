@@ -45,6 +45,8 @@ export interface StatusSnapshot {
   budget?: Partial<Record<Level, number>>;
   /** Forks that are queued, running or paused. */
   forks?: number;
+  /** The running chat platform where the owner last wrote. */
+  lastChat?: string;
 }
 
 /** The dynamic status block. It always goes last in the message so the history before it stays cacheable. */
@@ -55,5 +57,6 @@ export function renderStatusBlock(s: StatusSnapshot): TextBlock {
     if (left !== undefined) parts.push(`budget_l${l}="${left}%"`);
   }
   if (s.forks) parts.push(`forks="${s.forks}"`);
+  if (s.lastChat) parts.push(`last_chat="${attr(s.lastChat)}"`);
   return { type: 'text', text: `<status ${parts.join(' ')}/>` };
 }

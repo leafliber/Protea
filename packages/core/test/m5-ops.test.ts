@@ -41,14 +41,14 @@ describe('logs', () => {
     const ids = ['01JAAAAAAAAAAAAAAAAAAAAAAA', '01JBBBBBBBBBBBBBBBBBBBBBBB', '01JCCCCCCCCCCCCCCCCCCCCCCC'];
     for (const [i, id] of ids.entries()) {
       fs.mkdirSync(path.join(runs, id, i === 0 ? 'crash' : ''), { recursive: true });
-      fs.writeFileSync(path.join(runs, id, 'log.jsonl'), line({ msg: `start ${i}`, time: Date.parse(`2026-11-0${i + 1}T00:00:00Z`) }) + line({ msg: 'tool done', tool: 'con_send' }));
+      fs.writeFileSync(path.join(runs, id, 'log.jsonl'), line({ msg: `start ${i}`, time: Date.parse(`2026-11-0${i + 1}T00:00:00Z`) }) + line({ msg: 'tool done', tool: 'chat_send' }));
       if (i === 0) fs.writeFileSync(path.join(runs, id, 'crash', 'x.json'), '{}');
       if (i === 1) fs.writeFileSync(path.join(runs, id, 'shutdown.json'), '{}');
     }
     const list = listRuns(runs);
     expect(list.map((r) => r.id)).toEqual([...ids].reverse());
     expect(list.find((r) => r.id === ids[0])).toMatchObject({ crashes: 1, hasShutdown: false, startedAt: '2026-11-01T00:00:00.000Z' });
-    expect((await queryLogFile(path.join(runs, ids[1] as string, 'log.jsonl'), { fields: { tool: 'con_send' } })).map((e) => e.msg)).toEqual(['tool done']);
+    expect((await queryLogFile(path.join(runs, ids[1] as string, 'log.jsonl'), { fields: { tool: 'chat_send' } })).map((e) => e.msg)).toEqual(['tool done']);
     expect(await queryLogFile(path.join(runs, 'missing', 'log.jsonl'))).toEqual([]);
     expect(pruneRuns(runs, 1, ids[0] as string)).toEqual([ids[1]]); // never the current run
     expect(fs.readdirSync(runs).sort()).toEqual([ids[0], ids[2]]);

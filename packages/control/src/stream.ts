@@ -3,12 +3,12 @@ import type { Bus, BusTopic, BusTopics } from '@protea/core';
 
 const base = (file: string): string => file.split('/').pop() ?? file;
 
-type Projector<K extends BusTopic> = (data: BusTopics[K], extended: boolean) => WsServerMessage | null;
+type Projector<K extends BusTopic> = (data: BusTopics[K], extended: boolean, trace: boolean) => WsServerMessage | null;
 
 /**
  * How each bus topic appears on `/api/stream` (SSE) and `/ws`. It has an entry for every
  * topic, so a new bus topic does not compile until it is decided here; null keeps a record
- * off the stream. The WebSocket-only topics (`promoted`, `persona`, `usage`) need `extended`.
+ * off the stream. The WebSocket-only topics (`promoted`, `persona`, `usage`, the fragments of the run stream) need `extended`; `trace` adds whole replies and tool calls to the SSE stream.
  */
 const PROJECTORS: { [K in BusTopic]: Projector<K> } = {
   'event.stored': (data) => ({ topic: 'event', data }),
@@ -45,8 +45,11 @@ const PROJECTORS: { [K in BusTopic]: Projector<K> } = {
     };
     return { topic: 'usage', data };
   },
-  // Only the latency metric reads this one.
-  'model.request': () => null,
+  // The run stream. The fragments are for live pages only; a CLI reads whole replies and tool calls.
+  'model.request': (data, extended) => (extended ? { topic: 'model.request', data } : null),
+  'model.delta': (data, extended) => (extended ? { topic: 'model.delta', data } : null),
+  'model.response': (data, extended, trace) => (extended || trace ? { topic: 'model.response', data } : null),
+  'tool.call': (data, extended, trace) => (extended || trace ? { topic: 'tool.call', data } : null),
 };
 
 /**
@@ -56,12 +59,13 @@ const PROJECTORS: { [K in BusTopic]: Projector<K> } = {
  * a stored event therefore goes out before the batch that a listener (the scheduler) starts
  * for it and before its settlement, i.e. in causal order.
  */
-export function subscribeStream(bus: Bus, push: (m: WsServerMessage) => void, opts: { extended?: boolean } = {}): () => void {
+export function subscribeStream(bus: Bus, push: (m: WsServerMessage) => void, opts: { extended?: boolean; trace?: boolean } = {}): () => void {
   const extended = opts.extended === true;
+  const trace = opts.trace === true;
   return bus.tap((topic, raw) => {
     // The tap carries the record untyped; the topic picks the projector written for its type.
-    const project = PROJECTORS[topic] as (data: never, extended: boolean) => WsServerMessage | null;
-    const m = project(raw as never, extended);
+    const project = PROJECTORS[topic] as (data: never, extended: boolean, trace: boolean) => WsServerMessage | null;
+    const m = project(raw as never, extended, trace);
     if (m) push(m);
   });
 }

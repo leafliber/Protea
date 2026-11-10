@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import type { ModelRole } from '@protea/protocol';
 import { isAbortError } from '../util/abort.js';
 import { errorMessage } from '../util/errors.js';
-import { ProviderError, type Provider, type ProviderHealth, type ProviderRequest, type ProviderResponse } from './types.js';
+import { ProviderError, type GenerateOptions, type Provider, type ProviderHealth, type ProviderRequest, type ProviderResponse } from './types.js';
 
 /** One line of <run>/provider.jsonl. */
 export interface RecordedCall {
@@ -61,7 +61,7 @@ export class ProviderRecorder implements Provider {
     return this.inner.countTokens ? this.inner.countTokens(req, opts) : Promise.resolve(undefined);
   }
 
-  async generate(req: ProviderRequest, opts: { signal: AbortSignal; onText?: (delta: string) => void }): Promise<ProviderResponse> {
+  async generate(req: ProviderRequest, opts: GenerateOptions): Promise<ProviderResponse> {
     const t0 = Date.now();
     const base = { seq: ++this.seq, at: new Date(t0).toISOString(), role: req.role, model: this.inner.modelFor(req.role) };
     try {
@@ -125,7 +125,7 @@ export class RecordedProvider implements Provider {
     return Object.fromEntries([...this.queues].map(([r, q]) => [r, q.length]));
   }
 
-  async generate(req: ProviderRequest, opts: { signal: AbortSignal; onText?: (delta: string) => void }): Promise<ProviderResponse> {
+  async generate(req: ProviderRequest, opts: GenerateOptions): Promise<ProviderResponse> {
     if (opts.signal.aborted) throw opts.signal.reason ?? new Error('aborted');
     const next = this.queues.get(req.role)?.shift();
     if (!next) throw new ProviderError('fatal', `the recording has no more ${req.role} responses`);

@@ -16,6 +16,7 @@
 | 事件怎么流动、怎么抢占 | [10-architecture/02-event-model.md](10-architecture/02-event-model.md) → [04-scheduling-and-preemption.md](10-architecture/04-scheduling-and-preemption.md) |
 | 怎么写一个插件 / 接 MCP / 加 Skill | [07-plugin-system.md](10-architecture/07-plugin-system.md) · [09-mcp-integration.md](10-architecture/09-mcp-integration.md) · [10-skills.md](10-architecture/10-skills.md) |
 | 怎么部署 | [16-deployment.md](10-architecture/16-deployment.md) |
+| 对话和控制台的边界、怎么接新平台 | [17-chat-and-console.md](10-architecture/17-chat-and-console.md) |
 | 为什么这样决定 | [20-decisions/README.md](20-decisions/README.md) |
 | 接口与格式的精确定义 | [30-specs/](30-specs/) |
 | 做到哪一步、下一步做什么 | [40-plan/01-roadmap.md](40-plan/01-roadmap.md) |
@@ -48,7 +49,8 @@ docs/
 │   ├── 13-control-plane.md            HTTP API、WebSocket、CLI、控制台
 │   ├── 14-security-and-permissions.md 身份、权限策略、审批、秘密、沙箱
 │   ├── 15-observability.md            日志、指标、追踪、运行目录
-│   └── 16-deployment.md               单镜像、卷、启动顺序、升级、备份
+│   ├── 16-deployment.md               单镜像、卷、启动顺序、升级、备份
+│   └── 17-chat-and-console.md         对话平台、chat_send、控制台运行流
 ├── 20-decisions/                      架构决策记录（ADR）
 │   ├── README.md                      ADR 索引与模板
 │   ├── ADR-0001-typescript-node-runtime.md

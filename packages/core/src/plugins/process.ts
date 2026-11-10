@@ -5,6 +5,8 @@ import {
   RpcPeer,
   lineSplitter,
   type ApprovalRequestParams,
+  type ChatSendParams,
+  type ChatSendResult,
   type HealthResult,
   type HttpRequestParams,
   type HttpResponse,
@@ -187,6 +189,13 @@ export class ProcessPlugin {
 
   approvalRequest(p: ApprovalRequestParams): Promise<{ delivered: boolean }> {
     return this.peer.request(HOST_TO_PLUGIN.approvalsRequest, p, { timeoutMs: 15_000 });
+  }
+
+  chatSend(p: ChatSendParams): Promise<ChatSendResult> {
+    this.inflight++;
+    return this.peer.request<ChatSendResult>(HOST_TO_PLUGIN.chatSend, p, { timeoutMs: 60_000 }).finally(() => {
+      this.inflight--;
+    });
   }
 
   http(p: HttpRequestParams): Promise<HttpResponse> {

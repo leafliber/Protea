@@ -38,6 +38,7 @@ plugin → host : result {}
 | `health` | `{}` | `{ ok: boolean, detail? }` |
 | `shutdown/verify` | `{ language }` | `{ snapshot: object }` |
 | `approvals/request` | `{ id, tool, summary, reason?, expiresAt }`（需 capability） | `{ delivered: boolean }` |
+| `chat/send` | `{ text, replyTo?, sessionId?, batchId? }`（需 capability `chat` 与清单的 `chat` 块） | `{ ok, messageIds?, error? }` |
 | `http/request` | `{ hook, method, path, query, headers, bodyBase64 }`（需 capability） | `{ status, headers?, body? }` |
 
 `ToolDecl`：`{ name, description, inputSchema, flags?: { endsTurn?, barrierAfter?, interruptible?, readOnly?, sideEffect? }, timeoutMs? }`

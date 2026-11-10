@@ -85,7 +85,7 @@ const request: ProviderRequest = {
       ],
     },
   ],
-  tools: [{ name: 'con_send', description: 'send', inputSchema: { type: 'object', properties: { text: { type: 'string' } } } }],
+  tools: [{ name: 'chat_send', description: 'send', inputSchema: { type: 'object', properties: { text: { type: 'string' } } } }],
 };
 
 describe('canonical messages in OpenAI shapes', () => {
@@ -120,7 +120,7 @@ describe('OpenAiChatProvider', () => {
     answers.push(
       sse([
         { model: 'm-main-2026', choices: [{ delta: { content: 'Hel' } }] },
-        { choices: [{ delta: { content: 'lo', tool_calls: [{ index: 0, id: 'call_a', function: { name: 'con_send', arguments: '{"te' } }] } }] },
+        { choices: [{ delta: { content: 'lo', tool_calls: [{ index: 0, id: 'call_a', function: { name: 'chat_send', arguments: '{"te' } }] } }] },
         { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: 'xt":"hi"}' } }] }, finish_reason: 'tool_calls' }] },
         { choices: [], usage: { prompt_tokens: 1000, completion_tokens: 20, prompt_tokens_details: { cached_tokens: 800 } } },
         '[DONE]',
@@ -132,7 +132,7 @@ describe('OpenAiChatProvider', () => {
     expect(deltas.join('')).toBe('Hello');
     expect(r.content).toEqual([
       { type: 'text', text: 'Hello' },
-      { type: 'tool_use', id: 'call_a', name: 'con_send', input: { text: 'hi' } },
+      { type: 'tool_use', id: 'call_a', name: 'chat_send', input: { text: 'hi' } },
     ]);
     expect(r.stopReason).toBe('tool_use');
     expect(r.usage).toEqual({ inputTokens: 200, outputTokens: 20, cacheReadTokens: 800, cacheWriteTokens: 0 });
@@ -143,7 +143,7 @@ describe('OpenAiChatProvider', () => {
     expect(s.path).toBe('/v1/chat/completions');
     expect(s.headers.authorization).toBe('Bearer sk-test');
     expect(s.body).toMatchObject({ model: 'm-main', stream: true, stream_options: { include_usage: true }, max_tokens: 8192 });
-    expect(s.body['tools']).toEqual([{ type: 'function', function: { name: 'con_send', description: 'send', parameters: request.tools[0]?.inputSchema } }]);
+    expect(s.body['tools']).toEqual([{ type: 'function', function: { name: 'chat_send', description: 'send', parameters: request.tools[0]?.inputSchema } }]);
     expect(s.body).not.toHaveProperty('reasoning_effort');
   });
 
@@ -185,9 +185,9 @@ describe('OpenAiChatProvider', () => {
   });
 
   it('turns arguments that are not JSON into an input the schema check rejects', async () => {
-    answers.push(sse([{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'con_send', arguments: '{oops' } }] }, finish_reason: 'tool_calls' }] }, '[DONE]']));
+    answers.push(sse([{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'chat_send', arguments: '{oops' } }] }, finish_reason: 'tool_calls' }] }, '[DONE]']));
     const r = await new OpenAiChatProvider(profile('openai-chat'), 'k', 'local').generate(request, { signal: AbortSignal.timeout(5000) });
-    expect(r.content).toEqual([{ type: 'tool_use', id: 'c1', name: 'con_send', input: { _raw: '{oops' } }]);
+    expect(r.content).toEqual([{ type: 'tool_use', id: 'c1', name: 'chat_send', input: { _raw: '{oops' } }]);
   });
 
   it('lists the endpoint models', async () => {
@@ -212,7 +212,7 @@ describe('OpenAiResponsesProvider', () => {
             output: [
               { type: 'reasoning', summary: [] },
               { type: 'message', content: [{ type: 'output_text', text: 'On it.' }] },
-              { type: 'function_call', call_id: 'fc_1', name: 'con_send', arguments: '{"text":"done"}' },
+              { type: 'function_call', call_id: 'fc_1', name: 'chat_send', arguments: '{"text":"done"}' },
             ],
             usage: { input_tokens: 500, output_tokens: 9, input_tokens_details: { cached_tokens: 400 } },
           },
@@ -227,14 +227,14 @@ describe('OpenAiResponsesProvider', () => {
     expect(deltas.join('')).toBe('On it.');
     expect(r.content).toEqual([
       { type: 'text', text: 'On it.' },
-      { type: 'tool_use', id: 'fc_1', name: 'con_send', input: { text: 'done' } },
+      { type: 'tool_use', id: 'fc_1', name: 'chat_send', input: { text: 'done' } },
     ]);
     expect(r.stopReason).toBe('tool_use');
     expect(r.usage).toEqual({ inputTokens: 100, outputTokens: 9, cacheReadTokens: 400, cacheWriteTokens: 0 });
     const s = seen[0] as Seen;
     expect(s.path).toBe('/v1/responses');
     expect(s.body).toMatchObject({ model: 'm-main', stream: true, store: false, instructions: 'You are Protea.\n\nRuntime notes.', max_output_tokens: 8192, reasoning: { effort: 'high' } });
-    expect(s.body['tools']).toEqual([{ type: 'function', name: 'con_send', description: 'send', parameters: request.tools[0]?.inputSchema, strict: false }]);
+    expect(s.body['tools']).toEqual([{ type: 'function', name: 'chat_send', description: 'send', parameters: request.tools[0]?.inputSchema, strict: false }]);
   });
 
   it('maps an incomplete response and a failed one', async () => {

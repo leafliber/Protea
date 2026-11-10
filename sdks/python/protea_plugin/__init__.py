@@ -86,6 +86,13 @@ class Plugin:
     def on_events_settled(self, host: "Host", events: List[Dict[str, Any]]) -> None:
         pass
 
+    def on_chat_send(self, host: "Host", req: Dict[str, Any]) -> Dict[str, Any]:
+        """Override to be a chat platform (with the manifest block ``chat``): deliver ``req["text"]`` to the owner.
+
+        Return ``{"ok": True, "messageIds": [...]}`` or ``{"ok": False, "error": "why"}``.
+        """
+        raise NotImplementedError
+
     def health(self, host: "Host") -> Dict[str, Any]:
         return {"ok": True}
 
@@ -249,6 +256,7 @@ def run(plugin: Plugin, max_workers: int = 8) -> None:
                 "events": True,
                 "envPrompt": _overrides(plugin, "env_prompt_vars"),
                 "settled": _overrides(plugin, "on_events_settled"),
+                "chat": _overrides(plugin, "on_chat_send"),
             },
         }
         if plugin.display_name:
@@ -299,6 +307,14 @@ def run(plugin: Plugin, max_workers: int = 8) -> None:
     def h_settled(params: Dict[str, Any]) -> None:
         plugin.on_events_settled(host, list((params or {}).get("events") or []))
 
+    def h_chat_send(params: Dict[str, Any]) -> Dict[str, Any]:
+        if not _overrides(plugin, "on_chat_send"):
+            raise RpcError(METHOD_NOT_FOUND, "this plugin is not a chat platform")
+        try:
+            return dict(plugin.on_chat_send(host, params or {}))
+        except Exception as exc:  # the model gets the reason as a failed receipt
+            return {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
+
     def h_health(_params: Any) -> Dict[str, Any]:
         return plugin.health(host)
 
@@ -311,6 +327,7 @@ def run(plugin: Plugin, max_workers: int = 8) -> None:
         "tools/call": h_tools_call,
         "env/prompt": h_env_prompt,
         "events/settled": h_settled,
+        "chat/send": h_chat_send,
         "run/phase": lambda _p: None,
         "health": h_health,
         "shutdown/verify": lambda _p: {"snapshot": {}},

@@ -24,7 +24,7 @@ type ModelRole = 'main' | 'fork' | 'cheap';
 
 守护进程只有一个 Provider：`ProviderRouter`（`packages/core/src/providers/router.ts`）。它按请求的角色找到供应商档案（`providers.roles.<role>`，否则 `providers.default`），把请求交给那个档案的实现，并在响应里标上 `provider`（档案 id，"model call" 日志行里可见）。档案的实现在第一次用到时创建；档案设置变了就重建，存入或删除密钥后 `refresh()` 全部重建，所以改供应商不用重启，进行中的请求用旧实例跑完。路由器外面依次包着录制、脱敏（I-7）与追踪（[15-observability.md](15-observability.md) §2.1）。
 
-实现：`AnthropicProvider`（`anthropic` 协议）、`OpenAiChatProvider` 与 `OpenAiResponsesProvider`（`openai.ts`）、`EchoProvider`（离线开发：对 console 消息调用 `con_send` 回显）、`ScriptedProvider`（测试用）。工厂 `providerForProfile()` 按协议选择；密钥由 `createProvider()` 从秘密存储读出，只进 HTTP 客户端的请求头。
+实现：`AnthropicProvider`（`anthropic` 协议）、`OpenAiChatProvider` 与 `OpenAiResponsesProvider`（`openai.ts`）、`EchoProvider`（离线开发：对主人的 `chat.message` 调用 `chat_send` 回显，对运维注入用正文回显）、`ScriptedProvider`（测试用）。工厂 `providerForProfile()` 按协议选择；密钥由 `createProvider()` 从秘密存储读出，只进 HTTP 客户端的请求头。
 
 ## 2. 模型角色分配
 

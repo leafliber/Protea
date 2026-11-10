@@ -16,7 +16,7 @@ const LAYERS: ReadonlyArray<readonly string[]> = [
   ['util'],
   ['settings'],
   ['auth', 'bus', 'config', 'db', 'events', 'memory', 'observability', 'permissions', 'persona', 'skills'],
-  ['backup', 'context', 'diagnostics', 'mcp', 'tools'],
+  ['backup', 'chat', 'context', 'diagnostics', 'mcp', 'tools'],
   ['plugins', 'providers'],
   ['session'],
   ['forks', 'maintenance', 'scheduler'],
@@ -57,7 +57,7 @@ const WORKSPACE_IMPORT = /\bfrom\s+['"]@protea\/([a-z-]+)|\bimport\(\s*['"]@prot
 
 const OUT_OF_PROCESS_PLUGINS = fs
   .readdirSync(path.join(ROOT, 'plugins'))
-  .filter((id) => !['console', 'cron'].includes(id))
+  .filter((id) => !['console', 'cron', 'webchat'].includes(id))
   .map((id): [string, string[]] => [`plugins/${id}/src`, ['plugin-sdk', 'protocol']]);
 
 /** Which @protea packages each source tree may name, type imports included. */
@@ -67,9 +67,10 @@ const BOUNDARIES: Array<[string, string[]]> = [
   ['packages/core/src', ['protocol']],
   ['packages/control/src', ['core', 'protocol']],
   ['plugins/console/src', ['core', 'protocol']],
+  ['plugins/webchat/src', ['core', 'protocol']],
   ['plugins/cron/src', ['core', 'protocol']],
   ['apps/web/src', ['protocol']],
-  ['apps/daemon/src', ['control', 'core', 'plugin-console', 'plugin-cron', 'protocol']],
+  ['apps/daemon/src', ['control', 'core', 'plugin-console', 'plugin-cron', 'plugin-webchat', 'protocol']],
   ['apps/cli/src', ['core', 'daemon', 'protocol']],
   ...OUT_OF_PROCESS_PLUGINS,
 ];

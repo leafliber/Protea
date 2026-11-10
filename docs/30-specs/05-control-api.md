@@ -59,13 +59,15 @@
 |---|---|---|
 | GET | `/api/events?level=&source=&state=&type=&since=&until=&cursor=&limit=&order=` | `{ events, nextCursor }`。默认新的在前；`cursor` 取比它旧的一页，`nextCursor` 为 null 表示没有更多。`level` 是最大等级，`state` 可逗号分隔，`limit` ≤ 1000 |
 | GET | `/api/events/:cursor` | `{ event, delivery }`（信封 + 投递记录） |
-| GET | `/api/chat?before=&limit=` | 对话窗口的历史：`ChatHistoryResponse` `{ items, batches, before }`。`items` 由旧到新，是 `console.message` 事件（`kind: owner`，带 `cursor`、`state`、`sender`）与 console 插件的输出（`kind: reply`，审批提示等其他频道为 `notice`）；`batches` 是这些条目所在批的结局（`endReason`、`sources`、`replied`，`model_error` 时带 `error`）。`before` 取更早的一页（为 null 表示没有更多），`limit` ≤ 200，默认 50 |
+| POST | `/api/chat/messages` | 主人在 `webchat` 里说话：`{ text, trigger?: flush \| interrupt }` → 同 `POST /api/events` 的回执 |
+| GET | `/api/chat?platform=&before=&limit=` | 一个对话的历史（`platform` 默认 `webchat`，`all` 为全部平台）：`ChatHistoryResponse` `{ items, batches, before }`。`items` 由旧到新，每条带 `platform`，是 `chat.message` 事件（`kind: owner`，带 `cursor`、`state`、`sender`）与 `chat_send` 发出的消息（`kind: reply`，审批提示为 `notice`）；分界之前的 `console` 对话算作 `webchat`；`batches` 是这些条目所在批的结局（`endReason`、`sources`、`replied`，`model_error` 时带 `error`）。`before` 取更早的一页（为 null 表示没有更多），`limit` ≤ 200，默认 50 |
 | GET | `/api/chat/batches?ids=a,b` | `{ batches }`：这些批的结局（同上；至多 100 个，未知的省略）。控制台在 `batch.ended` 后用它刷新状态 |
 | POST | `/api/events` | 推送 `{ text, level?, trigger?, tags? }`（来源固定为 `console`，senderKey 为 `api:admin`、`console:<用户名>` 或 `console:admin`）→ 201 `PushEventResponse` |
 | POST | `/api/events/:cursor/promote` | `{ trigger }`（默认 `flush`，不接受 `store`）→ `{ event }`；只对 pending/archived 事件，否则 409 |
 | POST | `/api/events/:cursor/withdraw` | → `{ event }`（状态 `withdrawn`）；在途或已结束的事件 409 |
 | GET | `/api/batches?limit=&before=&session=` | `{ batches: BatchInfo[] }`，新的在前；`BatchInfo`：`{ id, level, reason, sessionId, startedAt, endedAt, rounds, endReason }` |
 | GET | `/api/batches/:id` | `{ batch, events, rounds: UsageInfo[] }`（批里的事件与每次模型调用） |
+| GET | `/api/batches/:id/trace` | `BatchTraceResponse` `{ batch, events, steps }`：从转录、输出和事件重建的步骤（`events` / `model` / `tool_result` / `output` / `mark`），跨交接；转录已清理时 `steps` 为空 |
 
 ## 会话
 
@@ -73,6 +75,7 @@
 |---|---|---|
 | GET | `/api/sessions` | 主会话 + Fork 列表（`{ sessions: [{ id: 'main', kind, phase, batchId }, { kind: 'fork', ...ForkInfo }] }`） |
 | GET | `/api/sessions/:id/transcript?from=&limit=&thinking=summary\|none` | `{ total, from, messages }`；`:id` 为 `main` 或 Fork id；`summary`（默认）保留思考文本但去掉签名，`none` 去掉思考块 |
+| GET | `/api/sessions/:id/context?from=&limit=` | 仅管理员。`SessionContextResponse`：下一次请求的系统段（正文与 token）、工具（来源、是否按需加载）、合并后的消息（分页）、合计，主会话另有阈值与上次缓存命中率。只读取，不改变转录；秘密值已脱敏 |
 | GET | `/api/sessions/forks` · `/api/sessions/forks/:id` | Fork 列表（未结束的 + 最近 10 个已结束的）、详情（`ForkInfo`） |
 | POST | `/api/sessions/main/handoff` | 手动交接 `{ reason? }`：空闲时立即执行，返回 `{ handedOff, transcript?, notes?, dropped?, kept? }`（没有可丢弃的内容时 `handedOff: false`）；忙时 202 `{ scheduled: true }`，在下一批开始时执行 |
 | POST | `/api/sessions/forks` | `{ goal, level?(默认 3), model?: fork\|main\|cheap, context?, tools?, maxTurns?, reportTo?: main\|none }` → 201 `ForkInfo`；被拒（并发上限等）422 |
@@ -111,7 +114,7 @@
 | PUT | `/api/secrets/:name` | 请求体为纯文本值（不能为空）；名字须为 `UPPER_CASE`；原子写入 `/data/secrets/<NAME>`（0600）→ `{ ok, secret }`。使用它的插件与 MCP 服务器在重启时取到新值 |
 | DELETE | `/api/secrets/:name` | 删除文件 → `{ ok, stillSetByEnvironment }`；管理员令牌不能删（400）；没有这个秘密 404 |
 | GET | `/api/permissions` | `{ settings, tools: [{ name, owner, policy, rule }] }`：规则与每个工具当前的决定 |
-| PATCH | `/api/permissions` | `permissions` 分节的 Merge Patch（如 `{ tools: { con_send: ask } }`，`null` 删除规则），经 `PATCH /api/config` → 合并后的结果 |
+| PATCH | `/api/permissions` | `permissions` 分节的 Merge Patch（如 `{ tools: { chat_send: ask } }`，`null` 删除规则），经 `PATCH /api/config` → 合并后的结果 |
 | GET | `/api/approvals?state=pending` | `{ approvals: ApprovalInfo[] }`（state：pending、approved、denied、expired、used） |
 | POST | `/api/approvals/:id/decide` | `{ decision: approve\|deny, note? }`；决定者记为 `console:admin`；已决定或已过期 → 409 |
 | GET | `/api/budget` | `{ settings, status: BudgetStatus }`。`status`：`enforced`、`dailyUsd`、`hardDailyUsd`、`spentUsd`（24 h 合计）、`hardCapReached`、`hardCapReleasedUntil?`，`levels.<L>`：`spentUsd`、`tokens`、`limitUsd`、`usedRatio`、`held?`（被预算改了投递方式且仍在等的事件数）、`releasedUntil?` |
@@ -182,13 +185,13 @@
 
 ## 实时流
 
-**SSE（M0 起）** `GET /api/stream?since=<cursor>`。连接后先发 `hello {runId}`；带 `since` 时先按游标补发之后的事件，再转为实时。事件名：`event`（id 为游标）、`settled`、`phase`、`batch.started`、`batch.extended`（M1 起带 `level`）、`batch.ended`、`output`（插件输出，如 `con_send`；2026-11-05 起带存储的 `id` 与发出它的 `batchId`，与 `/api/chat` 的条目对应）、`scheduler`（M1：`preempt` / `interrupt` / `aged` / `storm_cooldown` / `fork_yield` / `fork_resume`；M5：`paused` / `resumed` / `discarded`）、`fork`（M1：`ForkInfo` 变化）、`plugin`（M2：`PluginStatus` 变化）、`approval`（M2：`ApprovalInfo` 变化）、`mcp`（M3：`McpServerStatus` 变化）、`skills`（M3：目录变化，`{ names }`）、`handoff`（M4：`{ from, to, notes, dropped, kept }`）、`ping`（15 s 保活）。载荷形态见 `@protea/protocol` 的 `StreamMessage` 与 `SchedulerAction`。
+**SSE（M0 起）** `GET /api/stream?since=<cursor>&trace=1`。`trace=1` 时另外推 `model.response` 与 `tool.call`（`protea events tail` 用）。连接后先发 `hello {runId}`；带 `since` 时先按游标补发之后的事件，再转为实时。事件名：`event`（id 为游标）、`settled`、`phase`、`batch.started`、`batch.extended`（M1 起带 `level`）、`batch.ended`、`output`（`chat_send` 发出的消息与插件输出；2026-11-05 起带存储的 `id` 与发出它的 `batchId`，与 `/api/chat` 的条目对应）、`scheduler`（M1：`preempt` / `interrupt` / `aged` / `storm_cooldown` / `fork_yield` / `fork_resume`；M5：`paused` / `resumed` / `discarded`）、`fork`（M1：`ForkInfo` 变化）、`plugin`（M2：`PluginStatus` 变化）、`approval`（M2：`ApprovalInfo` 变化）、`mcp`（M3：`McpServerStatus` 变化）、`skills`（M3：目录变化，`{ names }`）、`handoff`（M4：`{ from, to, notes, dropped, kept }`）、`ping`（15 s 保活）。载荷形态见 `@protea/protocol` 的 `StreamMessage` 与 `SchedulerAction`。
 
 **WebSocket（M5）** `GET /ws`（升级）。鉴权同 HTTP：`Authorization: Bearer` 或会话 cookie；用 cookie 时 `Origin` 的主机必须等于 `Host`，否则 403；没有凭据 401。
 
 - 连接后服务端先发 `{ topic: 'hello', data: { runId, role } }`。
 - 客户端发 `WsClientMessage`：`{ subscribe: WsTopic[], since?: cursor, logFilter?: { level?, component?, plugin?, q? } }`；每条替换之前的订阅，服务端回 `{ topic: 'subscribed', data: { topics } }`；未知分组回 `{ topic: 'error', data: { message } }`。
-- 分组 `WS_TOPICS`：`events`（`event`、`settled`、`promoted`）、`phase`（`phase`、`batch.*`）、`scheduler`、`output`、`changes`（`fork`、`plugin`、`approval`、`mcp`、`skills`、`handoff`、`persona`）、`usage`（`UsageInfo`）、`logs`（`log`，`LogRecord`）。
+- 分组 `WS_TOPICS`：`events`（`event`、`settled`、`promoted`）、`phase`（`phase`、`batch.*`）、`scheduler`、`output`、`changes`（`fork`、`plugin`、`approval`、`mcp`、`skills`、`handoff`、`persona`）、`usage`（`UsageInfo`）、`logs`（`log`，`LogRecord`）。 `trace`（`model.request`、`model.delta`、`model.response`、`tool.call`，运行流；载荷见 `@protea/protocol` 的 `TraceMessage`）。
 - 带 `since` 且订阅了 `events` 时，先补发游标之后存储的全部事件，期间的实时消息暂存后放出；同一游标不会发两次。
 - 服务端每 30 s ping，一个周期内没有 pong 的连接被终止；未发出的数据超过 8 MB 时以 1013 关闭。
 

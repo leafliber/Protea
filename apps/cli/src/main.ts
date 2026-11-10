@@ -4,8 +4,10 @@ import {
   LEVELS,
   TRIGGERS,
   isLevel,
+  isTextBlock,
   isTrigger,
   type ApprovalInfo,
+  type ContentBlock,
   type EventEnvelope,
   type ForkInfo,
   type McpServerStatus,
@@ -57,6 +59,7 @@ Usage:
   protea providers test <id> | models <id>      a tiny test request, or the endpoint's model names
   protea providers rm <id>
   protea status [--json]                        show runtime status
+  protea chat <text…> [--interrupt] [--timeout SEC]  talk to the assistant in the web chat
   protea events push <text…> [--level N] [--trigger T] [--no-wait] [--timeout SEC]
                                                 send a console message and print the replies
   protea events tail [--since CURSOR] [--level N] [--source ID]
@@ -140,6 +143,7 @@ const { values, positionals } = parseArgs({
     limit: { type: 'string' },
     timeout: { type: 'string' },
     'no-wait': { type: 'boolean' },
+    interrupt: { type: 'boolean' },
     disabled: { type: 'boolean' },
     'keep-data': { type: 'boolean' },
     check: { type: 'boolean' },
@@ -238,7 +242,7 @@ async function push(textParts: string[]): Promise<number> {
   const timeoutMs = (intFlag('timeout', values.timeout) ?? 300) * 1000;
 
   const ac = new AbortController();
-  const it = wait ? stream(o, '/api/stream', ac.signal) : null;
+  const it = wait ? stream(o, '/api/stream?trace=1', ac.signal) : null;
   if (it) await it.next(); // the "hello" message: we are subscribed before pushing
   const res = await api<PushEventResponse>(o, 'POST', '/api/events', {
     text,
@@ -265,11 +269,64 @@ async function push(textParts: string[]): Promise<number> {
         else if (data['phase'] === 'backoff') console.error(dim('… model unavailable, retrying'));
       } else if (m.event === 'output') {
         console.log(`${bold('◂')} ${String(data['text'])}`);
+      } else if (m.event === 'model.response' && data['batchId'] === mine) {
+        // An injection is not a conversation: the answer is the model's text.
+        const said = modelText(data);
+        if (said) console.log(`${bold('◂')} ${said}`);
       } else if (m.event === 'batch.ended' && data['batchId'] === mine) {
         const reason = String(data['endReason']);
         const ok = ['end_turn', 'ends_turn'].includes(reason);
         console.error((ok ? dim : red)(`■ ${reason} after ${String(data['rounds'])} round(s)`));
         return ok ? 0 : 1;
+      }
+    }
+  } catch (err) {
+    if (!ac.signal.aborted) throw err;
+  } finally {
+    clearTimeout(timer);
+    ac.abort();
+  }
+  console.error(red(`no reply within ${timeoutMs / 1000}s`));
+  return 2;
+}
+
+function modelText(data: Record<string, unknown>): string {
+  return (data['content'] as ContentBlock[])
+    .filter(isTextBlock)
+    .map((b) => b.text)
+    .join('\n')
+    .trim();
+}
+
+/** Write in the web chat and print what the assistant sends back with `chat_send`. */
+async function chat(textParts: string[]): Promise<number> {
+  const text = textParts.join(' ').trim();
+  if (!text) throw new Error('nothing to send');
+  const o = client();
+  const timeoutMs = (intFlag('timeout', values.timeout) ?? 300) * 1000;
+  const ac = new AbortController();
+  const it = stream(o, '/api/stream', ac.signal);
+  await it.next(); // the "hello" message: we are subscribed before sending
+  const res = await api<PushEventResponse>(o, 'POST', '/api/chat/messages', { text, ...(values.interrupt ? { trigger: 'interrupt' } : {}) });
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  let mine: string | null = null;
+  let replied = false;
+  try {
+    for await (const m of it) {
+      const data = JSON.parse(m.data || '{}') as Record<string, unknown>;
+      if ((m.event === 'batch.started' || m.event === 'batch.extended') && (data['cursors'] as number[]).includes(res.cursor)) {
+        mine = String(data['batchId']);
+      } else if (m.event === 'output' && data['plugin'] === 'webchat' && data['channel'] === 'chat' && data['batchId'] === mine) {
+        replied = true;
+        console.log(String(data['text']));
+      } else if (m.event === 'batch.ended' && data['batchId'] === mine) {
+        const reason = String(data['endReason']);
+        if (['end_turn', 'ends_turn'].includes(reason)) {
+          if (!replied) console.error(dim('(read, no reply)'));
+          return 0;
+        }
+        console.error(red(`■ ${reason}`));
+        return 1;
       }
     }
   } catch (err) {
@@ -289,7 +346,7 @@ async function tail(): Promise<void> {
   const ac = new AbortController();
   process.on('SIGINT', () => ac.abort());
   try {
-    for await (const m of stream(o, `/api/stream${since !== undefined ? `?since=${since}` : ''}`, ac.signal)) {
+    for await (const m of stream(o, `/api/stream?trace=1${since !== undefined ? `&since=${since}` : ''}`, ac.signal)) {
       const data = JSON.parse(m.data || '{}') as Record<string, unknown>;
       switch (m.event) {
         case 'hello':
@@ -316,6 +373,15 @@ async function tail(): Promise<void> {
           break;
         case 'output':
           console.log(`${bold('◂')} ${dim(`${String(data['plugin'])}:`)} ${String(data['text'])}`);
+          break;
+        case 'model.response': {
+          const said = modelText(data);
+          if (said) console.log(`  ${dim('model:')} ${said}`);
+          break;
+        }
+        case 'tool.call':
+          if (data['phase'] === 'start') console.log(dim(`  → ${String(data['name'])} ${JSON.stringify(data['input'])}`));
+          else console.log((data['isError'] ? red : dim)(`  ← ${String(data['name'])} (${String(data['ms'])} ms) ${String(data['result']).slice(0, 200)}`));
           break;
         case 'scheduler': {
           const kind = String(data['kind']);
@@ -608,6 +674,8 @@ async function main(): Promise<number> {
     case 'status':
       await status();
       return 0;
+    case 'chat':
+      return chat([...(sub !== undefined ? [sub] : []), ...rest]);
     case 'events':
       if (sub === 'push') return push(rest);
       if (sub === 'tail') return tail().then(() => 0);

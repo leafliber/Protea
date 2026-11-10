@@ -44,8 +44,8 @@ export const CONSOLE_GROUPS: Array<{ label: string; pages: PageDef[] }> = [
     label: '运行',
     pages: [
       { id: 'overview', label: '总览', desc: '运行状态、上下文、用量与预算', icon: <IconGauge /> },
-      { id: 'events', label: '事件流', desc: '进入 Protea 的每个事件，以及它们何时、怎样送达', icon: <IconActivity /> },
-      { id: 'sessions', label: '会话', desc: '主会话的转录、每一批的处理过程与后台 Fork', icon: <IconLayers /> },
+      { id: 'events', label: '运行流', desc: '所有事件、用户输入、模型的思考与输出、工具调用和发出的消息', icon: <IconActivity /> },
+      { id: 'sessions', label: '会话', desc: '主会话的转录与上下文、每一批的处理过程与后台 Fork', icon: <IconLayers /> },
       { id: 'approvals', label: '审批', desc: '需要你批准的操作，以及审批与工具调用的审计记录', icon: <IconCheckShield /> },
     ],
   },

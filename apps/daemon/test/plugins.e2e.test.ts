@@ -34,7 +34,7 @@ const provider = new ScriptedProvider([
     const family = toolCall('tg_send_chat', { chat_id: -100, text: 'Dinner at 7' });
     if (last.includes('type="approval.decided"') && last.includes('was approved')) return reply([family]);
     if (last.includes('post to family')) return reply([family]);
-    if (last.includes('hello from telegram') || last.includes('while you were down')) return reply([toolCall('tg_send', { text: 'hi owner' })]);
+    if (last.includes('hello from telegram') || last.includes('while you were down')) return reply([toolCall('chat_send', { platform: 'telegram', text: 'hi owner' })]);
     return reply([toolCall('idle', {})]);
   },
 ]);
@@ -107,6 +107,7 @@ describe('M2 acceptance: plugins are hot-pluggable while the main session keeps 
       'rss',
       'shell',
       'telegram',
+      'webchat',
       'webhook',
     ]);
 
@@ -114,7 +115,7 @@ describe('M2 acceptance: plugins are hot-pluggable while the main session keeps 
     expect((await api('PATCH', '/api/plugins/telegram/config', { config: { apiBase, pollTimeoutSec: 1 } })).status).toBe(200);
     const installed = await api<PluginStatus>('POST', '/api/plugins', { path: bundleTelegram() });
     expect(installed.status).toBe(201);
-    expect(installed.json).toMatchObject({ state: 'running', enabled: true, origin: 'data', tools: ['tg_react', 'tg_send', 'tg_send_chat'] });
+    expect(installed.json).toMatchObject({ state: 'running', enabled: true, origin: 'data', tools: ['tg_react', 'tg_send_chat'] });
     const yaml = fs.readFileSync(path.join(dataDir, 'config.yaml'), 'utf8');
     expect(yaml).toContain('# operator comments survive edits made through the API');
     expect(yaml).toMatch(/telegram:\n\s+config:\n\s+apiBase:/);
@@ -124,7 +125,8 @@ describe('M2 acceptance: plugins are hot-pluggable while the main session keeps 
     await waitUntil(() => tg.sent.some((m) => m.text === 'hi owner'), 'reply to the owner');
     expect(tg.sent.find((m) => m.text === 'hi owner')?.chat_id).toBe(OWNER);
     const asked = provider.calls.find((c) => lastUser(c).includes('hello from telegram'));
-    expect(asked?.tools.map((t) => t.name)).toContain('tg_send');
+    expect(asked?.tools.map((t) => t.name)).toContain('tg_send_chat');
+    expect(asked?.tools.find((t) => t.name === 'chat_send')?.inputSchema).toMatchObject({ properties: { platform: { enum: ['telegram', 'webchat'] } } });
     expect(asked?.system.map((s) => s.id)).toContain('env:telegram');
     expect(asked?.system.find((s) => s.id === 'permissions')?.text).toContain("Needs the owner's approval: tg_send_chat");
 
@@ -152,7 +154,7 @@ describe('M2 acceptance: plugins are hot-pluggable while the main session keeps 
     const after = await plugin();
     expect(after).toMatchObject({ state: 'running', restarts: 1 });
     expect(after.pid).not.toBe(before.pid);
-    expect(d.store.query({ type: 'telegram.message' }).filter((e) => e.text.includes('while you were down'))).toHaveLength(1);
+    expect(d.store.query({ type: 'chat.message', source: 'telegram' }).filter((e) => e.text.includes('while you were down'))).toHaveLength(1);
     expect(d.store.query({ type: 'plugin.crashed' })).toHaveLength(1);
 
     // Reload new code: the new version runs.
@@ -183,14 +185,14 @@ describe('M2 acceptance: plugins are hot-pluggable while the main session keeps 
   }, 90_000);
 
   it('applies config.yaml edits without a restart', async () => {
-    setConfigValue(dataDir, ['permissions', 'tools', 'con_send'], 'deny');
-    await waitUntil(() => d.config.permissions.tools['con_send'] === 'deny', 'config reload');
+    setConfigValue(dataDir, ['permissions', 'tools', 'chat_send'], 'deny');
+    await waitUntil(() => d.config.permissions.tools['chat_send'] === 'deny', 'config reload');
     const calls = provider.calls.length;
     await api('POST', '/api/events', { text: 'status?' });
     await waitUntil(() => provider.calls.length > calls && !d.main.busy, 'next turn');
-    expect(provider.calls.at(-1)?.system.find((s) => s.id === 'permissions')?.text).toContain('Not allowed: con_send');
-    setConfigValue(dataDir, ['permissions', 'tools', 'con_send'], undefined);
-    await waitUntil(() => d.config.permissions.tools['con_send'] === undefined, 'config reload back');
+    expect(provider.calls.at(-1)?.system.find((s) => s.id === 'permissions')?.text).toContain('Not allowed: chat_send');
+    setConfigValue(dataDir, ['permissions', 'tools', 'chat_send'], undefined);
+    await waitUntil(() => d.config.permissions.tools['chat_send'] === undefined, 'config reload back');
   });
 
   it('forwards /hooks/<name> to the webhook plugin, which verifies signatures', async () => {

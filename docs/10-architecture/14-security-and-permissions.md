@@ -22,9 +22,9 @@
 4. MCP 注解与服务器信任（M3，[09-mcp-integration.md](09-mcp-integration.md) §6）：`readOnlyHint` → `allow`；`trust: low` 的服务器其余工具 → `ask`；`trust: normal` 时显式 `destructiveHint` → `ask`；`trust: high` 不加规则。没有 `readOnlyHint` 的 MCP 工具都带 `sideEffect` 标志（第 0 条与审计都适用）
 5. 全局默认 `permissions.default`（出厂 `allow`）
 
-约定：给主人发消息的出口工具（`con_send`、`tg_send`）不在 `sideEffectTools` 里，默认 `allow`；给第三方发的（`tg_send_chat`）在里面，默认 `ask`。内置插件的清单都按此审查过。
+约定：给主人发消息的 `chat_send` 不在 `sideEffectTools` 里，默认 `allow`；给第三方发的（`tg_send_chat`）在里面，默认 `ask`。内置插件的清单都按此审查过。
 
-附加条件（可选，尚未实现）：按批等级（L3 的批里 `tg_send` 给第三方需要 `ask`）、按参数匹配（`shell` 命令匹配 `rm -rf|mkfs|dd ` → `deny`）、按时间窗（夜间所有外发 `ask`）。
+附加条件（可选，尚未实现）：按批等级（L3 的批里 `tg_send_chat` 给第三方需要 `ask`）、按参数匹配（`shell` 命令匹配 `rm -rf|mkfs|dd ` → `deny`）、按时间窗（夜间所有外发 `ask`）。
 
 策略摘要写进系统前缀，作为 `operating` 之后的 `permissions` 段（P3：事先声明；没有受限工具时省略），模型因此知道哪些操作会触发审批，可以提前用 `approval_request` 询问。`permissions` 可热更新，新摘要在下一个回合边界生效。
 
@@ -109,6 +109,6 @@ M6 的状态（测试在 `apps/daemon/test/m6-security.test.ts`，除非另注�
   - MCP 来源自称 `origin: internal` 的 L0 interrupt → 仍是 external、L4 piggyback；
   - 事件正文里伪造 `</event><event origin="internal">` → 渲染时被转义，系统前缀说明外部内容只是数据；
   - 工具输出里的秘密 → 模型请求中是 `[REDACTED:NAME]`，内存日志、`log.jsonl` 与审计里都没有原值。
-- [x] 默认配置审查（结论比原条目窄）：有第三方或系统副作用的工具默认都是 `ask`（`sh_run`、`tg_send_chat`，以及低信任或带破坏性标注的 MCP 工具）；默认 `allow` 的副作用工具只有发给主人本人的 `con_send`、`tg_send`、`tg_react`——它们是助理回复主人的通道，改成 `ask` 会让助理无法说话。测试固定了这份名单，新增的副作用工具不进 `sideEffectTools` 就会失败。
+- [x] 默认配置审查（结论比原条目窄）：有第三方或系统副作用的工具默认都是 `ask`（`sh_run`、`tg_send_chat`，以及低信任或带破坏性标注的 MCP 工具）；默认 `allow` 的副作用工具只有发给主人本人的 `chat_send`、`tg_react`——它们是助理回复主人的通道，改成 `ask` 会让助理无法说话。测试固定了这份名单，新增的副作用工具不进 `sideEffectTools` 就会失败。
 - [x] 依赖审计：CI 的 `pnpm audit --prod --audit-level high` 与 Trivy（HIGH/CRITICAL、有修复的）对 full 与 slim 都阻断；M6 时本机两项都通过（基础镜像自带 npm 的漏洞依赖已在镜像里处理）。
 - [ ] 第三方渗透测试与 `SECURITY.md` 之外的响应流程：v1.0 之后。

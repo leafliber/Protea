@@ -30,6 +30,13 @@ import {
   LogRing,
   MainSession,
   OutboundLimiter,
+  ChatHub,
+  batchSteps,
+  cacheHitRatio,
+  describeRequest,
+  readBatchRecords,
+  redactValues,
+  withWebchatIdentities,
   OwnerRegistry,
   PermissionGuard,
   McpManager,
@@ -110,6 +117,7 @@ import {
 } from '@protea/core';
 import { authenticate, createControlApp, createWebSocketEndpoint, startControlServer, type AuthDeps, type ControlServer, type ProviderOps } from '@protea/control';
 import { ConsolePlugin } from '@protea/plugin-console';
+import { WebchatPlugin } from '@protea/plugin-webchat';
 import { CronPlugin } from '@protea/plugin-cron';
 import { PROVIDER_PROTOCOLS, type Level, type ModelRole, type ProviderProtocolName, type ProvidersResponse, type StatusResponse } from '@protea/protocol';
 import { acquireLock } from './lock.js';
@@ -191,6 +199,8 @@ export interface Daemon {
   forks: ForkManager;
   budget: BudgetTracker;
   console: ConsolePlugin;
+  webchat: WebchatPlugin;
+  chat: ChatHub;
   tools: ToolRegistry;
   mcp: McpManager;
   skills: SkillRegistry;
@@ -301,6 +311,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   } catch (err) {
     log.warn({ err: errorMessage(err) }, 'could not recover earlier console replies');
   }
+  // Before the split the web chat was the console plugin: its history keeps showing as the web chat.
+  outputs.ensureChatSplit();
 
   // Transcript and recovery.
   const discarded = (rec: Record<string, unknown>): void =>
@@ -322,7 +334,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   });
 
   // Capabilities.
-  const owner = new OwnerRegistry(config.owner.identities);
+  const ownerIdentities = (identities: typeof config.owner.identities): typeof config.owner.identities => {
+    const r = withWebchatIdentities(identities);
+    if (r.added) log.warn('owner.identities names console but not webchat; treating the same senders as the owner in the web chat. Add { plugin: webchat, senderKey: "*" } to config.yaml');
+    return r.identities;
+  };
+  const owner = new OwnerRegistry(ownerIdentities(config.owner.identities));
   if (!owner.hasAny()) log.warn('owner.identities is empty: no event can reach level 1');
   const gateway = new EventGateway({ store, owner, log: log.child({ component: 'events' }), clock });
   const pushInternal = (input: InternalEventInput) => gateway.pushInternal(input);
@@ -363,7 +380,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       log.error({ key: keyPath.join('.'), err: errorMessage(err) }, 'could not write config.yaml');
     }
   };
+  const chat = new ChatHub({ tools, bus, outputs, log: log.child({ component: 'chat' }), clock });
   const plugins = new PluginHost({
+    chat,
     store,
     bus,
     outputs,
@@ -396,8 +415,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     },
   });
   const consolePlugin = new ConsolePlugin();
+  const webchatPlugin = new WebchatPlugin();
   const builtinSettings = (id: string): PluginSettings => config.plugins[id] ?? { enabled: true, config: {} };
   plugins.register(consolePlugin, builtinSettings('console').config, builtinSettings('console').enabled);
+  plugins.register(webchatPlugin, builtinSettings('webchat').config, builtinSettings('webchat').enabled);
   plugins.register(new CronPlugin(), builtinSettings('cron').config, builtinSettings('cron').enabled);
   await plugins.rescan(settingsOf);
 
@@ -533,6 +554,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     pushInternal,
   });
   dispatcher.setLimiter((def, use) => outbound.check(def, use));
+  // Tool inputs and results can carry what the model is never shown: keep it off the run stream too.
+  dispatcher.setTrace((t) => bus.emit('tool.call', redactValues(t, secrets)));
+  let lastMainUsage: { inputTokens: number; cacheReadTokens: number; cacheWriteTokens: number } | null = null;
+  bus.on('usage.recorded', (u) => {
+    if (u.role === 'main') lastMainUsage = u;
+  });
   const toolStats = new ToolStatsRepo(db);
   let metrics: Metrics | null = null;
   dispatcher.observe((name, ms, failed) => {
@@ -644,6 +671,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       scheduler: { paused: scheduler.paused, cooldowns: scheduler.cooldowns() },
       forks: forks.list(),
       budget: budget.status(),
+      chat: { platforms: chat.list(), ...(chat.lastPlatform ? { last: chat.lastPlatform } : {}) },
     };
   };
   for (const spec of kernelTools({ store, status })) tools.register('core', spec);
@@ -685,6 +713,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       pending: store.pendingCounts(),
       budget: budget.remainingPercent(),
       forks: forks.activeCount(),
+      ...(chat.lastPlatform ? { lastChat: chat.lastPlatform } : {}),
     }),
     pushInternal,
     board,
@@ -859,7 +888,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     const prev = config;
     if (JSON.stringify(prev) === JSON.stringify(next)) return;
     config = next;
-    owner.update(next.owner.identities);
+    owner.update(ownerIdentities(next.owner.identities));
     policy.update(next.permissions);
     budget.updateSettings(next.budget);
     segments.refresh();
@@ -1125,6 +1154,21 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     bus,
     store,
     chat: outputs,
+    batchSteps: (id) => redactValues(batchSteps(readBatchRecords(path.join(dataDir, 'sessions'), id), outputs.forBatch(id)), secrets),
+    sessionContext: (id, page) => {
+      const req = id === 'main' ? main.previewRequest() : forks.previewRequest(id);
+      if (!req) return undefined;
+      const lim = limits();
+      return redactValues(
+        describeRequest(id, req, {
+          model: provider.modelFor(req.role),
+          ownerOf: (name) => tools.get(name)?.owner,
+          ...page,
+          ...(id === 'main' ? { limits: { softTokens: lim.soft, hardTokens: lim.hard }, cacheHitRatio: lastMainUsage ? cacheHitRatio(lastMainUsage) : null } : {}),
+        }),
+        secrets,
+      );
+    },
     log: log.child({ component: 'control' }),
     transcript: () => main.currentTranscript,
     handoff: (reason) => main.requestHandoff(reason),
@@ -1158,6 +1202,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         ...(req.trigger !== undefined ? { trigger: req.trigger } : {}),
         ...(req.tags !== undefined ? { tags: req.tags } : {}),
       }),
+    pushChat: (req, senderKey) => webchatPlugin.receive(req.text, { senderKey, ...(req.trigger ? { trigger: req.trigger } : {}) }),
   });
   let server: ControlServer;
   try {
@@ -1190,6 +1235,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     text: `Protea ${VERSION} started (run ${runId}); ${waiting} event(s) were waiting${main.needsResume() ? ' and an interrupted batch is resuming' : ''}.`,
   });
   scheduler.start();
+  // The old conversation shows a reply tool that no longer exists; start the first one after the split without those examples.
+  if (main.currentTranscript.messages.some((m) => m.role === 'assistant' && m.content.some((b) => b.type === 'tool_use' && b['name'] === 'con_send'))) {
+    log.info('compacting the conversation once: it still uses the removed con_send tool');
+    void main.requestHandoff('the reply tool changed to chat_send').catch((err: unknown) => log.warn({ err: errorMessage(err) }, 'could not compact the conversation after the chat split'));
+  }
   forks.recover();
   forks.start();
   dream.start();
@@ -1309,6 +1359,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     forks,
     budget,
     console: consolePlugin,
+    webchat: webchatPlugin,
+    chat,
     tools,
     mcp,
     skills,
