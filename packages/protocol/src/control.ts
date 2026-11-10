@@ -25,6 +25,8 @@ export interface PushEventResponse {
 /** POST /api/chat/messages: the owner writes in the web chat. */
 export interface ChatMessageRequest {
   text: string;
+  /** Images stored with POST /api/blobs. */
+  images?: BlobImageRef[];
   /** `interrupt` stops what is running and handles this first. */
   trigger?: 'flush' | 'interrupt';
 }
@@ -54,6 +56,8 @@ export interface ChatItem {
   state?: EventState;
   /** owner: who sent it (`console:<user>`, `api:admin`). */
   sender?: string;
+  /** owner: the images sent with it. */
+  images?: BlobImageRef[];
   /** reply / notice: the output channel (`chat`, `approvals`; `console` on replies from before the split). */
   channel?: string;
   batchId?: string;
@@ -143,6 +147,8 @@ export interface McpServerStatus {
   authorizeUrl?: string;
   /** Mean latency of the recent tool calls (ms). */
   avgLatencyMs?: number;
+  /** What the operator should know about its settings (the console keeps showing it). */
+  warnings?: string[];
 }
 
 export interface SkillInfo {
@@ -174,6 +180,44 @@ export interface ApprovalInfo {
   expiresAt: string;
   decidedAt?: string;
   decidedBy?: string;
+  /** The time-limited grant this approval created. */
+  grantId?: string;
+}
+
+export const PERMISSION_MODES = ['ask', 'auto', 'bypass', 'locked'] as const;
+/** Who clears a call whose policy is `ask`: the owner, a judge model, nobody needs to, or nothing may. */
+export type PermissionMode = (typeof PERMISSION_MODES)[number];
+
+export interface PermissionModeInfo {
+  /** The mode in effect now. */
+  mode: PermissionMode;
+  /** The mode in config.yaml, in effect when no temporary mode is set. */
+  baseline: PermissionMode;
+  override?: { mode: PermissionMode; until: string; by: string; setAt: string };
+  /** Auto mode stopped itself after too many holds; `mode` is `ask` until a mode is set again. */
+  paused?: { at: string; reason: string };
+  /** Reviews since the mode was last set. */
+  auto: { since: string; allowed: number; held: number; judge: { model: string; ready: boolean; problem?: string } };
+  /** The longest bypass; 0 means bypass is off. */
+  bypassMaxMs: number;
+}
+
+/** `POST /api/permissions/mode`. Without `forMs` the mode becomes the baseline (not allowed for bypass). */
+export interface SetPermissionModeRequest {
+  mode: PermissionMode;
+  forMs?: number;
+}
+
+/** A time-limited approval of a whole tool family (one plugin's tools, one MCP server's, or a single core tool). */
+export interface ApprovalGrantInfo {
+  id: string;
+  family: string;
+  approvalId: string;
+  decidedBy: string;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt?: string;
+  active: boolean;
 }
 
 /** Why a conversation was compacted. */
@@ -368,9 +412,15 @@ export interface ModelResponseTrace {
 }
 
 /** One tool call, once when it starts and once when it ends (also when it was refused). */
+/** A stored image shown by the console (GET /api/blobs/:handle). */
+export interface BlobImageRef {
+  handle: string;
+  mime: string;
+}
+
 export type ToolCallTrace = { sessionId: string; batchId: string; callId: string; name: string; at: string } & (
   | { phase: 'start'; input: unknown }
-  | { phase: 'end'; ms: number; isError: boolean; result: string; truncated: boolean }
+  | { phase: 'end'; ms: number; isError: boolean; result: string; truncated: boolean; images?: BlobImageRef[] }
 );
 
 export type TraceMessage =
@@ -383,7 +433,7 @@ export type TraceMessage =
 export type BatchTraceStep =
   | { kind: 'events'; at: string; cursors: number[] }
   | { kind: 'model'; at: string; round: number; content: ContentBlock[]; model?: string; stopReason?: string; usage?: ModelResponseTrace['usage'] }
-  | { kind: 'tool_result'; at: string; callId: string; name: string; text: string; isError: boolean }
+  | { kind: 'tool_result'; at: string; callId: string; name: string; text: string; isError: boolean; images?: BlobImageRef[] }
   | { kind: 'output'; at: string; plugin: string; channel?: string; text: string }
   | { kind: 'mark'; at: string; mark: string; detail: Record<string, unknown> };
 
@@ -427,7 +477,8 @@ export type StreamMessage =
   /** M4: the main session handed off to a new transcript. */
   | { topic: 'handoff'; data: { from: string; to: string; notes: string; dropped: number; kept: number } }
   | { topic: 'plugin'; data: PluginStatus }
-  | { topic: 'approval'; data: ApprovalInfo };
+  | { topic: 'approval'; data: ApprovalInfo }
+  | { topic: 'permission'; data: PermissionModeInfo };
 
 export type StreamTopic = StreamMessage['topic'];
 
@@ -471,7 +522,7 @@ export const WS_TOPICS = {
   phase: ['phase', 'batch.started', 'batch.extended', 'batch.ended'],
   scheduler: ['scheduler'],
   output: ['output'],
-  changes: ['fork', 'plugin', 'approval', 'mcp', 'skills', 'handoff', 'persona'],
+  changes: ['fork', 'plugin', 'approval', 'permission', 'mcp', 'skills', 'handoff', 'persona'],
   usage: ['usage'],
   logs: ['log'],
   /** The run stream: heavy, so only pages that show it subscribe. */

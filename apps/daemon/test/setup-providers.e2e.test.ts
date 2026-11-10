@@ -123,7 +123,7 @@ describe('first-run setup, accounts and provider profiles', () => {
     expect(saved.status).toBe(200);
     expect(saved.json.default).toBe('fake');
     expect(saved.json.ready).toBe(true);
-    expect(saved.json.profiles[0]).toMatchObject({ id: 'fake', roles: ['main', 'fork', 'cheap'], key: { required: true, set: true, source: 'file' }, endpoint: modelUrl, ready: true });
+    expect(saved.json.profiles[0]).toMatchObject({ id: 'fake', roles: ['main', 'fork', 'cheap', 'judge'], key: { required: true, set: true, source: 'file' }, endpoint: modelUrl, ready: true });
     expect(fs.readFileSync(path.join(dir, 'secrets', 'PROVIDER_FAKE_API_KEY'), 'utf8').trim()).toBe('sk-fake-123456');
     expect(fs.readFileSync(path.join(dir, 'config.yaml'), 'utf8')).not.toContain('sk-fake');
     expect(JSON.stringify(saved.json)).not.toContain('sk-fake');

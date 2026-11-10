@@ -2,16 +2,72 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "timeoutSec": { "type": "integer", "minimum": 1, "maximum": 3600, "default": 120, "description": "Default and maximum time per command; the whole process group is killed after it." },
-    "maxOutputKb": { "type": "integer", "minimum": 1, "maximum": 1024, "default": 64, "description": "Output returned to the model (stdout and stderr together); the middle of longer output is cut." },
-    "shell": { "type": "string", "default": "/bin/sh", "description": "Shell that runs the command with -c (e.g. /bin/bash)." },
-    "maxConcurrent": { "type": "integer", "minimum": 1, "maximum": 8, "default": 2 },
+    "backend": {
+      "type": "string",
+      "enum": [
+        "sandbox",
+        "local"
+      ],
+      "default": "sandbox",
+      "description": "sandbox: the separate container. local: inside the daemon's container, without isolation."
+    },
+    "socket": {
+      "type": "string",
+      "default": "/run/protea-sandbox/agent.sock",
+      "description": "The sandbox agent's unix socket."
+    },
+    "timeoutSec": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3600,
+      "default": 120,
+      "description": "Default and maximum time per command; the whole process group is killed after it."
+    },
+    "maxOutputKb": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1024,
+      "default": 64,
+      "description": "Output returned to the model (stdout and stderr together); the middle of longer output is cut."
+    },
+    "shell": {
+      "type": "string",
+      "description": "Shell that runs the command with -c (backend local only; default /bin/sh)."
+    },
+    "maxConcurrent": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 8,
+      "default": 2
+    },
     "env": {
       "type": "object",
-      "additionalProperties": { "type": "string" },
+      "additionalProperties": {
+        "type": "string"
+      },
       "default": {},
       "x-hot": true,
       "description": "Extra environment variables for commands (plain values; secrets are never passed)."
+    },
+    "jobs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64,
+          "default": 8,
+          "description": "Background jobs running at once."
+        },
+        "logMb": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024,
+          "default": 16,
+          "description": "Log kept per job; older output is dropped."
+        }
+      }
     }
   }
 }

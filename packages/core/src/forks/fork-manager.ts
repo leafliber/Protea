@@ -29,6 +29,7 @@ import type { ToolRegistry } from '../tools/registry.js';
 import type { ToolDef } from '../tools/types.js';
 import { sleep } from '../util/abort.js';
 import { errorMessage } from '../util/errors.js';
+import { globToRegExp } from '../util/glob.js';
 import { newId } from '../util/ids.js';
 import type { Clock } from '../util/time.js';
 
@@ -301,6 +302,11 @@ export class ForkManager {
     if (f) return this.info(f);
     const cp = this.o.sessions.get(id)?.kind === 'fork' ? this.readCheckpoint(id) : undefined;
     return cp ? this.info({ cp }) : undefined;
+  }
+
+  /** The batch that started a running fork, if a batch did. */
+  parentBatch(id: string): string | undefined {
+    return this.forks.get(id)?.cp.parentBatch;
   }
 
   /** Unfinished forks (oldest first), then the most recently ended ones. */
@@ -644,12 +650,20 @@ export class ForkManager {
   private resolveTools(requested?: string[]): string[] {
     const candidates = this.o.tools.list().filter((d) => !forkExcluded(d));
     if (requested === undefined) return candidates.filter((d) => !d.flags?.sideEffect && !d.flags?.forkOptIn).map((d) => d.name);
-    const names = new Set(candidates.map((d) => d.name));
-    const unknown = requested.filter((n) => !names.has(n));
+    const names = candidates.map((d) => d.name);
+    const chosen = new Set<string>();
+    const unknown: string[] = [];
+    for (const r of requested) {
+      // A pattern is as explicit as a name, so it can reach tools with side effects (but only through this list).
+      const re = /[*?]/.test(r) ? globToRegExp(r) : null;
+      const hits = re ? names.filter((n) => re.test(n)) : names.includes(r) ? [r] : [];
+      if (hits.length === 0) unknown.push(r);
+      for (const h of hits) chosen.add(h);
+    }
     if (unknown.length > 0) {
       throw new Error(`these tools are not available to forks: ${unknown.join(', ')}`);
     }
-    return [...new Set(requested)].sort();
+    return [...chosen].sort();
   }
 
   private firstMessage(cp: Checkpoint): string {

@@ -331,6 +331,26 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 
 未验证：真实模型的思考增量、真实 Telegram（T 系列由主人在自己环境里跑）。
 
+### 沙箱 shell、浏览器与视觉支持（2026-11-10）
+
+方案见 [08-sandbox-browser-vision.md](08-sandbox-browser-vision.md)，决策见 [ADR-0013](../20-decisions/ADR-0013-sandboxed-shell-and-in-container-browser.md)、[ADR-0014](../20-decisions/ADR-0014-images-as-blob-references.md)。
+- 持久 shell：独立的沙箱容器（`protea sandbox serve`，`@protea/sandbox`），`shell` 插件经 unix socket 调用；`sh_run` 状态延续，`sh_job_*` 后台任务与结束事件，`sh_reset`。
+- 浏览器：主容器里的 stdio MCP 服务器（Playwright MCP + Chromium），镜像目标 `browser`，`protea mcp preset browser`。
+- 视觉：blob 存储，图片以引用进入转录，入口是工具回执（内核、插件、MCP）、事件（Telegram、webchat）与 `view_image`，三种协议的适配，控制台显示。
+- 配套：时限授权（`/approve a12 1h`）、`fork_spawn` 的工具通配、`tool` 插件推事件、部署与 CI。
+
+未验证：真实模型下的使用与 DeepSeek 的图片格式（T12）。
+
+### 权限模式与 auto 判断模型（2026-11-10）
+
+决策见 [ADR-0015](../20-decisions/ADR-0015-permission-modes-and-auto-review.md)。
+
+- 四个模式：`ask`（默认）、`auto`、`bypass`（必须带时限）、`locked`；`/mode`、`protea mode`、控制台审批页、`POST /api/permissions/mode`。
+- 模型角色 `judge`（默认跟随主模型）；判断模型只看主人的话和工具调用，任何失败都转给主人，连续 3 次或一小时 20 次没放行后自动暂停。
+- 钉住：`permissions.tools` 里显式写的 `ask` 在 auto 和 bypass 下也问主人。
+
+未验证：真实模型下的判断质量（T13）。
+
 ## M7 · 扩展与生态（v1.x）· 状态：未开始
 
 拆成两段：M7a 收掉 M6 推迟的加固项并发布 v1.0；M7b 是生态扩展，每项独立，可无限期推迟（风险 R9）。验收标准是草案，开工前由主人确认。

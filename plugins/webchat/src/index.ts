@@ -5,6 +5,8 @@ import { CHAT_MESSAGE_EVENT, type ApprovalRequestParams, type ChatPlatformDecl, 
 export interface WebchatMessageOptions {
   senderKey: string;
   trigger?: 'flush' | 'interrupt';
+  /** Images stored with POST /api/blobs. */
+  blobs?: Array<{ handle: string; mime: string }>;
 }
 
 const PLATFORM: ChatPlatformDecl = { displayName: 'Web chat', markdown: 'basic', maxChars: 20_000 };
@@ -44,6 +46,7 @@ export class WebchatPlugin implements InprocPlugin {
       trigger: opts.trigger ?? 'flush',
       text,
       senderKey: opts.senderKey,
+      ...(opts.blobs?.length ? { blobs: opts.blobs } : {}),
     });
   }
 

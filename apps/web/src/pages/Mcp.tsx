@@ -121,7 +121,14 @@ export function Mcp() {
   const action = (id: string, a: string) => void act.run(() => post(`/api/mcp/servers/${enc(id)}/${a}`)).then(r.reload);
   return (
     <div className="page">
-      <PageActions>{canWrite && <Button kind="primary" onClick={() => setAdding((x) => !x)}>{adding ? '收起' : '添加服务器'}</Button>}</PageActions>
+      <PageActions>
+        {canWrite && !r.data?.servers.some((s) => s.id === 'browser') && (
+          <Button busy={act.busy} title="无头 Chromium，由助理调用；需要镜像目标 browser" onClick={() => void act.run(() => post('/api/mcp/presets/browser')).then(r.reload)}>
+            启用内置浏览器
+          </Button>
+        )}
+        {canWrite && <Button kind="primary" onClick={() => setAdding((x) => !x)}>{adding ? '收起' : '添加服务器'}</Button>}
+      </PageActions>
       {adding && (
         <Card title="添加 MCP 服务器">
           <AddServer
@@ -169,6 +176,11 @@ export function Mcp() {
           }
         >
           {m.error && <div className="banner banner-bad">{m.error}</div>}
+          {m.warnings?.map((w) => (
+            <div key={w} className="banner banner-warn">
+              {w}
+            </div>
+          ))}
           {m.authorizeUrl && (
             <div className="banner banner-warn">
               需要授权：<a href={m.authorizeUrl} target="_blank" rel="noopener noreferrer">打开授权页面</a>

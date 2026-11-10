@@ -31,9 +31,9 @@ describe('provider profiles', () => {
   it('fills a profile from its protocol defaults; OpenAI-style fork and cheap fall back to main', () => {
     const p = normalizeProviderProfile('deepseek', { protocol: 'openai-chat', baseUrl: 'https://api.deepseek.com/v1/', models: { main: 'deepseek-chat' } });
     expect(p).toMatchObject({ protocol: 'openai-chat', baseUrl: 'https://api.deepseek.com/v1', apiKeySecret: 'PROVIDER_DEEPSEEK_API_KEY', maxOutputTokens: 8192 });
-    expect(p.models).toEqual({ main: 'deepseek-chat', fork: 'deepseek-chat', cheap: 'deepseek-chat' });
+    expect(p.models).toEqual({ main: 'deepseek-chat', fork: 'deepseek-chat', cheap: 'deepseek-chat', judge: 'deepseek-chat' });
     const claude = normalizeProviderProfile('claude', { protocol: 'anthropic' });
-    expect(claude.models).toEqual({ main: 'claude-opus-5-5', fork: 'claude-sonnet-5-5', cheap: 'claude-haiku-5-5' });
+    expect(claude.models).toEqual({ main: 'claude-opus-5-5', fork: 'claude-sonnet-5-5', cheap: 'claude-haiku-5-5', judge: 'claude-opus-5-5' });
     expect(claude.anthropic.features).toBe('full');
     expect(providerKeySecretName('my-local')).toBe('PROVIDER_MY_LOCAL_API_KEY');
   });

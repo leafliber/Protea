@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 export type McpTransport = 'stdio' | 'streamable-http' | 'sse';
 export type McpTrust = 'low' | 'normal' | 'high';
 
@@ -30,6 +32,10 @@ export interface McpServerSettings {
   /** Globs over the server's own tool names; `deny` wins over `allow`. */
   tools: { allow?: string[]; deny?: string[] };
   toolTimeoutMs: number;
+  /** stdio: resident-memory limit of this server's process tree; pluginHost.limits.memoryMb otherwise. */
+  memoryMb?: number;
+  /** Directories offered as MCP roots, relative to the data directory; default `workspace`. */
+  roots?: string[];
   /** Text added to the system prefix as `env:mcp:<id>` (when to use this server). */
   envPrompt?: string;
   /** Replace a tool's description (the server's own text is used otherwise). */
@@ -142,6 +148,17 @@ export function normalizeMcpServer(id: string, raw: unknown): McpServerSettings 
     const t = raw['toolTimeoutMs'];
     if (typeof t !== 'number' || !(t > 0)) throw new Error(`${at}.toolTimeoutMs must be a positive number`);
     out.toolTimeoutMs = t;
+  }
+  if (raw['memoryMb'] !== undefined && raw['memoryMb'] !== null) {
+    const m = raw['memoryMb'];
+    if (typeof m !== 'number' || !(m > 0)) throw new Error(`${at}.memoryMb must be a positive number`);
+    out.memoryMb = m;
+  }
+  if (raw['roots'] !== undefined && raw['roots'] !== null) {
+    const roots = stringList(raw['roots'], `${at}.roots`);
+    if (roots.length === 0) throw new Error(`${at}.roots must name at least one directory`);
+    for (const r of roots) if (path.isAbsolute(r) || r.split('/').includes('..')) throw new Error(`${at}.roots must stay inside the data directory (got ${r})`);
+    out.roots = roots;
   }
   if (raw['envPrompt'] !== undefined && raw['envPrompt'] !== null) {
     if (typeof raw['envPrompt'] !== 'string') throw new Error(`${at}.envPrompt must be a string`);

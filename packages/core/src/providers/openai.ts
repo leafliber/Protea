@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { isTextBlock, isToolResultBlock, isToolUseBlock, type ContentBlock, type Effort, type ModelRole } from '@protea/protocol';
+import { isImageBlock, isTextBlock, isToolResultBlock, isToolUseBlock, type ContentBlock, type Effort, type ImageBlock, type ModelRole } from '@protea/protocol';
 import type { ProviderProfile } from '../config/types.js';
 import { estimateTokens } from '../util/tokens.js';
 import { estimateRequestTokens } from './tokens.js';
@@ -35,6 +35,41 @@ function userText(content: ContentBlock[]): string {
     .filter(isTextBlock)
     .map((b) => b.text)
     .join('\n\n');
+}
+
+/** A resolved image as a data URL; references never get this far (providers/images.ts). */
+function dataUrl(b: ImageBlock): string | null {
+  return b.source.type === 'base64' ? `data:${b.source.media_type};base64,${b.source.data}` : null;
+}
+
+type UserPart = { kind: 'text'; text: string } | { kind: 'image'; url: string };
+
+/**
+ * What a user message says beyond its tool results, in order. Tool messages can only hold text,
+ * so images a tool returned come first here, each group labelled with its call.
+ */
+function userParts(content: ContentBlock[]): UserPart[] {
+  const parts: UserPart[] = [];
+  for (const r of content.filter(isToolResultBlock)) {
+    if (typeof r.content === 'string') continue;
+    const urls = r.content.filter(isImageBlock).map(dataUrl).filter((u): u is string => u !== null);
+    if (urls.length === 0) continue;
+    parts.push({ kind: 'text', text: `<tool_images call_id="${r.tool_use_id}" count="${urls.length}"/>` });
+    for (const url of urls) parts.push({ kind: 'image', url });
+  }
+  for (const b of content) {
+    if (isTextBlock(b)) parts.push({ kind: 'text', text: b.text });
+    else if (isImageBlock(b)) {
+      const url = dataUrl(b);
+      if (url) parts.push({ kind: 'image', url });
+    }
+  }
+  return parts;
+}
+
+/** A tool result's text; its images travel in the user message after it. */
+function toolResultText(content: unknown): string {
+  return resultText(Array.isArray(content) ? (content as ContentBlock[]).filter((b) => !isImageBlock(b)) : content);
 }
 
 function callId(): string {
@@ -113,8 +148,11 @@ abstract class OpenAiStyleProvider implements Provider {
   abstract generate(req: ProviderRequest, opts: GenerateOptions): Promise<ProviderResponse>;
 }
 
+type ChatContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
+
 type ChatMessage =
-  | { role: 'system' | 'user'; content: string }
+  | { role: 'system'; content: string }
+  | { role: 'user'; content: string | ChatContentPart[] }
   | { role: 'assistant'; content: string | null; tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> }
   | { role: 'tool'; tool_call_id: string; content: string };
 
@@ -126,10 +164,15 @@ export function toChatMessages(req: ProviderRequest): ChatMessage[] {
   for (const m of req.messages) {
     if (m.role === 'user') {
       for (const r of m.content.filter(isToolResultBlock)) {
-        out.push({ role: 'tool', tool_call_id: r.tool_use_id, content: `${r.is_error ? 'Error: ' : ''}${resultText(r.content)}` });
+        out.push({ role: 'tool', tool_call_id: r.tool_use_id, content: `${r.is_error ? 'Error: ' : ''}${toolResultText(r.content)}` });
       }
-      const text = userText(m.content);
-      if (text) out.push({ role: 'user', content: text });
+      const parts = userParts(m.content);
+      if (parts.some((p) => p.kind === 'image')) {
+        out.push({ role: 'user', content: parts.map((p): ChatContentPart => (p.kind === 'text' ? { type: 'text', text: p.text } : { type: 'image_url', image_url: { url: p.url } })) });
+      } else {
+        const text = userText(m.content);
+        if (text) out.push({ role: 'user', content: text });
+      }
     } else {
       const text = assistantText(m.content);
       const calls = m.content.filter(isToolUseBlock).map((b) => ({ id: b.id, type: 'function' as const, function: { name: b.name, arguments: JSON.stringify(b.input ?? {}) } }));
@@ -245,8 +288,10 @@ export class OpenAiChatProvider extends OpenAiStyleProvider {
   }
 }
 
+type ResponsesContentPart = { type: 'input_text'; text: string } | { type: 'input_image'; image_url: string };
+
 type ResponsesItem =
-  | { role: 'user' | 'assistant'; content: string }
+  | { role: 'user' | 'assistant'; content: string | ResponsesContentPart[] }
   | { type: 'function_call'; call_id: string; name: string; arguments: string }
   | { type: 'function_call_output'; call_id: string; output: string };
 
@@ -255,9 +300,14 @@ export function toResponsesInput(req: ProviderRequest): ResponsesItem[] {
   const out: ResponsesItem[] = [];
   for (const m of req.messages) {
     if (m.role === 'user') {
-      for (const r of m.content.filter(isToolResultBlock)) out.push({ type: 'function_call_output', call_id: r.tool_use_id, output: `${r.is_error ? 'Error: ' : ''}${resultText(r.content)}` });
-      const text = userText(m.content);
-      if (text) out.push({ role: 'user', content: text });
+      for (const r of m.content.filter(isToolResultBlock)) out.push({ type: 'function_call_output', call_id: r.tool_use_id, output: `${r.is_error ? 'Error: ' : ''}${toolResultText(r.content)}` });
+      const parts = userParts(m.content);
+      if (parts.some((p) => p.kind === 'image')) {
+        out.push({ role: 'user', content: parts.map((p): ResponsesContentPart => (p.kind === 'text' ? { type: 'input_text', text: p.text } : { type: 'input_image', image_url: p.url })) });
+      } else {
+        const text = userText(m.content);
+        if (text) out.push({ role: 'user', content: text });
+      }
     } else {
       const text = assistantText(m.content);
       if (text) out.push({ role: 'assistant', content: text });

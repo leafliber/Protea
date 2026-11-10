@@ -10,6 +10,7 @@ import type {
   ModelDeltaTrace,
   ModelRequestTrace,
   ModelResponseTrace,
+  PermissionModeInfo,
   PluginStatus,
   RunPhase,
   SchedulerAction,
@@ -49,6 +50,7 @@ export interface BusTopics {
   'fork.changed': ForkInfo;
   'plugin.changed': PluginStatus;
   'approval.changed': ApprovalInfo;
+  'permission.mode': PermissionModeInfo;
   'mcp.changed': McpServerStatus;
   /** The Skills catalog changed (listed names). */
   'skills.changed': { names: string[] };

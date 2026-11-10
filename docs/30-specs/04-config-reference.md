@@ -59,7 +59,7 @@ providers:                             # 模型供应商（12-model-providers.md
                                        # 推荐在控制台「模型」页或用 protea providers set 管理
   default: null                        # 各角色默认用的档案 id；null = 还没配置（守护进程照常启动，/readyz 报告原因）。
                                        # "echo" 是内置的离线开发档案，不用写在 profiles 里
-  roles: {}                            # 按角色换档案，如 { cheap: local }（角色：main、fork、cheap）
+  roles: {}                            # 按角色换档案，如 { cheap: local }（角色：main、fork、cheap、judge）
   profiles:
     claude:                            # id：小写字母、数字和 -，以字母开头，最长 32
       label: null                      # 控制台里显示的名字；null 显示 id
@@ -69,10 +69,12 @@ providers:                             # 模型供应商（12-model-providers.md
       apiKeySecret: PROVIDER_CLAUDE_API_KEY   # 默认 PROVIDER_<ID>_API_KEY；null = 接口不要密钥（本机模型服务）
       models: { main: claude-opus-5-5, fork: claude-sonnet-5-5, cheap: claude-haiku-5-5 }
                                        # anthropic 的默认值如上；其他协议没有默认，fork 与 cheap 缺省时用 main 的模型
+                                       # judge（auto 权限模式的判断模型）缺省时跟随 main
       effort:
         main: { 0: high, 1: medium, 2: high, 3: high, 4: high }   # 按批等级
         fork: high
         cheap: low
+        judge: medium
       maxOutputTokens: 64000           # anthropic 默认 64000，其他协议 8192
       contextWindow: null              # 输入上限；null：Claude 模型按型号（1M 或 200k），其他 128000
       timeoutMs: 600000
@@ -141,6 +143,20 @@ permissions:
   tools:                               # 精确名或 glob → allow | ask | deny；优先于插件清单的 sideEffectTools
     tg_send_chat: ask
   approvalTtlMs: 86400000              # 审批请求与审批的有效期（24 h）
+  grantMaxMs: 28800000                 # 时限授权与 bypass 模式的上限（8 h）；0 同时关闭两者
+  mode: ask                            # 长期的权限模式：ask | auto | locked（bypass 只能临时，见 protea mode）
+  auto:                                # auto 模式
+    environment: ""                    # 三段常驻规则，自然语言：这个助理是什么、用什么
+    allow: ""                          # 判断模型可以放行的操作
+    ask: ""                            # 必须问主人的操作，优先于 allow
+    timeoutMs: 30000                   # 一次判断的时限，超时按 ask 处理
+    pauseAfterConsecutive: 3           # 连续这么多次没放行，auto 暂停
+    pauseAfterPerHour: 20              # 一小时内这么多次没放行，auto 暂停
+
+vision:                                # 对话里的图片（ADR-0014）；模型能否看图由供应商档案的 vision 决定
+  maxImageKb: 1536                     # 单张图片的上限，超过的写成占位文字
+  maxImagesPerMessage: 4               # 一个工具回执或一个事件最多带几张
+  blobRetentionDays: 30                # 保留期，过期后引用显示"图片已不再保存"；0 一直保留
 
 mcp:                                   # MCP 服务器（docs/10-architecture/09-mcp-integration.md §2）；监督参数沿用 pluginHost
   servers:
@@ -153,7 +169,9 @@ mcp:                                   # MCP 服务器（docs/10-architecture/09
       url: https://api.githubcopilot.com/mcp/
       auth: { type: oauth }            # 或 { type: bearer, token: "${secret:GITHUB_MCP_TOKEN}" }
   # 每个服务器还可设：enabled、transport（stdio | streamable-http | sse）、env、cwd、headers、
-  # tools: { allow, deny }、toolTimeoutMs（60000）、envPrompt、descriptionOverrides、subscribe
+  # tools: { allow, deny }、toolTimeoutMs（60000）、envPrompt、descriptionOverrides、subscribe、
+  # memoryMb（这个服务器进程树的内存上限，默认用 pluginHost.limits.memoryMb）、
+  # roots（声明给服务器的根目录，相对数据目录，默认 [workspace]）
   pingIntervalMs: 30000                # 连续 3 次 ping 失败 → 重启；0 关闭
   listChangedDebounceMs: 500
 
@@ -210,18 +228,21 @@ observability:
                                        # full 还录请求（已脱敏，但每条都含整个上下文，体积大）
 ```
 
-内置插件 `shell`（M6，默认不启用）的配置：
+内置插件 `shell`（默认不启用，[ADR-0013](../20-decisions/ADR-0013-sandboxed-shell-and-in-container-browser.md)）的配置：
 
 ```yaml
 plugins:
   shell:
     enabled: true
     config:
+      backend: sandbox                 # sandbox：独立的沙箱容器；local：主容器内，没有隔离，只有 sh_run
+      socket: /run/protea-sandbox/agent.sock
       timeoutSec: 120                  # 每条命令的默认与最长时间，超时杀掉整个进程组
       maxOutputKb: 64                  # 返回给模型的输出（stdout+stderr），过长时截掉中间
-      shell: /bin/sh                   # 用 -c 执行命令的 shell，例如 /bin/bash
+      shell: /bin/sh                   # 仅 local：用 -c 执行命令的 shell
       maxConcurrent: 2
       env: {}                          # 额外的环境变量（明文值；名字像秘密的会被丢弃）
+      jobs: { max: 8, logMb: 16 }      # 同时运行的后台任务数；每个任务保留的日志
 ```
 
 ## 2. 计划中的键（后续里程碑）

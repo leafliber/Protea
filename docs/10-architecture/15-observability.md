@@ -34,7 +34,7 @@
 | `event promoted` | trace | `cursor, trigger, state` |
 | `batch started` / `batch extended` | trace | `batch, batchLevel, reason, events/added, cursors`（前 20 个） |
 | `batch ended` | main-session | `batch, endReason, rounds, batchLevel` |
-| `model call` | model | 所有角色（main、fork、cheap/交接笔记）：`role, model, requested`（回退时）`, ms, stop, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cacheHit, costUsd, messages, tools` |
+| `model call` | model | 所有角色（main、fork、cheap/交接笔记、judge）：`role, model, requested`（回退时）`, ms, stop, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cacheHit, costUsd, messages, tools` |
 | `model call failed` / `model call cancelled` | model | `role, model, ms, kind, err`（取消是 debug） |
 | `tool done` | tools | `tool, callId, ms, failed, resultChars` |
 | `tool not run` / `tool held by the permission policy` | tools | `tool, callId, reason` |

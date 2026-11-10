@@ -33,6 +33,7 @@ type ModelRole = 'main' | 'fork' | 'cheap';
 | `main` | `claude-opus-5-5` | 主会话 | 自适应思考；effort 按批等级：L1 `medium`（延迟优先）、L2 `high`、L3 `high` |
 | `fork` | `claude-sonnet-5-5` | 后台 Fork、例程 | 自适应；effort `high` |
 | `cheap` | `claude-haiku-5-5` | 交接笔记、候选事件压缩、分类 | effort `low`/`medium` |
+| `judge` | 跟随主模型 | auto 权限模式下审核工具调用（[ADR-0015](../20-decisions/ADR-0015-permission-modes-and-auto-review.md)） | effort `medium` |
 
 每个档案有自己的 `models.<role>` 与 `effort`；角色还可以整体换到另一个档案（`providers.roles`），例如主会话用 Claude、轻量任务用本机模型。主人想要最强模型时把 Claude 档案的 `main` 换成 `claude-fable-5-1`（注意其定价与"思考始终开启"的差异）。
 
@@ -51,12 +52,15 @@ OpenAI 风格协议的映射（`toChatMessages` / `toResponsesInput`）：
 
 - 系统分段拼成一条 system 消息（Responses 为 `instructions`）。
 - `tool_result` 块变成 `role: tool` 消息（Responses 为 `function_call_output`），排在同一条用户消息的文本前面；内容是纯文本，出错的结果前缀 `Error: `。
+- 图片：用户消息变成分段内容（`image_url` 的 data URL，Responses 为 `input_image`）。tool 消息只能是文本，所以回执里的图片放进随后的用户消息，每组前面有一行 `<tool_images call_id="…" count="N"/>`。没有图片时消息形态不变。
 - 助手的 `tool_use` 变成 `tool_calls`（Responses 为 `function_call`），参数是 JSON 文本；`thinking`、`redacted_thinking`、服务端工具块不发送；Claude 的 `compaction` 块转成一段"之前对话的摘要"文本。
 - 回复里的文本与工具调用转回规范块；参数不是 JSON 对象时变成 `{ _raw }`，由执行前的 schema 校验拒绝（模型看到错误后重试）。
 - 停止原因：`tool_calls` → `tool_use`、`length` / `max_output_tokens` → `max_tokens`、`content_filter` → `refusal`，其余 `end_turn`。
 - 用量：`prompt_tokens` 含缓存部分，所以输入 = prompt − cached，缓存读 = cached；服务端不报用量时按长度估算（预算与交接仍有依据）。费用只在档案配置了 `pricing` 时计算。
 - 不声明工具搜索（`supportsToolSearch` 为假，所有工具直接发送）、不做精确计数（交接按估算）、`req.compaction` 被忽略。上下文窗口取 `contextWindow`，默认 128000。
 - 错误：401/403 → `config`，404 → `fatal`，429 与 5xx/408/409、连接错误、超时 → `retryable`（先按 `maxRetries` 退避重试，尊重 `Retry-After`），400/413/422 且消息像"超出上下文" → `overflow`。
+
+**视觉**（[ADR-0014](../20-decisions/ADR-0014-images-as-blob-references.md)）：档案的 `vision` 说明模型能否看图（布尔值或按角色；Anthropic 默认开，OpenAI 协议默认关）。转录只存 blob 引用，`ImageResolvingProvider` 是最内层的包装（脱敏 → 录制 → 解析图片 → 请求）：能看图的角色得到字节，其他角色得到一行占位文字，已过期的图片也是占位。同一段历史每次解析结果相同，前缀缓存不受影响。
 
 **预设**（`PROVIDER_PRESETS`）：Anthropic、OpenAI（Responses）、DeepSeek、通义千问（阿里云百炼兼容模式）、Kimi（Moonshot）、智谱 GLM、OpenRouter、Ollama（本机，无密钥）、Anthropic 兼容接口、自定义。预设只给协议与地址（Claude 另给模型）；地址是写作时各厂商文档的默认值，以厂商文档为准。其他厂商的模型名不预设（会过时），用"获取模型列表"（`GET {baseUrl}/models`）选。
 

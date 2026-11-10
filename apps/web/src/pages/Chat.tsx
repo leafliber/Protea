@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import type { ApprovalInfo, BatchEndReason, ChatBatch, ChatHistoryResponse, ChatItem, ChatMessageRequest, PushEventResponse, RunPhase, StatusResponse, WhoAmIResponse } from '@protea/protocol';
+import type { ApprovalInfo, BatchEndReason, BlobImageRef, ChatBatch, ChatHistoryResponse, ChatItem, ChatMessageRequest, PushEventResponse, RunPhase, StatusResponse, WhoAmIResponse } from '@protea/protocol';
 import { get, post, qs, useApi } from '../api';
+import { BlobImages, blobUrl, uploadImage } from '../images';
 import { Rich } from '../components/Rich';
 import { UserMenu } from '../components/UserMenu';
 import { IconAlert, IconArrowDown, IconCheck, IconConsole, IconCopy, IconRetry, IconSend } from '../components/icons';
@@ -120,11 +121,11 @@ function ApprovalCards() {
   const [error, setError] = useState<string | null>(null);
   const pending = r.data?.approvals?.filter((a) => a.state === 'pending') ?? [];
   if (!canWrite || pending.length === 0) return null;
-  const decide = async (id: string, decision: 'approve' | 'deny') => {
+  const decide = async (id: string, decision: 'approve' | 'deny', grantMs?: number) => {
     setBusy(id + decision);
     setError(null);
     try {
-      await post(`/api/approvals/${encodeURIComponent(id)}/decide`, { decision });
+      await post(`/api/approvals/${encodeURIComponent(id)}/decide`, { decision, ...(grantMs !== undefined ? { grantMs } : {}) });
       r.reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -144,6 +145,9 @@ function ApprovalCards() {
           <div className="approval-actions">
             <button type="button" className="btn btn-small" disabled={busy !== null} onClick={() => void decide(a.id, 'deny')}>
               拒绝
+            </button>
+            <button type="button" className="btn btn-small" disabled={busy !== null} title="批准这次，并在 1 小时内放行同一组工具" onClick={() => void decide(a.id, 'approve', 3_600_000)}>
+              批准 1 小时
             </button>
             <button type="button" className="btn btn-small btn-primary" disabled={busy !== null} onClick={() => void decide(a.id, 'approve')}>
               批准
@@ -225,7 +229,7 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
         const e = m.data;
         if (e.source !== PLATFORM || e.type !== 'chat.message') return;
         setItems((old) =>
-          merge(old, [{ key: `e${e.cursor}`, kind: 'owner', platform: PLATFORM, at: e.receivedAt, text: e.text, cursor: e.cursor, state: e.state, ...(e.senderKey ? { sender: e.senderKey } : {}), ...(e.batchId ? { batchId: e.batchId } : {}) }]),
+          merge(old, [{ key: `e${e.cursor}`, kind: 'owner', platform: PLATFORM, at: e.receivedAt, text: e.text, cursor: e.cursor, state: e.state, ...(e.senderKey ? { sender: e.senderKey } : {}), ...(e.batchId ? { batchId: e.batchId } : {}), ...(e.blobs?.length ? { images: e.blobs.map((b) => ({ handle: b.handle, mime: b.mime })) } : {}) }]),
         );
         break;
       }
@@ -310,15 +314,15 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
     return new Set(last.values());
   }, [items]);
 
-  const send = async (text: string, trigger?: ChatMessageRequest['trigger']): Promise<void> => {
-    const r = await post<PushEventResponse>('/api/chat/messages', { text, ...(trigger ? { trigger } : {}) });
+  const send = async (text: string, trigger?: ChatMessageRequest['trigger'], images: BlobImageRef[] = []): Promise<void> => {
+    const r = await post<PushEventResponse>('/api/chat/messages', { text, ...(trigger ? { trigger } : {}), ...(images.length > 0 ? { images } : {}) });
     stick.current = true;
     // The live stream often wins the race (a fast reply arrives before this response): never overwrite it.
     const key = `e${r.cursor}`;
     setItems((old) =>
       old.some((i) => i.key === key)
         ? old
-        : merge(old, [{ key, kind: 'owner', platform: PLATFORM, at: new Date().toISOString(), text, cursor: r.cursor, state: r.effectiveTrigger === 'store' ? 'archived' : 'pending', ...(username ? { sender: `console:${username}` } : {}) }]),
+        : merge(old, [{ key, kind: 'owner', platform: PLATFORM, at: new Date().toISOString(), text, cursor: r.cursor, state: r.effectiveTrigger === 'store' ? 'archived' : 'pending', ...(username ? { sender: `console:${username}` } : {}), ...(images.length > 0 ? { images } : {}) }]),
     );
   };
 
@@ -374,7 +378,10 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
     rows.push(
       <div key={i.key} className={cx('cm', 'cm-out', first && 'cm-first', last && 'cm-last')}>
         <div className="cm-main">
-          <div className="cm-bubble">{i.text}</div>
+          <div className="cm-bubble">
+            <BlobImages images={i.images} />
+            {i.text}
+          </div>
           {(last || oc) && (
             <div className="cm-meta">
               {other && <span>{other} 发送 ·</span>}
@@ -389,7 +396,7 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
                 {oc.detail && <span className="cm-outcome-detail">{oc.detail}</span>}
               </span>
               {oc.retry && canWrite && (
-                <button type="button" className="cm-link" onClick={() => void send(i.text).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))}>
+                <button type="button" className="cm-link" onClick={() => void send(i.text, undefined, i.images).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))}>
                   <IconRetry size={13} /> 重新发送
                 </button>
               )}
@@ -520,10 +527,16 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
   );
 }
 
+/** vision.maxImagesPerMessage's default; the server drops any beyond its own limit. */
+const MAX_IMAGES = 4;
+
 const coarse = typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches;
 
-function Composer({ busy, draft, onDraftUsed, onSend }: { busy: boolean; draft: string; onDraftUsed: () => void; onSend: (text: string, trigger?: ChatMessageRequest['trigger']) => Promise<void> }) {
+function Composer({ busy, draft, onDraftUsed, onSend }: { busy: boolean; draft: string; onDraftUsed: () => void; onSend: (text: string, trigger?: ChatMessageRequest['trigger'], images?: BlobImageRef[]) => Promise<void> }) {
   const [text, setText] = useState('');
+  const [images, setImages] = useState<BlobImageRef[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const picker = useRef<HTMLInputElement>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -542,14 +555,35 @@ function Composer({ busy, draft, onDraftUsed, onSend }: { busy: boolean; draft: 
     el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
   }, [text]);
 
+  const attach = async (files: Blob[]) => {
+    const room = MAX_IMAGES - images.length;
+    if (files.length === 0) return;
+    if (files.length > room) setError(`一条消息最多 ${MAX_IMAGES} 张图片`);
+    else setError(null);
+    setUploading(true);
+    try {
+      for (const f of files.slice(0, room)) {
+        const ref = await uploadImage(f);
+        setImages((old) => (old.some((i) => i.handle === ref.handle) ? old : [...old, ref]));
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const canSend = (text.trim() !== '' || images.length > 0) && !sending && !uploading;
+
   const submit = async (trigger?: ChatMessageRequest['trigger']) => {
     const body = text.trim();
-    if (!body || sending) return;
+    if (!canSend) return;
     setSending(true);
     setError(null);
     try {
-      await onSend(body, trigger);
+      await onSend(body, trigger, images);
       setText('');
+      setImages([]);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -566,9 +600,27 @@ function Composer({ busy, draft, onDraftUsed, onSend }: { busy: boolean; draft: 
         void submit();
       }}
     >
+      {images.length > 0 && (
+        <div className="composer-images">
+          {images.map((i) => (
+            <span key={i.handle} className="composer-image">
+              <img src={blobUrl(i.handle)} alt="待发送的图片" />
+              <button type="button" aria-label="移除图片" onClick={() => setImages((old) => old.filter((x) => x.handle !== i.handle))}>
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <textarea
         ref={ref}
         rows={1}
+        onPaste={(e) => {
+          const files = [...e.clipboardData.files].filter((f) => f.type.startsWith('image/'));
+          if (files.length === 0) return;
+          e.preventDefault();
+          void attach(files);
+        }}
         autoFocus={!coarse}
         aria-label="消息"
         placeholder="给 Protea 发消息"
@@ -582,14 +634,28 @@ function Composer({ busy, draft, onDraftUsed, onSend }: { busy: boolean; draft: 
           }
         }}
       />
+      <input
+        ref={picker}
+        type="file"
+        accept="image/*"
+        multiple
+        hidden
+        onChange={(e) => {
+          void attach([...(e.target.files ?? [])]);
+          e.target.value = '';
+        }}
+      />
       <div className="composer-bar">
+        <button type="button" className="composer-attach" disabled={uploading || images.length >= MAX_IMAGES} title="添加图片" aria-label="添加图片" onClick={() => picker.current?.click()}>
+          {uploading ? '上传中…' : '图片'}
+        </button>
         <span className="composer-hint">{error ? <span className="error-text">{error}</span> : coarse ? '' : 'Enter 发送，Shift + Enter 换行'}</span>
         {busy && (
-          <button type="button" className="composer-interrupt" disabled={!text.trim() || sending} title="停下正在进行的回答，先处理这条" onClick={() => void submit('interrupt')}>
+          <button type="button" className="composer-interrupt" disabled={!canSend} title="停下正在进行的回答，先处理这条" onClick={() => void submit('interrupt')}>
             打断并发送
           </button>
         )}
-        <button type="submit" className="send-btn" disabled={!text.trim() || sending} aria-label="发送" title="发送">
+        <button type="submit" className="send-btn" disabled={!canSend} aria-label="发送" title="发送">
           <IconSend size={18} />
         </button>
       </div>

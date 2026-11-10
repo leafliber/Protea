@@ -27,6 +27,9 @@
       "@protea/plugin-sdk": [
         "./packages/plugin-sdk/src/index.ts"
       ],
+      "@protea/sandbox": [
+        "./packages/sandbox/src/index.ts"
+      ],
       "@protea/plugin-sdk/testing": [
         "./packages/plugin-sdk/src/testing.ts"
       ]

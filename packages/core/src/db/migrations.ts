@@ -245,4 +245,32 @@ DELETE FROM memory_files;
 CREATE VIRTUAL TABLE memory_fts USING fts5(path UNINDEXED, summary, keywords, body, body_text UNINDEXED, tokenize = 'unicode61');
 `,
   },
+  {
+    version: 8,
+    name: 'blobs-and-grants',
+    sql: `
+CREATE TABLE blobs (
+  handle      TEXT PRIMARY KEY,
+  mime        TEXT NOT NULL,
+  size        INTEGER NOT NULL,
+  source      TEXT,
+  created_at  TEXT NOT NULL,
+  created_ms  INTEGER NOT NULL
+);
+CREATE INDEX ix_blobs_created ON blobs(created_ms);
+
+CREATE TABLE approval_grants (
+  seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+  id          TEXT NOT NULL UNIQUE,
+  family      TEXT NOT NULL,
+  approval_id TEXT NOT NULL,
+  decided_by  TEXT NOT NULL,
+  created_at  TEXT NOT NULL,
+  expires_at  TEXT NOT NULL,
+  expires_ms  INTEGER NOT NULL,
+  revoked_at  TEXT
+);
+CREATE INDEX ix_grants_family ON approval_grants(family, expires_ms);
+`,
+  },
 ];

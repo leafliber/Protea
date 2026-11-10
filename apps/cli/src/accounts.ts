@@ -7,7 +7,7 @@ import type { Flags } from './ops.js';
 
 const str = (f: Flags, k: string): string | undefined => (typeof f[k] === 'string' ? (f[k] as string) : undefined);
 const enc = encodeURIComponent;
-const ROLES: ModelRole[] = ['main', 'fork', 'cheap'];
+const ROLES: ModelRole[] = ['main', 'fork', 'cheap', 'judge'];
 
 function baseUrl(f: Flags, env = process.env): string {
   return (str(f, 'url') ?? env['PROTEA_URL'] ?? 'http://127.0.0.1:7788').replace(/\/$/, '');
@@ -23,7 +23,7 @@ function setupCode(f: Flags, env = process.env): string | null {
 
 function printProfile(p: ProviderProfileInfo, view: ProvidersResponse): void {
   const m = p.profile.models;
-  const models = m.main === m.fork && m.main === m.cheap ? m.main : `main ${m.main} · fork ${m.fork} · cheap ${m.cheap}`;
+  const models = m.main === m.fork && m.main === m.cheap && m.main === m.judge ? m.main : `main ${m.main} · fork ${m.fork} · cheap ${m.cheap} · judge ${m.judge}`;
   const key = !p.key.required ? dim('no key') : p.key.set ? `${p.profile.apiKeySecret} ${dim(`(${p.key.source})`)}` : yellow(`${p.profile.apiKeySecret} not set`);
   console.log(`${bold(p.id)}${view.default === p.id ? green(' default') : ''} ${p.ready ? green('ready') : red('not ready')}  ${dim(p.profile.protocol)}`);
   if (p.endpoint) console.log(`  endpoint ${p.endpoint}`);
@@ -160,7 +160,7 @@ export async function accountsCommand(cmd: string, sub: string | undefined, args
       if (sub === 'role') {
         const role = args[0] as ModelRole;
         const target = args[1];
-        if (!ROLES.includes(role) || !target) throw new Error('providers role main|fork|cheap <id|default>');
+        if (!ROLES.includes(role) || !target) throw new Error('providers role main|fork|cheap|judge <id|default>');
         await api(o, 'PATCH', '/api/providers', { roles: { [role]: target === 'default' ? null : target } });
         console.log(`${role} → ${target}`);
         return 0;

@@ -1,6 +1,6 @@
 # Protea 设计文档
 
-> 状态：Draft v0.8（M0–M6 已实现，含 2026-11-05/06 的账号、供应商档案与对话窗口；架构文档已随实现转为 Accepted）· 更新：2026-11-08 · 语言：中文（代码标识符与文件名为英文）
+> 状态：Draft v0.8（M0–M6 已实现，含 2026-11-05/06 的账号、供应商档案与对话窗口，2026-11-10 的分层记忆、对话与控制台分离、沙箱 shell、浏览器与视觉、权限模式；架构文档已随实现转为 Accepted）· 更新：2026-11-10 · 语言：中文（代码标识符与文件名为英文）
 
 本目录是 Protea 的完整设计与实施计划。文档按"从愿景到落地"的顺序编号，建议首次阅读按下面的顺序。
 
@@ -22,6 +22,7 @@
 | 做到哪一步、下一步做什么 | [40-plan/01-roadmap.md](40-plan/01-roadmap.md) |
 | 在真实环境里怎么测、日志怎么导出 | [40-plan/06-real-world-testing.md](40-plan/06-real-world-testing.md) |
 | 记忆系统重构的要求与落地 | [40-plan/07-memory-system-redesign.md](40-plan/07-memory-system-redesign.md) |
+| 沙箱 shell、浏览器与视觉支持的落地 | [40-plan/08-sandbox-browser-vision.md](40-plan/08-sandbox-browser-vision.md) |
 
 ## 目录结构
 
@@ -63,7 +64,11 @@ docs/
 │   ├── ADR-0008-append-only-history-and-handoff.md
 │   ├── ADR-0009-single-uid-with-process-limits.md
 │   ├── ADR-0010-accounts-and-provider-profiles.md
-│   └── ADR-0011-layered-memory-and-idle-compaction.md
+│   ├── ADR-0011-layered-memory-and-idle-compaction.md
+│   ├── ADR-0012-chat-platforms-and-operator-console.md
+│   ├── ADR-0013-sandboxed-shell-and-in-container-browser.md
+│   ├── ADR-0014-images-as-blob-references.md
+│   └── ADR-0015-permission-modes-and-auto-review.md
 ├── 30-specs/                          精确规范（Schema、协议、配置、API）
 │   ├── 01-event-envelope-schema.md
 │   ├── 02-plugin-manifest.md
@@ -79,7 +84,8 @@ docs/
     ├── 04-risks-and-open-questions.md
     ├── 05-conventions.md              开发与文档规范
     ├── 06-real-world-testing.md       实际测试指南：需要真实条件的复核项、日志与诊断包
-    └── 07-memory-system-redesign.md   记忆系统重构：九条要求如何落地
+    ├── 07-memory-system-redesign.md   记忆系统重构：九条要求如何落地
+    └── 08-sandbox-browser-vision.md   沙箱 shell、浏览器与视觉支持：方案
 ```
 
 ## 文档约定

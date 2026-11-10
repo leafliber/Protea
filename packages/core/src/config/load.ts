@@ -124,6 +124,16 @@ function validate(cfg: ProteaConfig, warnings: string[]): void {
     if (!policies.includes(v)) throw new Error(`permissions.tools.${k} must be allow, ask or deny`);
   }
   if (!(perm.approvalTtlMs > 0)) throw new Error('permissions.approvalTtlMs must be positive');
+  if (!(perm.grantMaxMs >= 0)) throw new Error('permissions.grantMaxMs must not be negative');
+  if (perm.mode !== 'ask' && perm.mode !== 'auto' && perm.mode !== 'locked') throw new Error('permissions.mode must be ask, auto or locked (bypass needs a time limit: protea mode bypass --for 30m)');
+  const auto = perm.auto;
+  for (const k of ['environment', 'allow', 'ask'] as const) if (typeof auto[k] !== 'string') throw new Error(`permissions.auto.${k} must be text`);
+  if (!(Number.isInteger(auto.timeoutMs) && auto.timeoutMs >= 1000)) throw new Error('permissions.auto.timeoutMs must be an integer of at least 1000');
+  for (const k of ['pauseAfterConsecutive', 'pauseAfterPerHour'] as const) if (!(Number.isInteger(auto[k]) && auto[k] >= 1)) throw new Error(`permissions.auto.${k} must be a positive integer`);
+  const vision = cfg.vision;
+  if (!(vision.maxImageKb > 0)) throw new Error('vision.maxImageKb must be positive');
+  if (!Number.isInteger(vision.maxImagesPerMessage) || vision.maxImagesPerMessage < 0) throw new Error('vision.maxImagesPerMessage must be a non-negative integer');
+  if (!(vision.blobRetentionDays >= 0)) throw new Error('vision.blobRetentionDays must not be negative');
   const ph = cfg.pluginHost;
   if (!Array.isArray(ph.restartBackoffMs) || ph.restartBackoffMs.length === 0 || !ph.restartBackoffMs.every((n) => n >= 0)) {
     throw new Error('pluginHost.restartBackoffMs must be a non-empty list of delays');

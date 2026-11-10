@@ -8,6 +8,7 @@ const ROLES: Array<[ModelRole, string, string]> = [
   ['main', '主会话', '回答你、处理事件的模型'],
   ['fork', '后台 Fork', '后台任务、例程'],
   ['cheap', '轻量', '交接笔记、压缩、分类'],
+  ['judge', '判断', 'auto 权限模式下审核工具调用'],
 ];
 
 const PROTOCOL_HINT: Record<ProviderProtocolName, string> = {
@@ -60,7 +61,7 @@ export function ProviderEditor({ view, initial, onSaved, onCancel, compact }: { 
   const [apiKey, setApiKey] = useState('');
   const [sameModel, setSameModel] = useState(() => {
     const m = (initial?.profile.models ?? draft.models) as Record<ModelRole, string>;
-    return draft.protocol !== 'anthropic' && m.main === m.fork && m.main === m.cheap;
+    return draft.protocol !== 'anthropic' && m.main === m.fork && m.main === m.cheap && (m.judge || m.main) === m.main;
   });
   const [models, setModels] = useState<string[]>([]);
   const [probe, setProbe] = useState<ProbeProviderResponse | null>(null);
@@ -70,6 +71,7 @@ export function ProviderEditor({ view, initial, onSaved, onCancel, compact }: { 
   const probing = useAction();
   const preset = view.presets.find((p) => p.id === presetId);
   const noKey = draft['apiKeySecret'] === null;
+  const vision = !!(draft['vision'] as Record<string, unknown> | undefined)?.['main'];
   const keySet = initial?.key.set ?? false;
   const proto = view.protocols.find((p) => p.id === draft.protocol);
 
@@ -110,12 +112,12 @@ export function ProviderEditor({ view, initial, onSaved, onCancel, compact }: { 
       return next;
     });
   const setModel = (role: ModelRole, v: string) => {
-    if (sameModel && role === 'main') setDraft((d) => ({ ...d, models: { main: v, fork: v, cheap: v } }));
+    if (sameModel && role === 'main') setDraft((d) => ({ ...d, models: { main: v, fork: v, cheap: v, judge: v } }));
     else set(['models', role], v);
   };
   const body = () => {
     const profile = clone(draft) as Record<string, unknown>;
-    if (sameModel) profile['models'] = { main: draft.models.main, fork: draft.models.main, cheap: draft.models.main };
+    if (sameModel) profile['models'] = { main: draft.models.main, fork: draft.models.main, cheap: draft.models.main, judge: draft.models.main };
     if (profile['baseUrl'] === '') profile['baseUrl'] = null;
     if (!initial && profile['apiKeySecret'] !== null) delete profile['apiKeySecret']; // PROVIDER_<ID>_API_KEY
     return profile;
@@ -217,14 +219,22 @@ export function ProviderEditor({ view, initial, onSaved, onCancel, compact }: { 
           {draft.protocol !== 'anthropic' && (
             <label className="check">
               <input type="checkbox" checked={sameModel} onChange={(e) => setSameModel(e.target.checked)} />
-              三个角色用同一个模型
+              所有角色用同一个模型
             </label>
           )}
           {ROLES.filter(([r]) => !sameModel || r === 'main').map(([role, label, hint]) => (
             <Field key={role} label={sameModel ? '模型' : `模型 · ${label}`} hint={sameModel ? undefined : hint}>
-              <input list={listId} value={draft.models[role] ?? ''} onChange={(e) => setModel(role, e.target.value)} placeholder={models[0] ?? '模型名，例如 deepseek-chat'} required={role === 'main'} />
+              <input list={listId} value={draft.models[role] ?? ''} onChange={(e) => setModel(role, e.target.value)} placeholder={role === 'judge' ? `留空用主模型（${draft.models.main || '未设置'}）` : (models[0] ?? '模型名，例如 deepseek-chat')} required={role === 'main'} />
             </Field>
           ))}
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={vision}
+              onChange={(e) => set(['vision'], { main: e.target.checked, fork: e.target.checked, cheap: e.target.checked })}
+            />{' '}
+            模型能看图片（否则图片以文字占位）
+          </label>
           <button type="button" className="link small" onClick={() => setAdvanced(!advanced)}>
             {advanced ? '收起高级设置' : '高级设置'}
           </button>
@@ -305,7 +315,7 @@ function ProfileCard({ p, view, onEdit, onChange }: { p: ProviderProfileInfo; vi
   const act = useAction();
   const isDefault = view.default === p.id;
   const m = p.profile.models;
-  const same = m.main === m.fork && m.main === m.cheap;
+  const same = m.main === m.fork && m.main === m.cheap && m.main === m.judge;
   return (
     <Card
       title={
@@ -353,7 +363,7 @@ function ProfileCard({ p, view, onEdit, onChange }: { p: ProviderProfileInfo; vi
         )}
         <div className="kv-row">
           <span className="muted">模型</span>
-          <span className="mono small">{same ? m.main : `main ${m.main} · fork ${m.fork} · cheap ${m.cheap}`}</span>
+          <span className="mono small">{same ? m.main : `main ${m.main} · fork ${m.fork} · cheap ${m.cheap} · judge ${m.judge}`}</span>
         </div>
         <div className="kv-row">
           <span className="muted">密钥</span>

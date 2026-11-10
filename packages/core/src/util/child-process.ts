@@ -141,7 +141,7 @@ export class MemoryWatchdog {
     private readonly o: {
       limits: () => ProcessLimits;
       /** id → pid of the processes to watch right now. */
-      targets: () => Array<{ id: string; pid: number }>;
+      targets: () => Array<{ id: string; pid: number; memoryMb?: number }>;
       onExceeded: (id: string, rssBytes: number, limitBytes: number) => void;
       /** Latest sample per id (metrics, status). */
       onSample?: (samples: Map<string, number>) => void;
@@ -173,7 +173,9 @@ export class MemoryWatchdog {
         const bytes = rss.get(t.pid);
         if (bytes === undefined) continue;
         samples.set(t.id, bytes);
-        if (limitMb !== null && bytes > limitMb * 1024 * 1024) this.o.onExceeded(t.id, bytes, limitMb * 1024 * 1024);
+        // A process with its own limit (a browser needs more than a plugin) is measured against that.
+        const limit = t.memoryMb ?? limitMb;
+        if (limit !== null && bytes > limit * 1024 * 1024) this.o.onExceeded(t.id, bytes, limit * 1024 * 1024);
       }
       this.o.onSample?.(samples);
     } finally {

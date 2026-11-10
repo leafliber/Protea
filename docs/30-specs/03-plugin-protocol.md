@@ -30,7 +30,7 @@ plugin → host : result {}
 | `stop` | `{ reason, deadlineMs }` | `{}`（超时则 SIGTERM → SIGKILL） |
 | `config/changed` | `{ patch, full }` | `{}` |
 | `tools/list` | `{}` | `{ tools: ToolDecl[] }` |
-| `tools/call` | `{ callId, name, input, context: { sessionId, batchLevel, correlation } }` | `{ text, blobs?, failed?, partial?, endsTurn?, meta? }` |
+| `tools/call` | `{ callId, name, input, context: { sessionId, batchLevel, correlation } }` | `{ text, images?: [{ handle }], failed?, partial?, endsTurn?, meta? }` |
 | `tools/cancel` | `{ callId }`（通知） | — |
 | `env/prompt` | `{ language }` | `{ vars: object \| null }` |
 | `events/settled` | `{ events: [{cursor, outcome}] }`（通知） | — |
@@ -53,14 +53,15 @@ plugin → host : result {}
 | `events/withdraw` | `{ cursor }` | `{ ok }` |
 | `events/promote` | `{ cursor, trigger }` | `{ ok, effectiveTrigger }` |
 | `events/query` | `{ filter, limit }` | `{ events }`（仅本插件来源） |
-| `blob/put` | `{ mime, name?, base64 }` 或分块 | `{ handle }` |
-| `blob/get` | `{ handle }` | `{ mime, base64 }` |
+| `blob/put` | `{ dataBase64, mime? }` | `{ handle, mime, size }`；只收图片（PNG、JPEG、WebP、GIF），类型按内容判断，上限 `vision.maxImageKb`，不是图片或超限时报 `InvalidParams` |
+| `blob/get` | `{ handle }` | `{ dataBase64, mime, size }`；句柄是内容摘要，知道句柄的插件才读得到 |
 | `log` | `{ level, msg, fields }`（通知） | — |
 | `usage/report` | `{ service, units, cost? }`（通知） | — |
 | `kv/get` / `kv/set` / `kv/delete` | `{ key, value? }` | |
 | `owner/resolve` | `{ senderKey }` | `{ role: 'owner' \| 'unknown' }` |
 | `secrets/exists` | `{ name }` | `{ exists }`（值永不返回；值在启动时经环境变量注入） |
-| `approvals/decide` | `{ id, decision: 'approve' \| 'deny', senderKey }` | `{ ok, state?, message? }`；`senderKey` 必须解析为本插件的主人，否则 `-32007 Unauthorized` |
+| `permissions/mode` | `{ senderKey, mode?, forMs? }` | `PermissionModeInfo`；不带 `mode` 只读取。`senderKey` 必须是本插件映射的主人，否则 `Unauthorized`；不带 `forMs` 的 `mode` 写成基线，`bypass` 必须带 `forMs` |
+| `approvals/decide` | `{ id, decision: 'approve' \| 'deny', senderKey, grantMs? }` | `{ ok, state?, message? }`；`grantMs`：同意时还在这段时间内放行同一组工具（上限 `permissions.grantMaxMs`）；`senderKey` 必须解析为本插件的主人，否则 `-32007 Unauthorized` |
 
 ## 5. 错误
 
@@ -83,4 +84,4 @@ JSON-RPC 标准错误码 + 自定义：`-32001 LevelExceeded`、`-32002 TriggerN
 
 已实现：§2 握手；§3 全部方法外加 `approvals/request`、`http/request`；§4 的 `events/push`、`events/withdraw`、`events/promote`（仅 `flush` / `piggyback`，仅本插件的事件）、`events/query`（仅本插件来源）、`log`、`kv/*`、`owner/resolve`、`secrets/exists`、`approvals/decide`。
 
-尚未实现：`events/pushDeferred`、`events/pushCandidate`（及其 `events/render` / `events/choose` 回调）、`blob/*`、`usage/report`、分块消息。
+尚未实现：`events/pushDeferred`、`events/pushCandidate`（及其 `events/render` / `events/choose` 回调）、`usage/report`、分块消息。

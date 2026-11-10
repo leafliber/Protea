@@ -74,8 +74,15 @@ export class ProviderRouter implements Provider {
     return provider.health();
   }
 
+  /** One role's profile. */
+  healthFor(role: ModelRole): ProviderHealth {
+    const id = this.profileFor(role);
+    return id === null ? { ready: false, problem: NOT_CONFIGURED } : this.healthOf(id);
+  }
+
+  /** Whether Protea can work: a broken judge only sends auto mode's calls to the owner. */
   health(): ProviderHealth {
-    const ids = [...new Set(MODEL_ROLES.map((r) => this.profileFor(r)))];
+    const ids = [...new Set(MODEL_ROLES.filter((r) => r !== 'judge').map((r) => this.profileFor(r)))];
     if (ids.includes(null)) return { ready: false, problem: NOT_CONFIGURED };
     const problems: string[] = [];
     for (const id of ids as string[]) {
@@ -118,6 +125,11 @@ export class ProviderRouter implements Provider {
     const e = this.route(role)?.profile.effort;
     if (!e) return role === 'cheap' ? 'low' : 'high';
     return role === 'main' ? e.main[level] : e[role];
+  }
+
+  /** Whether the role's model can see images. */
+  visionFor(role: ModelRole): boolean {
+    return this.route(role)?.profile.vision[role] ?? false;
   }
 
   /** The output limit of the role's profile (context limits leave room for it). */

@@ -71,7 +71,7 @@ CREATE INDEX ix_usage_at ON usage(at_ms);
 CREATE TABLE kv (ns TEXT NOT NULL, key TEXT NOT NULL, value TEXT, updated_at TEXT NOT NULL, PRIMARY KEY (ns, key));
 ```
 
-`kv` 的命名空间：插件为 `plugin:<id>`（例如 cron 的动态日程存在 `plugin:cron` / `schedule:<id>`）。
+`kv` 的命名空间：插件为 `plugin:<id>`（例如 cron 的动态日程存在 `plugin:cron` / `schedule:<id>`）。`permissions` / `mode` 存临时权限模式与 auto 的计数（ADR-0015）。
 
 `sessions` 的用法：主会话一行（`id='main'`、`kind='main'`）；每个 Fork 一行（M1）：`kind='fork'`，`state` ∈ `queued|running|paused|completed|cancelled|failed`，`level` 为 Fork 等级，`parent_id` 为派生它的批，`model` 为模型角色（`fork|cheap|main`），路径相对数据目录，结束时写 `ended_at` 与 `summary`（结果前 2000 字符或错误）。
 
@@ -95,7 +95,7 @@ CREATE INDEX ix_approvals_lookup ON approvals(tool, input_hash, state);
 
 CREATE TABLE audit (                                    -- 只追加（I-8）
   id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL,
-  kind TEXT NOT NULL,                                   -- tool_call | tool_blocked | approval_requested | approval_decided | approval_expired | memory_write（M4）| control_write（M5）
+  kind TEXT NOT NULL,                                   -- tool_call | tool_blocked | approval_requested | approval_decided | approval_expired | approval_grant | permission_mode | permission_judge | memory_write（M4）| control_write（M5）
   tool TEXT, owner TEXT, session_id TEXT, batch_id TEXT, call_id TEXT,
   input_hash TEXT, summary TEXT, policy TEXT, outcome TEXT, approval_id TEXT, detail TEXT
 );
@@ -186,12 +186,38 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(path UNINDEXED, summary, keywords, bo
 
 `summary`、`keywords`、`body` 是把 CJK 切成重叠二元组后的文本，`body_text` 是原文（用于片段）。kv 命名空间 `memory` 有两项：`board`（`rev`、`externalRev`、`seq`）与 `dream`（最近一次整理的状态）。转录的消息记录增加可选字段 `boardRev`：这条消息显示了哪个外部修订的白板。
 
-### 1.8 后续迁移（计划）
+### 1.8 迁移 8：`blobs-and-grants`（2026-11-10）
+
+```sql
+CREATE TABLE blobs (
+  handle      TEXT PRIMARY KEY,      -- blob:<sha256>
+  mime        TEXT NOT NULL,         -- 按内容判断
+  size        INTEGER NOT NULL,
+  source      TEXT,                  -- 谁存的：插件 id、mcp:<id>、console、view_image
+  created_at  TEXT NOT NULL,
+  created_ms  INTEGER NOT NULL       -- 保留期从这里算；再存一次同样的内容会刷新
+);
+
+CREATE TABLE approval_grants (
+  seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+  id          TEXT NOT NULL UNIQUE,  -- g<seq>
+  family      TEXT NOT NULL,         -- 一个插件 id、mcp:<id>，或一个 Core 工具名
+  approval_id TEXT NOT NULL,
+  decided_by  TEXT NOT NULL,
+  created_at  TEXT NOT NULL,
+  expires_at  TEXT NOT NULL,
+  expires_ms  INTEGER NOT NULL,
+  revoked_at  TEXT
+);
+```
+
+转录里的图片块是 `{ "type": "image", "source": { "type": "blob", "handle": "blob:…", "media_type": "image/png" } }`，可以出现在消息内容或 `tool_result` 的内容数组里；转录中没有图片的字节（[ADR-0014](../20-decisions/ADR-0014-images-as-blob-references.md)）。
+
+### 1.9 后续迁移（计划）
 
 | 表 | 用途 | 里程碑 |
 |---|---|---|
 | `plugin_state` | 插件生命周期状态（M2 用内存状态 + `config.yaml` 的 enabled，未建表） | 按需 |
-| `blobs` / `event_blobs` | 附件元数据与引用计数 | 按需（随 `blob/*` 协议方法） |
 
 ## 2. 文件
 
@@ -205,7 +231,9 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(path UNINDEXED, summary, keywords, bo
 | `plugin-data/<id>/` | 目录 | 插件的可写数据目录（初始化参数 `dataDir`） |
 | `plugin-data/mcp/<id>/` | 目录 | stdio MCP 服务器的默认工作目录 |
 | `skills/<name>/` | 目录 | 用户 Skills（`SKILL.md` + 附带文件）；`.install-*` 是安装中的临时目录 |
-| `workspace/` | 目录 | 向 MCP 服务器声明的根目录（roots）；`shell` 工具的工作目录（M6） |
+| `workspace/` | 目录 | 向 MCP 服务器声明的默认根目录（roots）；`shell` 的 `local` 后端的工作目录；Compose 部署里是与沙箱共享的独立卷，其中的内容不可信（沙箱可写） |
+| `workspace/browser/` | 目录 | 浏览器的截图、PDF 与下载；Compose 部署里是独立的卷，沙箱只读 |
+| `blobs/<前两位>/<sha256>` | 文件（0600） | 图片内容（ADR-0014） |
 | `inbox/` | 目录 | `filewatch` 默认监视的目录 |
 | `runs/<runId>/log.jsonl` | NDJSON | 本次运行的结构化日志（debug 及以上） |
 | `runs/<runId>/transcript.jsonl` | NDJSON | 启动修复时移出的内容（`truncated-tail`、`orphan-result-drop`） |

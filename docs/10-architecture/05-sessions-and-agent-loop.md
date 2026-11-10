@@ -169,6 +169,8 @@ M1 实现：检查点在每回合和每次状态变化后原子写入（临时�
 
 不阻塞的原因：主人可能数小时不回复；主会话不能被一个工具调用挂死。
 
+权限模式（[ADR-0015](../20-decisions/ADR-0015-permission-modes-and-auto-review.md)）决定第 1 步是否发生：`auto` 下判断模型放行的调用直接执行，没放行的走上面的流程并在审批里附上理由；`bypass` 直接执行；`locked` 不执行也不询问。
+
 M2 实现：步骤 1 的"审批出口"是所有声明了 `approvals` 能力的运行中渠道；第 2 步的回执是 `pending approval a12: …`（不是错误回执）；第 3 步的事件类型为 `approval.decided`，由 Core 在核实主人身份后发出；细节见 [14-security-and-permissions.md](14-security-and-permissions.md) §3。
 
 ## 8. 容量与交接（handoff）
@@ -211,3 +213,4 @@ Claude 5 系列的 thinking 块绑定产生它的对话前缀（system、工具�
 | ✓ `schedule_create / schedule_list / schedule_delete` | 操作 `cron` 事件源 | |
 | ✓ `approval_request {tool, input, reason}` | 主动发起审批（用于模型预判需要许可的场景） | |
 | ✓ `self_status` | 预算、pending 事件、插件状态快照 | 只读 |
+| ✓ `view_image` | 看工作区里的图片文件或一个已存的图片句柄 | 只读 |

@@ -11,10 +11,12 @@ import {
   type EventState,
   type PushEventRequest,
   type PushEventResponse,
+  type SetPermissionModeRequest,
   type SessionContextResponse,
   type StatusResponse,
   type StreamMessage,
 } from '@protea/protocol';
+import { BROWSER_SERVER_ID, PermissionModeError, type BlobStore, type PermissionModes } from '@protea/core';
 import {
   BoardError,
   MemoryError,
@@ -51,6 +53,12 @@ export interface ControlDeps extends Omit<OpsDeps, 'store' | 'audit'> {
   providers?: ProviderOps;
   bus: Bus;
   store: EventStore;
+  /** Stored images (GET and POST /api/blobs). */
+  blobs?: BlobStore;
+  /** The MCP server entry of the bundled browser. */
+  browserPreset?: (o: { noSandbox?: boolean }) => Record<string, unknown>;
+  /** False in an image without the browser. */
+  browserAvailable?: () => boolean;
   /** The console conversation (GET /api/chat). */
   chat?: OutputLog;
   log: Logger;
@@ -58,6 +66,7 @@ export interface ControlDeps extends Omit<OpsDeps, 'store' | 'audit'> {
   forks?: ForkManager;
   plugins?: PluginHost;
   approvals?: ApprovalService;
+  permissionModes?: PermissionModes;
   /** Re-scan plugin directories (after uninstall, so a built-in with the same id reappears). */
   rescanPlugins?: () => Promise<void>;
   /** Validate, apply and persist a plugin's configuration. */
@@ -269,6 +278,23 @@ export function createControlApp(d: ControlDeps): Hono {
     return c.json({ events, nextCursor: order === 'desc' && events.length === limit && last ? last.cursor : null });
   });
 
+  // Images: admins only (auth.ts), like the memory they may hold.
+  app.get('/api/blobs/:handle', (c) => {
+    const found = d.blobs?.get(c.req.param('handle'));
+    if (!found) return c.json({ error: { code: 'not_found', message: 'no such image' } }, 404);
+    return new Response(new Uint8Array(found.bytes), {
+      headers: { 'content-type': found.mime, 'cache-control': 'private, max-age=86400, immutable', 'x-content-type-options': 'nosniff' },
+    });
+  });
+  app.post('/api/blobs', async (c) => {
+    if (!d.blobs) return c.json({ error: { code: 'not_found', message: 'blobs are not available' } }, 404);
+    const body = (await c.req.json().catch(() => null)) as { dataBase64?: unknown } | null;
+    if (typeof body?.dataBase64 !== 'string' || body.dataBase64 === '') return c.json({ error: { code: 'bad_request', message: 'dataBase64 is required' } }, 400);
+    const r = d.blobs.putImage(Buffer.from(body.dataBase64, 'base64'), 'console');
+    if (!r.ok) return c.json({ error: { code: 'invalid_image', message: r.reason } }, 422);
+    return c.json({ handle: r.blob.handle, mime: r.blob.mime, size: r.blob.size }, 201);
+  });
+
   // The owner writes in the web chat.
   app.post('/api/chat/messages', async (c) => {
     if (!d.pushChat) return c.json({ error: { code: 'not_found', message: 'the web chat is not available' } }, 404);
@@ -279,9 +305,13 @@ export function createControlApp(d: ControlDeps): Hono {
       return c.json({ error: { code: 'bad_request', message: 'body must be JSON' } }, 400);
     }
     const b = body as Partial<ChatMessageRequest>;
-    if (typeof b.text !== 'string' || b.text.length === 0) return c.json({ error: { code: 'bad_request', message: 'text is required' } }, 400);
+    const images = Array.isArray(b.images) ? b.images : [];
+    if (typeof b.text !== 'string' || (b.text.length === 0 && images.length === 0)) return c.json({ error: { code: 'bad_request', message: 'text is required' } }, 400);
+    const stored = images.map((i) => d.blobs?.info(String(i?.handle)) ?? null);
+    if (stored.includes(null)) return c.json({ error: { code: 'bad_request', message: 'an image is not stored; upload it with POST /api/blobs first' } }, 400);
     if (b.trigger !== undefined && b.trigger !== 'flush' && b.trigger !== 'interrupt') return c.json({ error: { code: 'bad_request', message: 'trigger must be flush or interrupt' } }, 400);
-    const r = d.pushChat({ text: b.text, ...(b.trigger ? { trigger: b.trigger } : {}) }, actorOf(principal(c)));
+    const refs = stored.map((i) => ({ handle: (i as NonNullable<typeof i>).handle, mime: (i as NonNullable<typeof i>).mime }));
+    const r = d.pushChat({ text: b.text, ...(b.trigger ? { trigger: b.trigger } : {}), ...(refs.length > 0 ? { images: refs } : {}) }, actorOf(principal(c)));
     if (!r.ok || r.cursor === undefined) return c.json({ error: { code: 'rejected', message: 'message rejected', details: r.errors ?? [] } }, 422);
     const res: PushEventResponse = { cursor: r.cursor, effectiveLevel: r.effectiveLevel ?? 1, effectiveTrigger: r.effectiveTrigger ?? 'flush', deduped: r.deduped ?? false, warnings: r.warnings };
     return c.json(res, 201);
@@ -518,6 +548,20 @@ export function createControlApp(d: ControlDeps): Hono {
     }
     return c.json(d.mcp.get(id), existed ? 200 : 201);
   });
+  // The bundled browser, with its fixed restrictions (docs/40-plan/08-sandbox-browser-vision.md §3).
+  app.post('/api/mcp/presets/browser', async (c) => {
+    if (!d.putMcpServer || !d.mcp || !d.browserPreset) return noMcp(c);
+    if (d.browserAvailable && !d.browserAvailable()) {
+      return c.json({ error: { code: 'unavailable', message: 'this image has no browser: build or pull the "browser" target' } }, 409);
+    }
+    const body = (await c.req.json().catch(() => null)) as { noSandbox?: unknown } | null;
+    try {
+      await d.putMcpServer(BROWSER_SERVER_ID, d.browserPreset({ ...(body?.noSandbox === true ? { noSandbox: true } : {}) }));
+    } catch (err) {
+      return errorJson(c, 400, 'invalid_server', err);
+    }
+    return c.json(d.mcp.get(BROWSER_SERVER_ID), 201);
+  });
   app.delete('/api/mcp/servers/:id', async (c) => {
     const id = c.req.param('id');
     if (!d.mcp?.get(id) || !d.putMcpServer) return noMcp(c);
@@ -594,14 +638,34 @@ export function createControlApp(d: ControlDeps): Hono {
     return c.json({ approvals: d.approvals?.list(state as never) ?? [] });
   });
   app.post('/api/approvals/:id/decide', async (c) => {
-    const body = (await c.req.json().catch(() => null)) as { decision?: unknown } | null;
+    const body = (await c.req.json().catch(() => null)) as { decision?: unknown; grantMs?: unknown } | null;
+    if (body?.grantMs !== undefined && !(typeof body.grantMs === 'number' && body.grantMs > 0)) return c.json({ error: { code: 'bad_request', message: 'grantMs must be a positive number' } }, 400);
     if (body?.decision !== 'approve' && body?.decision !== 'deny') {
       return c.json({ error: { code: 'bad_request', message: 'decision must be approve or deny' } }, 400);
     }
     if (!d.approvals) return c.json({ error: { code: 'not_found', message: 'no approvals' } }, 404);
-    const r = d.approvals.decide(c.req.param('id'), body.decision, 'console:admin');
+    const r = d.approvals.decide(c.req.param('id'), body.decision, 'console:admin', typeof body.grantMs === 'number' ? { grantMs: body.grantMs } : {});
     if (!r.ok) return c.json({ error: { code: r.state ? 'conflict' : 'not_found', message: r.message ?? 'not decided' } }, r.state ? 409 : 404);
     return c.json(d.approvals.get(c.req.param('id')));
+  });
+  app.get('/api/permissions/mode', (c) => (d.permissionModes ? c.json(d.permissionModes.info()) : c.json({ error: { code: 'not_found', message: 'permission modes are not available' } }, 404)));
+  app.post('/api/permissions/mode', async (c) => {
+    if (!d.permissionModes) return c.json({ error: { code: 'not_found', message: 'permission modes are not available' } }, 404);
+    const b = (await c.req.json().catch(() => null)) as Partial<SetPermissionModeRequest> | null;
+    if (typeof b?.mode !== 'string') return c.json({ error: { code: 'invalid', message: 'mode is required' } }, 400);
+    try {
+      return c.json(await d.permissionModes.set(b.mode, { by: actorOf(principal(c)), ...(typeof b.forMs === 'number' ? { forMs: b.forMs } : {}) }));
+    } catch (err) {
+      if (err instanceof PermissionModeError) return c.json({ error: { code: 'invalid', message: err.message } }, 400);
+      throw err;
+    }
+  });
+  app.get('/api/approvals/grants', (c) => c.json({ grants: d.approvals?.listGrants() ?? [] }));
+  app.post('/api/approvals/grants/:id/revoke', (c) => {
+    if (!d.approvals) return c.json({ error: { code: 'not_found', message: 'no approvals' } }, 404);
+    const r = d.approvals.revokeGrant(c.req.param('id'), 'console:admin');
+    if (!r.ok) return c.json({ error: { code: 'not_found', message: r.message ?? 'not revoked' } }, 404);
+    return c.json(r.grant);
   });
 
   app.get('/api/stream', (c) => {

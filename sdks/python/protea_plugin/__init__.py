@@ -7,6 +7,7 @@ host (``host.push_event``, ``host.kv_get`` ...) synchronously.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import sys
@@ -14,7 +15,7 @@ import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 __all__ = ["Plugin", "Tool", "ToolContext", "Host", "RpcError", "run", "PROTOCOL_VERSION"]
 
@@ -216,8 +217,31 @@ class Host:
     def owner_resolve(self, sender_key: str) -> str:
         return (self._conn.request("owner/resolve", {"senderKey": sender_key}) or {}).get("role", "unknown")
 
-    def approvals_decide(self, approval_id: str, decision: str, sender_key: str) -> Dict[str, Any]:
-        return self._conn.request("approvals/decide", {"id": approval_id, "decision": decision, "senderKey": sender_key})
+    def approvals_decide(self, approval_id: str, decision: str, sender_key: str, grant_ms: Optional[int] = None) -> Dict[str, Any]:
+        params: Dict[str, Any] = {"id": approval_id, "decision": decision, "senderKey": sender_key}
+        if grant_ms is not None:
+            params["grantMs"] = grant_ms
+        return self._conn.request("approvals/decide", params)
+
+    def permissions_mode(self, sender_key: str, mode: Optional[str] = None, for_ms: Optional[int] = None) -> Dict[str, Any]:
+        """Read the permission mode, or change it with `mode`; `sender_key` must be the owner."""
+        params: Dict[str, Any] = {"senderKey": sender_key}
+        if mode is not None:
+            params["mode"] = mode
+        if for_ms is not None:
+            params["forMs"] = for_ms
+        return self._conn.request("permissions/mode", params)
+
+    def blob_put(self, data: bytes, mime: Optional[str] = None) -> Dict[str, Any]:
+        """Store an image; use the returned ``handle`` in a tool result's ``images`` or an event's ``blobs``."""
+        params: Dict[str, Any] = {"dataBase64": base64.b64encode(data).decode("ascii")}
+        if mime is not None:
+            params["mime"] = mime
+        return self._conn.request("blob/put", params)
+
+    def blob_get(self, handle: str) -> Tuple[bytes, str]:
+        r = self._conn.request("blob/get", {"handle": handle})
+        return base64.b64decode(r["dataBase64"]), r["mime"]
 
     def log(self, level: str, msg: str, **fields: Any) -> None:
         params: Dict[str, Any] = {"level": level, "msg": msg}

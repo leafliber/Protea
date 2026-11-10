@@ -3,7 +3,8 @@
 #
 #   scripts/docker-build.sh            # full image: protea:latest, protea:<version>, protea:<version>-<sha>
 #   scripts/docker-build.sh slim       # slim image: protea:slim, protea:<version>-slim
-#   scripts/docker-build.sh all        # both
+#   scripts/docker-build.sh browser    # with Chromium: protea:browser, protea:<version>-browser
+#   scripts/docker-build.sh all        # all three
 #
 # Environment: IMAGE (repository name, default protea), PLATFORM (e.g. linux/amd64; default the
 # host's), DOCKER (docker binary). The revision label comes from git; a dirty tree adds "-dirty".
@@ -40,10 +41,12 @@ build() {
 case "$target" in
   full) build full latest "$version" "$version-$sha" ;;
   slim) build slim slim "$version-slim" "$version-$sha-slim" ;;
+  browser) build browser browser "$version-browser" "$version-$sha-browser" ;;
   all)
     build full latest "$version" "$version-$sha"
     build slim slim "$version-slim" "$version-$sha-slim"
+    build browser browser "$version-browser" "$version-$sha-browser"
     ;;
-  *) echo "usage: $0 [full|slim|all]" >&2; exit 2 ;;
+  *) echo "usage: $0 [full|slim|browser|all]" >&2; exit 2 ;;
 esac
 echo "==> done. Run it: docker run -d --name protea -v protea-data:/data -p 127.0.0.1:7788:7788 --stop-timeout 40 --restart unless-stopped $image:latest"

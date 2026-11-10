@@ -5,6 +5,10 @@ import {
   PLUGIN_TO_HOST,
   RpcPeer,
   type ApprovalDecideParams,
+  type PermissionModeInfo,
+  type PermissionModeParams,
+  type BlobGetParams,
+  type BlobPutParams,
   type ChatSendParams,
   type ChatSendResult,
   type EventInput,
@@ -19,6 +23,7 @@ import {
   type ToolDecl,
   type Trigger,
 } from '@protea/protocol';
+import { createHash } from 'node:crypto';
 import { servePlugin, type PluginDefinition } from './plugin.js';
 
 export interface FakeHostOptions {
@@ -45,6 +50,10 @@ export class FakeHost {
   readonly logs: LogParams[] = [];
   readonly kv = new Map<string, unknown>();
   readonly decisions: ApprovalDecideParams[] = [];
+  /** `permissions/mode` requests from the owner. */
+  readonly modeRequests: PermissionModeParams[] = [];
+  /** Images stored through `blob/put`, by handle. */
+  readonly blobs = new Map<string, { data: Buffer; mime: string }>();
   capabilities: InitializeResult['capabilities'] = {};
   private readonly host: RpcPeer;
   private cursor = 0;
@@ -84,6 +93,26 @@ export class FakeHost {
         this.decisions.push(d);
         const owner = (o.owners ?? []).includes(d.senderKey);
         return owner ? { ok: true, state: d.decision === 'approve' ? 'approved' : 'denied' } : { ok: false, message: 'not the owner' };
+      })
+      .handle(PLUGIN_TO_HOST.permissionsMode, (p) => {
+        const d = p as PermissionModeParams;
+        if (!(o.owners ?? []).includes(d.senderKey)) throw new Error('only the owner can read or change the permission mode');
+        this.modeRequests.push(d);
+        const at = new Date(0).toISOString();
+        return { mode: d.mode ?? 'ask', baseline: 'ask', auto: { since: at, allowed: 0, held: 0, judge: { model: 'test', ready: true } }, bypassMaxMs: 28_800_000 } satisfies PermissionModeInfo;
+      })
+      .handle(PLUGIN_TO_HOST.blobPut, (p) => {
+        const { dataBase64, mime } = p as BlobPutParams;
+        const data = Buffer.from(dataBase64, 'base64');
+        const handle = `blob:${createHash('sha256').update(data).digest('hex')}`;
+        const type = mime ?? 'image/png';
+        this.blobs.set(handle, { data, mime: type });
+        return { handle, mime: type, size: data.length };
+      })
+      .handle(PLUGIN_TO_HOST.blobGet, (p) => {
+        const b = this.blobs.get((p as BlobGetParams).handle);
+        if (!b) throw new Error('not stored');
+        return { dataBase64: b.data.toString('base64'), mime: b.mime, size: b.data.length };
       })
       .handle(PLUGIN_TO_HOST.eventsPromote, () => ({ ok: true }))
       .handle(PLUGIN_TO_HOST.eventsWithdraw, () => ({ ok: true }));

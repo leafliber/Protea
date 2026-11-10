@@ -28,7 +28,7 @@ function setup(settings: Partial<PermissionSettings> = {}, opts: { owner?: boole
   const internal: Array<Omit<EventInput, 'ts' | 'origin'>> = [];
   const delivered: string[] = [];
   const policy = new PermissionPolicy(
-    { default: 'allow', tools: {}, approvalTtlMs: 86_400_000, ...settings },
+    { default: 'allow', tools: {}, grantMaxMs: 8 * 3_600_000, approvalTtlMs: 86_400_000, mode: 'ask', auto: { environment: '', allow: '', ask: '', timeoutMs: 30_000, pauseAfterConsecutive: 3, pauseAfterPerHour: 20 }, ...settings },
     { askByDefault: (d: ToolDef) => (opts.ask ?? []).includes(d.name), ownerConfigured: () => opts.owner !== false },
   );
   const approvals = new ApprovalService({
@@ -38,6 +38,7 @@ function setup(settings: Partial<PermissionSettings> = {}, opts: { owner?: boole
     clock,
     log: silentLogger(),
     ttlMs: () => policy.ttlMs,
+    grantMaxMs: () => settings.grantMaxMs ?? 8 * 3_600_000,
     deliver: async (a) => {
       delivered.push(a.id);
       return ['console'];
@@ -82,7 +83,7 @@ describe('permission policy', () => {
     const d = (n: string) => t.policy.decide(t.tools.get(n) as ToolDef);
     expect(d('ch_send')).toEqual({ policy: 'allow', rule: 'permissions.tools.ch_send' });
     expect(d('ch_post')).toEqual({ policy: 'deny', rule: 'permissions.tools."ch_*"' });
-    expect(d('sh_run')).toEqual({ policy: 'ask', rule: 'permissions.tools."sh_*"' });
+    expect(d('sh_run')).toEqual({ policy: 'ask', rule: 'permissions.tools."sh_*"', pinned: true });
     const plain = setup({}, { ask: ['ch_post'] });
     expect(plain.policy.decide(plain.tools.get('ch_post') as ToolDef)).toEqual({ policy: 'ask', rule: 'sideEffectTools of plugin chat' });
     expect(plain.policy.decide(plain.tools.get('ch_send') as ToolDef).policy).toBe('allow');
@@ -123,6 +124,50 @@ describe('approvals', () => {
     expect(t.approvals.get('a1')?.state).toBe('used');
     expect((await t.call('ch_post', { to: 'family', text: 'dinner' })).content).toMatch(/^pending approval a3:/);
     expect(t.ran).toEqual(['ch_post {"to":"family","text":"dinner"}']);
+  });
+
+  it('a grant allows the tool family for its time, audited, and can be revoked', async () => {
+    const t = setup({ grantMaxMs: 3_600_000 }, { ask: ['ch_post', 'ch_send', 'sh_run'] });
+    await t.call('ch_post', { n: 1 });
+    expect(t.approvals.decide('a1', 'approve', 'owner', { grantMs: 10 * 3_600_000 })).toMatchObject({ ok: true, grant: { id: 'g1', family: 'chat', active: true } });
+    expect(t.approvals.get('a1')?.grantId).toBe('g1');
+    expect(t.internal.at(-1)?.text).toContain('allowed the tools of chat without asking');
+
+    // The approved call uses its approval; others of the family use the grant; other plugins still ask.
+    expect((await t.call('ch_post', { n: 1 })).content).toBe('done');
+    expect(t.approvals.get('a1')?.state).toBe('used');
+    expect((await t.call('ch_post', { n: 2 })).content).toBe('done');
+    expect((await t.call('ch_send', { n: 3 })).content).toBe('done');
+    expect((await t.call('sh_run', { c: 'ls' })).content).toMatch(/^pending approval/);
+    const row = t.audit.list({ tool: 'ch_send' })[0];
+    expect(row).toMatchObject({ kind: 'tool_call', outcome: 'ok', approvalId: 'a1' });
+    expect(row?.policy).toContain('grant g1');
+
+    // Capped by grantMaxMs, whatever was asked for.
+    t.advance(3_600_001);
+    expect((await t.call('ch_send', { n: 4 })).content).toMatch(/^pending approval a3/);
+    expect(t.approvals.listGrants()[0]).toMatchObject({ id: 'g1', active: false });
+
+    t.approvals.decide('a3', 'approve', 'owner', { grantMs: 60_000 });
+    expect((await t.call('ch_send', { n: 5 })).content).toBe('done');
+    expect(t.approvals.revokeGrant('g2', 'owner')).toMatchObject({ ok: true, grant: { active: false } });
+    expect(t.approvals.revokeGrant('g2', 'owner')).toMatchObject({ ok: false });
+    expect((await t.call('ch_send', { n: 6 })).content).toMatch(/^pending approval/);
+    expect(t.audit.list({ kind: 'approval_grant' }).map((r) => r.outcome)).toEqual(['revoked', 'granted', 'granted']);
+  });
+
+  it('gives no grant when grants are off, or for a denial, and never overrides deny', async () => {
+    const off = setup({ grantMaxMs: 0 }, { ask: ['ch_post'] });
+    await off.call('ch_post', {});
+    expect(off.approvals.decide('a1', 'approve', 'owner', { grantMs: 60_000 })).toEqual({ ok: true, state: 'approved' });
+    expect(off.approvals.listGrants()).toEqual([]);
+
+    const t = setup({ tools: { ch_send: 'deny' } }, { ask: ['ch_post'] });
+    await t.call('ch_post', {});
+    t.approvals.decide('a1', 'approve', 'owner', { grantMs: 60_000 });
+    const denied = await t.call('ch_send', {});
+    expect(denied.is_error).toBe(true);
+    expect(denied.content).toContain('denied by policy');
   });
 
   it('expires requests and approvals after the TTL', async () => {

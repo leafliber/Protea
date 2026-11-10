@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import type { ContextSummary, EventEnvelope, ModelRequestTrace, PushEventResponse, SchedulerAction, WsServerMessage } from '@protea/protocol';
+import type { BlobImageRef, ContextSummary, EventEnvelope, ModelRequestTrace, PushEventResponse, SchedulerAction, WsServerMessage } from '@protea/protocol';
 import { enc, get, post, qs, useAction } from '../api';
 import { Badge, Button, Drawer, Empty, ErrorText, Json, KV, LevelBadge, StateBadge, clock, compact, dateTime, oneLine } from '../components/ui';
 import { BatchTrace } from '../components/Trace';
+import { BlobImages } from '../images';
 import { useLive, useTraceStream } from '../live';
 import { go, useSession } from '../session';
 
@@ -13,7 +14,7 @@ type Row =
   | { kind: 'batch'; key: string; at: number; batchId: string; text: string; tone: 'info' | 'muted' | 'warn' }
   | { kind: 'request'; key: string; at: number; t: ModelRequestTrace }
   | { kind: 'model'; key: string; at: number; part: 'text' | 'thinking'; sessionId: string; text: string; live: boolean }
-  | { kind: 'tool'; key: string; at: number; sessionId: string; name: string; input: unknown; ms?: number; isError?: boolean; result?: string; truncated?: boolean };
+  | { kind: 'tool'; key: string; at: number; sessionId: string; name: string; input: unknown; ms?: number; isError?: boolean; result?: string; truncated?: boolean; images?: BlobImageRef[] };
 
 type Category = 'input' | 'events' | 'model' | 'tools' | 'outputs' | 'markers';
 const CATEGORIES: Array<[Category, string]> = [
@@ -296,7 +297,7 @@ export function Events({ params }: { params: URLSearchParams }) {
         if (t.phase === 'start') {
           add({ kind: 'tool', key, at: Date.parse(t.at) || now, sessionId: t.sessionId, name: t.name, input: t.input });
         } else {
-          setRows((old) => old.map((r) => (r.key === key && r.kind === 'tool' ? { ...r, ms: t.ms, isError: t.isError, result: t.result, truncated: t.truncated } : r)));
+          setRows((old) => old.map((r) => (r.key === key && r.kind === 'tool' ? { ...r, ms: t.ms, isError: t.isError, result: t.result, truncated: t.truncated, ...(t.images ? { images: t.images } : {}) } : r)));
         }
         break;
       }
@@ -447,6 +448,7 @@ export function Events({ params }: { params: URLSearchParams }) {
                         {r.truncated ? '\n…（已截断，完整内容在转录里）' : ''}
                       </pre>
                     )}
+                    <BlobImages images={r.images} />
                   </details>
                 </li>
               );

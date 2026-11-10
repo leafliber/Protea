@@ -5,7 +5,12 @@ import {
   RPC_ERRORS,
   RpcError,
   type ApprovalDecideParams,
+  type PermissionModeParams,
   type ApprovalInfo,
+  type BlobGetParams,
+  type BlobGetResult,
+  type BlobPutParams,
+  type BlobPutResult,
   type EventInput,
   type EventState,
   type HttpRequestParams,
@@ -20,6 +25,7 @@ import {
   type TerminalOutcome,
   type ToolDecl,
 } from '@protea/protocol';
+import type { BlobStore } from '../blobs/store.js';
 import type { Bus } from '../bus.js';
 import type { ChatHub } from '../chat/hub.js';
 import type { PluginSettings } from '../config/types.js';
@@ -32,6 +38,7 @@ import type { OutputLog } from '../events/outputs.js';
 import type { EventStore } from '../events/store.js';
 import type { Logger } from '../observability/logger.js';
 import type { ApprovalService } from '../permissions/approvals.js';
+import { PermissionModeError, type PermissionModes } from '../permissions/modes.js';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { ToolDef, ToolSpec } from '../tools/types.js';
 import { sleep } from '../util/abort.js';
@@ -70,6 +77,8 @@ export interface PluginHostOptions {
   onUninstalled?: (id: string) => void;
   /** Keeps what plugins send to the operator (notices in the conversation). */
   outputs?: OutputLog;
+  /** Stored images (`blob/put`, `blob/get`, images in tool results). */
+  blobs?: BlobStore;
   /** Chat platforms register here when they start; `chat_send` routes to them. */
   chat?: ChatHub;
 }
@@ -128,6 +137,7 @@ export class PluginHost {
   private readonly entries = new Map<string, Entry>();
   private readonly settings: PluginHostSettings;
   private approvals: ApprovalService | null = null;
+  private modes: PermissionModes | null = null;
   private started = false;
   private stopping = false;
   private readonly watchdog: MemoryWatchdog;
@@ -167,6 +177,10 @@ export class PluginHost {
 
   attachApprovals(approvals: ApprovalService): void {
     this.approvals = approvals;
+  }
+
+  attachPermissionModes(modes: PermissionModes): void {
+    this.modes = modes;
   }
 
   // —— Registration and discovery ——
@@ -687,7 +701,7 @@ export class PluginHost {
         hostDataDir: this.o.dataDir,
         timezone: this.o.timezone,
         language: this.o.language ?? 'en',
-        hostCapabilities: ['events', 'kv', 'owner', 'approvals', 'hooks', 'chat'],
+        hostCapabilities: ['events', 'kv', 'owner', 'approvals', 'hooks', 'chat', 'blobs'],
         modelFacts: { mainModel: this.o.mainModel?.() ?? '' },
         levelCap: caps.maxLevel,
         allowedTriggers: allowedTriggers(m),
@@ -858,6 +872,7 @@ export class PluginHost {
             ...(r?.failed ? { failed: true } : {}),
             ...(r?.partial ? { partial: true } : {}),
             ...(r?.endsTurn ? { endsTurn: true } : {}),
+            ...this.toolImages(e, r?.images),
           };
         } catch (err) {
           return { text: `plugin ${e.id}: ${errorMessage(err)}`, failed: true };
@@ -865,6 +880,18 @@ export class PluginHost {
       },
     };
     return spec as unknown as ToolSpec<never>;
+  }
+
+  /** The stored images a plugin's result names; the store says what they are, the plugin's word is not taken. */
+  private toolImages(e: Entry, refs: unknown): { images?: Array<{ handle: string; mime: string }> } {
+    if (!Array.isArray(refs) || refs.length === 0 || !this.o.blobs) return {};
+    const images: Array<{ handle: string; mime: string }> = [];
+    for (const ref of refs as Array<{ handle?: unknown }>) {
+      const info = typeof ref?.handle === 'string' ? this.o.blobs.info(ref.handle) : null;
+      if (info) images.push({ handle: info.handle, mime: info.mime });
+      else this.o.log.warn({ plugin: e.id }, 'a tool result names an image that is not stored');
+    }
+    return images.length > 0 ? { images } : {};
   }
 
   private handlersFor(e: Entry, log: Logger): Record<string, RpcHandler> {
@@ -935,6 +962,22 @@ export class PluginHost {
         const declared = e.loaded?.manifest?.secrets ?? [];
         return { exists: declared.includes(name) && this.o.secrets?.get(name) !== undefined };
       },
+      [PLUGIN_TO_HOST.blobPut]: (params) => {
+        const blobs = this.o.blobs;
+        if (!blobs) throw new RpcError(RPC_ERRORS.Internal, 'blobs are not available');
+        const p = params as BlobPutParams;
+        const r = blobs.putImage(Buffer.from(str(p.dataBase64, 'dataBase64'), 'base64'), e.id);
+        if (!r.ok) throw new RpcError(RPC_ERRORS.InvalidParams, r.reason);
+        return { handle: r.blob.handle, mime: r.blob.mime, size: r.blob.size } satisfies BlobPutResult;
+      },
+      [PLUGIN_TO_HOST.blobGet]: (params) => {
+        const blobs = this.o.blobs;
+        if (!blobs) throw new RpcError(RPC_ERRORS.Internal, 'blobs are not available');
+        const handle = str((params as BlobGetParams).handle, 'handle');
+        const found = blobs.get(handle);
+        if (!found) throw new RpcError(RPC_ERRORS.InvalidParams, `${handle} is not stored`);
+        return { dataBase64: found.bytes.toString('base64'), mime: found.mime, size: found.size } satisfies BlobGetResult;
+      },
       [PLUGIN_TO_HOST.approvalsDecide]: (params) => {
         const p = params as ApprovalDecideParams;
         const senderKey = str(p.senderKey, 'senderKey');
@@ -943,7 +986,22 @@ export class PluginHost {
         }
         if (!this.approvals) throw new RpcError(RPC_ERRORS.Internal, 'approvals are not available');
         if (p.decision !== 'approve' && p.decision !== 'deny') throw new RpcError(RPC_ERRORS.InvalidParams, 'decision must be approve or deny');
-        return this.approvals.decide(str(p.id, 'id'), p.decision, `${e.id}:${senderKey}`);
+        return this.approvals.decide(str(p.id, 'id'), p.decision, `${e.id}:${senderKey}`, p.grantMs !== undefined ? { grantMs: Number(p.grantMs) } : {});
+      },
+      [PLUGIN_TO_HOST.permissionsMode]: async (params) => {
+        const p = params as PermissionModeParams;
+        const senderKey = str(p.senderKey, 'senderKey');
+        if (this.o.owner.resolve(e.id, senderKey) !== 'owner') {
+          throw new RpcError(RPC_ERRORS.Unauthorized, 'only the owner can read or change the permission mode');
+        }
+        if (!this.modes) throw new RpcError(RPC_ERRORS.Internal, 'permission modes are not available');
+        if (p.mode === undefined) return this.modes.info();
+        try {
+          return await this.modes.set(p.mode, { by: `${e.id}:${senderKey}`, ...(p.forMs !== undefined ? { forMs: Number(p.forMs) } : {}) });
+        } catch (err) {
+          if (err instanceof PermissionModeError) throw new RpcError(RPC_ERRORS.InvalidParams, err.message);
+          throw err;
+        }
       },
     };
   }

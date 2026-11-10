@@ -146,7 +146,7 @@ describe('M6 default policy review', () => {
         if (!OWNER_FACING.has(t.name)) expect(manifest.sideEffectTools ?? [], `${t.name} must ask by default`).toContain(t.name);
       }
     }
-    expect(reviewed.sort()).toEqual(['sh_run', 'tg_react', 'tg_send_chat']);
+    expect(reviewed.sort()).toEqual(['sh_job_start', 'sh_job_stop', 'sh_reset', 'sh_run', 'tg_react', 'tg_send_chat']);
     for (const p of [new CronPlugin()]) {
       for (const t of p.tools()) if (t.flags?.sideEffect) expect(OWNER_FACING.has(t.name) || ((p as { sideEffectTools?: readonly string[] }).sideEffectTools ?? []).includes(t.name), t.name).toBe(true);
     }

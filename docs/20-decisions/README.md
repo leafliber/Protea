@@ -16,6 +16,9 @@
 | [ADR-0010](ADR-0010-accounts-and-provider-profiles.md) | 控制台账号与设置码初始化；模型供应商档案 | Accepted |
 | [ADR-0011](ADR-0011-layered-memory-and-idle-compaction.md) | 分层记忆、闲时压缩与每日整理，不使用 embedding | Accepted |
 | [ADR-0012](ADR-0012-chat-platforms-and-operator-console.md) | 对话走平台中枢（`chat_send` 必须指定平台），控制台只观察与注入 | Accepted |
+| [ADR-0013](ADR-0013-sandboxed-shell-and-in-container-browser.md) | shell 进独立沙箱容器，浏览器作为 MCP 服务器留在主容器（修订 ADR-0009 的 `shell` 部分） | Accepted |
+| [ADR-0014](ADR-0014-images-as-blob-references.md) | 图片以 blob 引用进入转录，发请求时才解析 | Accepted |
+| [ADR-0015](ADR-0015-permission-modes-and-auto-review.md) | 权限模式（ask / auto / bypass / locked）与 auto 判断模型 | Accepted |
 
 新增 ADR：复制 `ADR-0000-template.md`（见下），编号递增，提交 PR 时在此表登记。
 

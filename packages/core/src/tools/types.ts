@@ -30,6 +30,8 @@ export interface ToolOutcome {
   failed?: boolean;
   partial?: boolean;
   endsTurn?: boolean;
+  /** Stored images that go to the model with the text (dropped on a failed call). */
+  images?: Array<{ handle: string; mime: string }>;
 }
 
 export interface ToolSpec<I = unknown> {

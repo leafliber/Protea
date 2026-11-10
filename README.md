@@ -21,6 +21,8 @@ Protea 是一个 **24/7 常驻、事件流驱动、可热插拔** 的云端个�
 - **M5**：Web 控制台（总览、事件流、会话、插件、MCP、Skills、审批、记忆与人格、配置、日志），不用 SSH 就能做 M0–M4 的所有操作；完整的控制 API 与 WebSocket；只读令牌；Prometheus 指标与 Grafana 示例面板；运行目录里的关停记录与崩溃报告；`protea logq` 等全套 CLI。
 - **M6**：Docker 镜像（full 含 Python/uv，slim 只有 Node），非 root 运行、启动前自动迁移并快照数据库、健康检查；预算强制执行与全局硬上限（控制台可临时放行）；外发限速；内置 `shell` 工具（工作区、超时、输出截断、无秘密环境）；插件与 MCP 进程的内存与文件描述符上限；日志的秘密过滤；控制平面地址白名单；在线备份、恢复与 Git 备份；模型调用录制与离线回放；CI（测试、依赖审计、镜像构建、容器冒烟测试、Trivy）。
 
+- **沙箱、浏览器与视觉**（[方案](docs/40-plan/08-sandbox-browser-vision.md)）：助理的 shell 在独立的容器里，碰不到 Protea 的数据，目录、环境变量和后台任务都能延续；内置无头浏览器（Playwright MCP）；模型能看图片（对话里发的、工具截的、工作区里的），图片只以引用进入转录；批准时可以附带时限（`/approve a12 1h`）。
+
 ## 用 Docker 运行
 
 镜像还没有发布，先在仓库里构建（`protea:latest` 是 full；`pnpm docker:build:slim` 构建只含 Node 的 `protea:slim`）：
@@ -147,7 +149,7 @@ PROTEA_DATA_DIR=.dev-data pnpm protea plugins enable telegram
 PROTEA_DATA_DIR=.dev-data pnpm protea plugins
 ```
 
-需要审批的操作（例如 `tg_send_chat` 发到群里）会在 Telegram 里问你，回复 `/approve a1` 即可；也可以在终端运行 `protea approvals approve a1`。
+需要审批的操作（例如 `tg_send_chat` 发到群里）会在 Telegram 里问你，回复 `/approve a1` 即可；也可以在终端运行 `protea approvals approve a1`。想少点确认，可以切换权限模式：`/mode auto 2h` 让判断模型放行，没放行的再问你（[ADR-0015](docs/20-decisions/ADR-0015-permission-modes-and-auto-review.md)）。
 
 ## 接入 MCP 服务器
 

@@ -89,12 +89,12 @@ describe('daemon', () => {
     );
     expect(req?.system.at(-1)?.text).toMatch(/^<memory_index path="\/memories\/INDEX.md">\n# Memory index\n/);
     expect(req?.tools.map((t) => t.name)).toEqual([
-      'approval_request', 'board', 'events_promote', 'events_query', 'fork_cancel', 'fork_spawn', 'fork_status', 'idle', 'memory', 'memory_recent', 'memory_search', 'self_status', 'skill_load', 'skill_read',
+      'approval_request', 'board', 'events_promote', 'events_query', 'fork_cancel', 'fork_spawn', 'fork_status', 'idle', 'memory', 'memory_recent', 'memory_search', 'self_status', 'skill_load', 'skill_read', 'view_image',
       'chat_send', 'schedule_create', 'schedule_delete', 'schedule_list', 'sleep_until',
     ]);
     expect(req?.toolSearch).toBeUndefined();
     expect(status['forks']).toEqual([]);
-    expect(status).toMatchObject({ mcp: [], skills: { listed: 3, rejected: 0 }, tools: { total: 19, deferred: 0 }, memory: { files: 1 } });
+    expect(status).toMatchObject({ mcp: [], skills: { listed: 3, rejected: 0 }, tools: { total: 20, deferred: 0 }, memory: { files: 1 } });
     // The scripted provider reports no context window: 200k − 64k output − 10k margin.
     expect(status['context']).toMatchObject({ transcript: 'main.0001.jsonl', handoffs: 0, softTokens: 80_000, hardTokens: 126_000 });
     expect((status['budget'] as { enforced: boolean }).enforced).toBe(true);

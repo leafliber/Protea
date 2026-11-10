@@ -75,5 +75,11 @@
 | 主人 | `owner` | 唯一有权指挥助理的人；由各渠道的身份映射到同一 owner。 |
 | 权限策略 | `PermissionPolicy` | 工具级别的 `allow` / `ask` / `deny` 规则集。 |
 | 审批 | `approval` | 策略为 `ask` 的工具调用等待主人决定的记录；决定以 L1 事件回流。 |
+| 时限授权 | `grant` | 批准时附带的时限：到期前同一组工具的 `ask` 调用直接放行，照常审计。 |
+| 权限模式 | `PermissionMode` | 策略为 `ask` 的调用由谁放行：`ask`（主人）、`auto`（判断模型，没放行的转给主人）、`bypass`（直接执行，必须带时限）、`locked`（一律不执行）。 |
+| 判断模型 | `judge` | auto 模式下审核单次工具调用的模型角色，默认用主模型；只能看到主人的话和工具调用，看不到回执。 |
+| 钉住 | `pinned` | 主人在 `permissions.tools` 里显式写的 `ask`：auto 和 bypass 下也要主人点头。 |
+| 沙箱 | `sandbox` | 运行助理 shell 的独立容器；没有 `/data`，经 unix socket 由 `shell` 插件调用。 |
+| 图片引用 | `blob` | 内容寻址存储的图片，句柄 `blob:<sha256>`；转录里只有句柄，字节只在发给模型的请求里。 |
 | 预算 | `budget` | 按等级与时间窗口划分的 token / 费用上限。 |
 | 热更新 | `hot` | 配置项变更无需重启即生效；标记 `x-hot: false` 的项需要重建相关组件。 |
