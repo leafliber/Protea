@@ -91,11 +91,14 @@ export function kernelTools(deps: KernelToolDeps): ToolSpec<never>[] {
     handler: () => {
       const s = deps.status();
       const u = s.usage24h;
+      // A plugin that is only installed is in state "loaded", which reads as if it were in use.
+      const off = s.plugins.filter((p) => !p.enabled);
       return [
         `run ${s.runId}, up ${s.uptimeSec}s, phase ${s.phase}`,
         `pending: ${Object.entries(s.pending).map(([l, n]) => `L${l}=${n}`).join(' ')}`,
         `model: ${s.provider.id}/${s.provider.mainModel}${s.provider.ready ? '' : ` (not ready: ${s.provider.problem ?? 'unknown'})`}`,
-        `plugins: ${s.plugins.map((p) => `${p.id}(${p.state})`).join(', ') || 'none'}`,
+        `plugins: ${s.plugins.filter((p) => p.enabled).map((p) => `${p.id}(${p.state})`).join(', ') || 'none'}`,
+        ...(off.length > 0 ? [`plugins installed but not enabled (no tools, no events): ${off.map((p) => p.id).join(', ')}`] : []),
         `usage 24h: ${u.calls} calls, ${u.inputTokens} in / ${u.outputTokens} out tokens, cache read ${u.cacheReadTokens}, ~$${u.costUsd.toFixed(4)}`,
         `budget 24h${s.budget.enforced ? '' : ' (tracked, not enforced)'}: ${Object.entries(s.budget.levels)
           .map(
