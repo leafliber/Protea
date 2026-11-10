@@ -104,6 +104,10 @@ export class ProviderRouter implements Provider {
     return this.route(role)?.provider.contextWindow?.(role);
   }
 
+  cacheHorizonMs(role: ModelRole): number | undefined {
+    return this.route(role)?.provider.cacheHorizonMs?.(role);
+  }
+
   async countTokens(req: ProviderRequest, opts: { signal: AbortSignal }): Promise<number | undefined> {
     const r = this.route(req.role);
     return r?.provider.countTokens ? r.provider.countTokens(req, opts) : undefined;

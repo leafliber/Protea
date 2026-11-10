@@ -1,7 +1,9 @@
 import type { Effort, Level, ModelRole, ProviderProtocolName } from '@protea/protocol';
 import type { HandoffSettings } from '../session/settings.js';
 import type { ToolSearchSettings } from '../context/settings.js';
+import type { DreamSettings, IdleCompactionSettings } from '../maintenance/settings.js';
 import type { McpSettings } from '../mcp/settings.js';
+import type { BoardSettings } from '../memory/settings.js';
 import type { PermissionSettings } from '../permissions/policy.js';
 import type { PluginHostSettings } from '../plugins/settings.js';
 
@@ -82,6 +84,8 @@ export interface OpenAiOptions {
   reasoningEffort: boolean;
   /** Chat Completions: the output limit field (`max_completion_tokens` for OpenAI's own API). */
   maxTokensField: 'max_tokens' | 'max_completion_tokens';
+  /** Send `prompt_cache_key` so requests with one prefix reach the same cache; null = only to api.openai.com (other servers may reject it). */
+  promptCacheKey: boolean | null;
 }
 
 /**
@@ -156,11 +160,14 @@ export interface ContextSettings {
   toolSearch: ToolSearchSettings;
   handoff: HandoffSettings;
   compaction: CompactionSettings;
+  idleCompaction: IdleCompactionSettings;
 }
 
 export interface MemorySettings {
   /** Declare the provider's own memory tool type instead of a schema (the API then adds its own memory instructions). */
   nativeTool: boolean;
+  board: BoardSettings;
+  dream: DreamSettings;
 }
 
 export interface ProteaConfig {

@@ -28,6 +28,8 @@ export interface MsgRecord {
   model?: string;
   /** Written by startup repair rather than by a turn. */
   repair?: boolean;
+  /** This message showed the whiteboard as of this external revision. */
+  boardRev?: number;
 }
 
 export interface MarkRecord {
@@ -159,6 +161,7 @@ export class Transcript {
   private prefix: string | null = null;
   /** Notes of the handoff that started this transcript (memory-relative path). */
   private handoffNotes: string | null = null;
+  private shownBoardRev = 0;
   private fd: number;
 
   private constructor(
@@ -247,6 +250,7 @@ export class Transcript {
           throw new TranscriptCorruptError(`${this.file}:${i + 1}: malformed message record`);
         }
         this.records.push(rec);
+        if (typeof rec.boardRev === 'number') this.shownBoardRev = rec.boardRev;
         this.trailingBatchEnd = null;
       } else if (rec.t === 'mark') {
         if (rec.kind === 'repair' && Array.isArray(rec['actions'])) this.repairs.push(...(rec['actions'] as RepairAction[]));
@@ -273,7 +277,13 @@ export class Transcript {
     this.writeLine(rec);
     this.records.push(rec);
     if (rec.content.length > 0) this.derived.push({ msg: { role: rec.role, content: rec.content }, src: this.records.length - 1 });
+    if (typeof rec.boardRev === 'number') this.shownBoardRev = rec.boardRev;
     this.trailingBatchEnd = null;
+  }
+
+  /** The external whiteboard revision this conversation has already been shown. */
+  get boardRev(): number {
+    return this.shownBoardRev;
   }
 
   appendMark(kind: string, data: Record<string, unknown> = {}): void {

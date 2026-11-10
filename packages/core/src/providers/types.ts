@@ -73,6 +73,8 @@ export interface Provider {
   supportsToolSearch?(role: ModelRole): boolean;
   /** Input tokens the model for this role accepts (its context window), when known. */
   contextWindow?(role: ModelRole): number | undefined;
+  /** How long a cached prompt prefix lasts without use, when the provider states it. */
+  cacheHorizonMs?(role: ModelRole): number | undefined;
   /** Exact input tokens of a request, when the provider can count them; undefined otherwise. */
   countTokens?(req: ProviderRequest, opts: { signal: AbortSignal }): Promise<number | undefined>;
   /** Model names the endpoint offers (for the console's model picker), when it can list them. */

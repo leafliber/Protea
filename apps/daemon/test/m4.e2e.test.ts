@@ -125,9 +125,8 @@ describe('M4 acceptance', () => {
     expect(outputs.at(-1)).toContain('预约牙医');
     expect(outputs.at(-1)).toContain('周五交报告');
 
-    // Bookkeeping: a short list of recent handoffs in INDEX.md, the old transcripts sealed, the pointer moved.
-    const index = d.memory.readText('INDEX.md') ?? '';
-    expect(index).toMatch(/## Recent handoffs\n\n(- \/memories\/handoff\/\S+\.md\n){5}$/);
+    // Bookkeeping: INDEX.md (part of the prefix) left alone, the old transcripts sealed, the pointer moved.
+    expect(d.memory.readText('INDEX.md') ?? '').not.toContain('## Recent handoffs');
     const sessions = path.join(d.dataDir, 'sessions');
     expect(fs.readFileSync(path.join(sessions, 'main.current'), 'utf8').trim()).toBe(path.basename(d.transcript.file));
     expect(fs.readFileSync(path.join(sessions, 'main.0001.jsonl'), 'utf8')).toMatch(/"kind":"handoff","to":"main.0002.jsonl"/);

@@ -9,14 +9,14 @@ import { loadEnvPromptTemplate, renderEnvPrompt } from './env-prompts.js';
 import { forkNotes, runtimeNotes } from './runtime-notes.js';
 
 /** Longest memory index that goes into the prefix as is. */
-export const MAX_INDEX_CHARS = 32_000;
+export const MAX_INDEX_CHARS = 8_000;
 
 export interface SegmentSourceOptions {
   /** The persona files as they are now (reloaded when they change). */
   persona: () => PersonaFiles;
   /** Persona hooks; `systemSegments` may rewrite the main prefix. */
   hooks?: () => PersonaHooks | null;
-  /** Text of memory/INDEX.md; null when there is none. */
+  /** The published text of memory/INDEX.md (it changes only at chosen moments, to keep the prefix stable); null when there is none. */
   memoryIndex?: () => string | null;
   plugins: { envSources(): EnvPromptSource[] };
   /** The permission summary (P3: restrictions are stated in advance); null when nothing is restricted. */

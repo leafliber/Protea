@@ -108,6 +108,7 @@ export function createMetrics(o: MetricsOptions): Metrics {
   }
   const preemptions = new Counter({ name: 'protea_preemptions_total', help: 'Preemptions and interrupts', labelNames: ['source', 'kind'], ...reg });
   const aging = new Counter({ name: 'protea_aging_promotions_total', help: 'Events promoted to flush by aging', labelNames: ['level'], ...reg });
+  const compactions = new Counter({ name: 'protea_compactions_total', help: 'Conversation compactions by kind', labelNames: ['kind'], ...reg });
   const turns = new Counter({ name: 'protea_turns_total', help: 'Finished batches (main) and forks', labelNames: ['session_kind', 'end_reason'], ...reg });
   const turnDuration = new Histogram({
     name: 'protea_turn_duration_seconds',
@@ -256,6 +257,7 @@ export function createMetrics(o: MetricsOptions): Metrics {
       batchStart.delete(b.batchId);
       if (t0 !== undefined) turnDuration.observe({ session_kind: 'main' }, (o.clock.now() - t0) / 1000);
     }),
+    o.bus.on('session.handoff', (h) => compactions.inc({ kind: h.kind })),
     o.bus.on('fork.changed', (f) => {
       if (!isForkTerminal(f.state) || forkEnded.has(f.id)) return;
       forkEnded.add(f.id);

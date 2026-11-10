@@ -1,5 +1,7 @@
 import { DEFAULT_TOOL_SEARCH } from '../context/settings.js';
+import { DEFAULT_DREAM, DEFAULT_IDLE_COMPACTION } from '../maintenance/settings.js';
 import { DEFAULT_MCP_SETTINGS } from '../mcp/settings.js';
+import { DEFAULT_BOARD } from '../memory/settings.js';
 import { DEFAULT_PLUGIN_HOST_SETTINGS } from '../plugins/settings.js';
 import { DEFAULT_HANDOFF } from '../session/settings.js';
 import { defaultTimeZone } from '../util/time.js';
@@ -48,8 +50,9 @@ export function defaultConfig(): ProteaConfig {
       toolSearch: { ...DEFAULT_TOOL_SEARCH },
       handoff: { ...DEFAULT_HANDOFF },
       compaction: { enabled: false, triggerTokens: 150_000, instructions: null },
+      idleCompaction: { ...DEFAULT_IDLE_COMPACTION },
     },
-    memory: { nativeTool: false },
+    memory: { nativeTool: false, board: { ...DEFAULT_BOARD }, dream: { ...DEFAULT_DREAM } },
     persona: { dir: 'persona' },
     observability: { logLevel: 'info', logFormat: 'auto', logEventText: false, keepRuns: 20, logRotateMb: 50, logRotateKeep: 4, requiredPlugins: [], recordProvider: 'off' },
   };
@@ -108,8 +111,16 @@ export const STARTER_CONFIG_YAML = `# Protea configuration. Every key is optiona
 
 # context:
 #   handoff:                  # when the conversation grows too long it is handed off to a new one
-#     softTokens: 200000      # at the start of a batch above this; the newest third is carried over
+#     softTokens: 80000       # at the start of a batch above this; the newest third is carried over
 #     hardTokens: null        # before any request above this (null: context window - max output - 5 %)
+#   idleCompaction:           # while idle the conversation is compacted before it gets long
+#     minTokens: 32000        # conversation tokens above which it is compacted once the provider's cache is cold
+#     keepTokens: 8000        # newest tokens carried over verbatim
+
+# memory:
+#   dream:                    # daily consolidation of the memory directory
+#     at: "03:30"             # earliest local time of each day's run
+#     model: fork             # main | fork | cheap
 
 # control:
 #   listen: 0.0.0.0:7788      # the web console is at http://<host>:7788/ (first visit: create the admin account

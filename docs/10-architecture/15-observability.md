@@ -1,6 +1,6 @@
 # 可观测性
 
-> 状态：Accepted（M6）· 更新：2026-11-04
+> 状态：Accepted（M6）· 更新：2026-11-10
 
 > **实现状态（M6）**：日志在 `packages/core/src/observability/logger.ts` 与 `logs.ts`（内存缓冲、过滤、读 `log.jsonl`、运行目录列表与清理），指标在 `metrics.ts`，关停记录与崩溃报告在 `run-dir.ts`，Provider 录制在 `providers/recorder.ts`。M6 加了日志的秘密过滤、延迟与数据库大小指标、录制模式。为实际测试又加了追踪日志（`trace.ts`，§2.1）、日志轮转与诊断包（`packages/core/src/diagnostics.ts`，§8）。未实现：OpenTelemetry 追踪、软告警（§6）。
 
@@ -58,6 +58,7 @@
 | `protea_event_to_request_seconds` | histogram（从入库到第一次带着它的主会话模型请求发出；M6） | level |
 | `protea_preemptions_total` | counter | source, kind(preempt/interrupt) |
 | `protea_aging_promotions_total` | counter | level |
+| `protea_compactions_total` | counter | kind（idle、capacity、requested、overflow） |
 | `protea_turns_total` | counter（主会话按批，Fork 按整个 Fork） | session_kind, end_reason |
 | `protea_turn_duration_seconds` | histogram | session_kind |
 | `protea_model_tokens_total` | counter | role, kind(input/output/cache_read/cache_write) |

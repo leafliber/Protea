@@ -7,7 +7,11 @@ export const MEMORY_ROOT = '/memories';
 /** Largest file the memory tool writes or indexes. */
 export const MAX_MEMORY_FILE_BYTES = 1024 * 1024;
 const MAX_VIEW_CHARS = 100_000;
+/** Lines of a file shown when no range is asked for: memory is read a piece at a time. */
+const MAX_VIEW_LINES = 200;
 const LINE_NUMBER_WIDTH = 6;
+/** Written by the runtime as a record of what happened; the memory tool may read them only. */
+const READ_ONLY_DIRS = ['raw', 'handoff'] as const;
 
 /** Create the memory directory on first start from a template (INDEX.md); never overwrite afterwards. */
 export function ensureMemoryDir(memoryDir: string, templateDir: string): { created: boolean } {
@@ -95,6 +99,9 @@ export class MemoryStore {
   }
 
   run(cmd: MemoryCommand): string {
+    if (cmd.command !== 'view') {
+      for (const p of [cmd.path, cmd.old_path, cmd.new_path]) if (p !== undefined) this.assertWritable(p);
+    }
     switch (cmd.command) {
       case 'view':
         return this.view(this.need(cmd.path, 'path'), cmd.view_range);
@@ -111,6 +118,13 @@ export class MemoryStore {
         return this.rename(this.need(cmd.old_path, 'old_path'), this.need(cmd.new_path, 'new_path'));
       default:
         throw new MemoryError(`Unknown command ${JSON.stringify((cmd as { command: unknown }).command)}.`);
+    }
+  }
+
+  private assertWritable(memPath: string): void {
+    const rel = this.relative(memPath);
+    if (READ_ONLY_DIRS.some((d) => rel === d || rel.startsWith(`${d}/`))) {
+      throw new MemoryError(`${memPath} is read-only: the runtime keeps it as a record of what happened.`);
     }
   }
 
@@ -153,6 +167,9 @@ export class MemoryStore {
       const s = Math.max(1, from) - 1;
       shown = lines.slice(s, to === -1 ? lines.length : to);
       start = s + 1;
+    } else if (lines.length > MAX_VIEW_LINES) {
+      shown = lines.slice(0, MAX_VIEW_LINES);
+      return `Here's the content of ${memPath} with line numbers:\n${numbered(shown, start).slice(0, MAX_VIEW_CHARS)}\n… [truncated: ${lines.length} lines in all; pass view_range to see the rest]`;
     }
     let body = numbered(shown, start);
     if (body.length > MAX_VIEW_CHARS) {

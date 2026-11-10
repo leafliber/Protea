@@ -167,7 +167,26 @@ CREATE INDEX ix_events_batch ON events(batch_id) WHERE batch_id IS NOT NULL;
 
 控制台「对话」页的历史（`GET /api/chat`）= `console.message` 事件 + `plugin = 'console'` 的输出，按 `(at, 种类, id)` 倒序分页。迁移之前发出的回复在第一次启动时从主会话转录（`sessions/main.*.jsonl`）里找回：迁移时间之前、结果不是错误的 `con_send` 调用，各补一行；完成后在 `kv`（`core` / `outputs.backfilled`）记下，只做一次。和 `events` 一样不自动清理。诊断包不导出这张表（里面是回复正文）；备份会带上。`model.error` 内部事件从此在 `meta` 里带 `batchId` 与 `kind`，对话页据此说明某条消息为什么没有回复。
 
-### 1.7 后续迁移（计划）
+### 1.7 迁移 7：`memory-layers`（2026-11-10）
+
+```sql
+CREATE TABLE board_items (                              -- 白板；已关闭的条目保留
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
+  section TEXT NOT NULL,                                -- goals | todo | notes
+  text TEXT NOT NULL, due TEXT,
+  state TEXT NOT NULL DEFAULT 'open',                   -- open | done | dropped
+  outcome TEXT, source TEXT,                            -- source：添加它的批
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, closed_at TEXT
+);
+CREATE INDEX ix_board_state ON board_items(state, section);
+DROP TABLE memory_fts;
+DELETE FROM memory_files;                               -- 下次启动时全部重新索引
+CREATE VIRTUAL TABLE memory_fts USING fts5(path UNINDEXED, summary, keywords, body, body_text UNINDEXED, tokenize = 'unicode61');
+```
+
+`summary`、`keywords`、`body` 是把 CJK 切成重叠二元组后的文本，`body_text` 是原文（用于片段）。kv 命名空间 `memory` 有两项：`board`（`rev`、`externalRev`、`seq`）与 `dream`（最近一次整理的状态）。转录的消息记录增加可选字段 `boardRev`：这条消息显示了哪个外部修订的白板。
+
+### 1.8 后续迁移（计划）
 
 | 表 | 用途 | 里程碑 |
 |---|---|---|
@@ -201,7 +220,7 @@ CREATE INDEX ix_events_batch ON events(batch_id) WHERE batch_id IS NOT NULL;
 | `secrets/<NAME>` | 文本，0600 | 秘密（API 令牌 `PROTEA_ADMIN_TOKEN`、供应商密钥 `PROVIDER_<ID>_API_KEY`、初始化前的设置码 `PROTEA_SETUP_CODE` 等） |
 | `secrets/mcp-oauth/<id>.json` | JSON，0600 | MCP 服务器的 OAuth 客户端注册、令牌与 PKCE verifier |
 | `persona/*.md` | Markdown | 人格文件，首次启动从默认人格复制；`persona/hooks.{ts,mts,mjs,js}` 为可选钩子（M4） |
-| `memory/` | 目录（0700），文件 0600 | 记忆（M4）：`INDEX.md`（进系统前缀）、`journal/`、`notes/`、`tasks.md`、`handoff/<UTC>Z.md`（交接笔记）、`blobs/`；首次启动从 `personas/default/memory/` 创建 |
+| `memory/` | 目录（0700），文件 0600 | 记忆（M4）：`INDEX.md`（发布副本进系统前缀）、`journal/`、`notes/`、`handoff/<UTC>Z.md`（压缩笔记）、`raw/<UTC>Z.md`（被压缩的对话原文）、`blobs/`；首次启动从 `personas/default/memory/` 创建 |
 | `sessions/main.<seq>.jsonl.abandoned-<ms>` | NDJSON | 交接在切换指针前崩溃留下的新转录（不再使用） |
 | `protea.lock` | 文本 | 单实例锁（pid） |
 

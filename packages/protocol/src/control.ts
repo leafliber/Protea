@@ -158,6 +158,59 @@ export interface ApprovalInfo {
   decidedBy?: string;
 }
 
+/** Why a conversation was compacted. */
+export type HandoffKind = 'idle' | 'capacity' | 'requested' | 'overflow';
+
+export const BOARD_SECTIONS = ['goals', 'todo', 'notes'] as const;
+export type BoardSection = (typeof BOARD_SECTIONS)[number];
+
+/** One line of the whiteboard. Closed items stay in the table for review. */
+export interface BoardItem {
+  id: string;
+  section: BoardSection;
+  text: string;
+  due?: string;
+  state: 'open' | 'done' | 'dropped';
+  outcome?: string;
+  /** Batch that added it. */
+  source?: string;
+  createdAt: string;
+  updatedAt: string;
+  closedAt?: string;
+}
+
+/** A change to the whiteboard, from the `board` tool or the control API. `due: ""` clears the date. */
+export type BoardCommand =
+  | { command: 'add'; section: BoardSection; text: string; due?: string }
+  | { command: 'update'; id: string; section?: BoardSection; text?: string; due?: string }
+  | { command: 'done'; id: string; outcome?: string }
+  | { command: 'drop'; id: string; outcome?: string };
+
+export interface BoardResponse {
+  rev: number;
+  items: BoardItem[];
+  /** Most recently closed items, with `?closed=1`. */
+  closed?: BoardItem[];
+}
+
+/** The daily consolidation of the memory directory. */
+export interface DreamStatus {
+  enabled: boolean;
+  /** Stopped after repeated failures; a manual run clears it. */
+  disabled: boolean;
+  running: boolean;
+  /** Earliest local time of each day's run. */
+  at: string;
+  /** Local date of the latest run. */
+  date?: string;
+  forkId?: string;
+  startedAt?: string;
+  endedAt?: string;
+  result?: 'completed' | 'failed' | 'cancelled';
+  summary?: string;
+  failures: number;
+}
+
 export interface StatusResponse {
   runId: string;
   version: string;
@@ -179,9 +232,9 @@ export interface StatusResponse {
    * M4: the main conversation's size. `estimatedTokens` is the last response's usage plus an
    * estimate of what came after; a handoff starts when it passes `softTokens` at a batch start or `hardTokens` anytime.
    */
-  context: { transcript: string; handoffs: number; estimatedTokens: number; softTokens: number; hardTokens: number };
-  /** M4: files in the memory directory, and whether persona hooks are loaded (or why not). */
-  memory: { files: number };
+  context: { transcript: string; handoffs: number; estimatedTokens: number; softTokens: number; hardTokens: number; lastCompaction?: { at: string; kind: HandoffKind; dropped: number; kept: number } };
+  /** M4: files in the memory directory, the whiteboard and the daily consolidation; `persona`: whether hooks are loaded (or why not). */
+  memory: { files: number; board: { open: number; rev: number }; dream: DreamStatus };
   persona: { hooks: boolean; problem?: string };
   usage24h: UsageTotals;
   /** M5: delivery paused by the operator (who), and sources in preemption cooldown. */

@@ -90,6 +90,7 @@ providers:                             # 模型供应商（12-model-providers.md
       openai:                          # 只对 openai-chat / openai-responses 生效
         reasoningEffort: false         # true：把 effort 作为推理强度发送（只对推理模型开启，其他模型会拒绝该参数）
         maxTokensField: max_tokens     # openai-chat 的输出上限字段；OpenAI 官方接口用 max_completion_tokens
+        promptCacheKey: null           # 发送 prompt_cache_key；null：只发给 api.openai.com
       echo:
         delayMs: 0                     # protocol: echo 每次回复前的延迟（崩溃测试与长稳测试）；用量按长度估算（M6）
     local:                             # 例：本机 Ollama，只做轻量任务（roles: { cheap: local }）
@@ -166,19 +167,33 @@ context:
     threshold: 40
     keepPerServer: 3                   # 每个 MCP 服务器调用最多的几个工具保持加载
   handoff:                             # 容量交接（M4，docs/10-architecture/05-sessions-and-agent-loop.md §8）
-    softTokens: 200000                 # 批开始时估算超过它就交接
+    softTokens: 80000                  # 批开始时估算超过它就交接
     hardTokens: null                   # 任何请求前超过它就交接；null = 上下文窗口 − maxOutputTokens − max(8000, 5 %)
     keepRatio: 0.333                   # 新对话原样保留的尾部 = keepRatio × softTokens
-    notesMaxTokens: 8000               # 交接笔记请求的输出上限（cheap 模型）
+    notesMaxTokens: 8000               # 压缩笔记请求的输出上限（cheap 模型，含思考；笔记长度由提示词限制）
     notesInputTokens: 150000           # 交给笔记模型的历史上限，超出先丢最早的部分
-    recentInIndex: 5                   # INDEX.md 的 "Recent handoffs" 保留几条
   compaction:                          # 服务端压缩（M4，Anthropic beta compact-2026-01-12），交接前的第一道
     enabled: false
     triggerTokens: 150000              # ≥ 50000
     instructions: null                 # 替换默认的摘要提示
+  idleCompaction:                      # 闲时压缩（docs/10-architecture/05-sessions-and-agent-loop.md §8）
+    enabled: true
+    minTokens: 32000                   # 对话（不含前缀）超过它，且 Provider 的缓存已过期时压缩
+    earlyTokens: 48000                 # 对话超过它时，只需空闲 earlyAfterMs
+    earlyAfterMs: 900000
+    coldAfterMs: 1800000               # Provider 不声明缓存寿命时，空闲多久算缓存已过期
+    keepTokens: 8000                   # 原样保留的最近内容
+    minDroppableTokens: 16000          # 可丢弃的内容少于它就不压缩
+    minIntervalMs: 600000              # 两次尝试的最短间隔（失败也计入）
 
 memory:
   nativeTool: false                    # true：声明官方 memory_20250818（API 会自动加入"先查看记忆目录"的指令）
+  board: { maxItems: 60, maxChars: 6000 }   # 白板上限
+  dream:                               # 每日记忆整理（需要重启生效）
+    enabled: true
+    at: "03:30"                        # 每天最早的开始时间（守护进程时区）
+    minIdleMs: 1800000                 # 主会话至少空闲这么久
+    model: fork                        # main | fork | cheap
 
 persona:
   dir: persona                         # 人格目录，相对数据目录

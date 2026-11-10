@@ -95,11 +95,11 @@ describe('skills registry', () => {
     const catalog = t.reg.catalog() as string;
     expect(catalog.startsWith('# Skills\n')).toBe(true);
     expect(catalog).toMatch(/\n- daily-brief: Prepare the owner's morning brief.*\(source: builtin\)\n- protea-self-ops: /);
-    expect(t.reg.get('memory-hygiene')).toMatchObject({ listed: false, requiresTools: ['memory', 'memory_search'] });
+    expect(t.reg.get('memory-dream')).toMatchObject({ listed: false, requiresTools: ['memory', 'memory_search', 'board'] });
     // Once the memory tools exist (M4) it appears.
-    t.tools.push('memory', 'memory_search');
+    t.tools.push('memory', 'memory_search', 'board');
     expect(t.reg.refreshCatalog()).toBe(true);
-    expect(t.reg.listedNames()).toContain('memory-hygiene');
+    expect(t.reg.listedNames()).toContain('memory-dream');
   });
 
   it('picks up a copied skill on rescan, rejects a broken one with its reason, and lets user skills override built-ins', () => {

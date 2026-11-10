@@ -140,7 +140,11 @@
 | GET | `/api/memory/tree` | `{ files: [{ path, size, mtime }] }`（相对记忆目录） |
 | GET | `/api/memory/file?path=` | `{ path, text }`；`path` 可写 `notes/a.md` 或 `/memories/notes/a.md`；越界 400，不存在 404 |
 | PUT | `/api/memory/file?path=` | 请求体为纯文本，整份写入（原子替换），记审计 `memory_write`；越界或超过 1 MB 400 |
-| GET | `/api/memory/search?q=&paths=&limit=` | `{ hits: [{ path, snippet }] }`，同 `memory_search` |
+| GET | `/api/memory/search?q=&paths=&limit=` | `{ hits: [{ path, snippet, summary? }] }`，搜索全部层 |
+| GET | `/api/memory/board?closed=1` | `{ rev, items, closed? }`；`closed` 是最近关闭的条目 |
+| POST | `/api/memory/board` | 请求体是 `BoardCommand`（`add` / `update` / `done` / `drop`），返回 `{ ok, receipt, rev }`，记审计 `memory_write`；无效 400 |
+| GET | `/api/memory/dream` | `DreamStatus`：是否启用或停用、是否运行中、最近一次的日期与结果 |
+| POST | `/api/memory/dream` | 立即整理，202 `{ started, forkId }`；已在运行或预算不允许时 409。同时解除连续失败后的停用 |
 | GET | `/api/persona/files` | `{ files: [{ path, size, mtime }] }`：人格目录下的 `.md`（`SOUL.md`、`OPERATING.md`、`USER.md` 总在列表里，不存在时 size 为 0），含 `plugins/<id>/ENV_PROMPT.md` |
 | GET | `/api/persona/file?path=` | `{ path, text }`；不存在 404 |
 | PUT | `/api/persona/file?path=` | 纯文本整份写入（≤ 256 KB，原子替换），随即重载人格，从下一次模型请求生效；只接受目录内的 `.md`（钩子是代码，不开放）→ 400 |
@@ -197,6 +201,7 @@ SSE 与 WS 的消息都按总线记录的因果顺序发出：事件先于为它
 - M2：`/api/plugins*`（目录安装）、`/api/approvals*`、`/hooks/<name>`。
 - M3：`/api/mcp/servers*`、`/api/mcp/oauth/callback`、`/api/skills*`（目录安装）。
 - M4：`POST /api/sessions/main/handoff`、`/api/memory/*`；`/api/status` 增加 `context`、`memory`、`persona`。
+- 分层记忆（2026-11-10）：`/api/memory/board`、`/api/memory/dream`；`/api/status` 的 `memory` 增加 `board`、`dream`，`context` 增加 `lastCompaction`。
 - M5：其余全部（本页各表），`/api/status` 增加 `scheduler`；`/ws`、`/metrics`、控制台托管。
 - 实际测试支持（M6 之后）：`/api/diagnostics`。
 - 账号与供应商档案（M6 之后，2026-11-05）：`/api/setup`、`/api/auth/login` 的账号密码方式、`/api/auth/password`、`/api/accounts*`、`/api/providers*`；会话改为服务端存储（`v2.` cookie）；`/api/status` 增加 `setupRequired` 与 `provider.protocol`。

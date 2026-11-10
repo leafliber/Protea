@@ -1,6 +1,6 @@
 # 上下文装配
 
-> 状态：Accepted（M0–M4）· 更新：2026-11-08
+> 状态：Accepted（M0–M4；分层记忆 2026-11-10）· 更新：2026-11-10
 
 ## 1. 目标
 
@@ -20,7 +20,7 @@
 │    seg:owner             ← persona/USER.md
 │    seg:env:<plugin>…     ← 各插件 envPrompt（按插件 ID 排序）
 │    seg:skills-catalog    ← Skills 目录（name + description），按 name 排序
-│    seg:memory-index      ← memory/INDEX.md（人格维护；变动较少）
+│    seg:memory-index      ← memory/INDEX.md 的发布副本（梦境维护；只在指定时刻变化）
 │  ]  ← 末尾放 cache_control 断点 #1
 ├─ messages: [
 │    …历史（append-only）…  ← 自动缓存 / 断点 #2 放在上一批末尾
@@ -44,9 +44,9 @@
 | `env:<plugin>` | 插件 `envPrompt()` 模板 + `envPromptVars()` | 低（插件启停时） | 插件生命周期事件 → 回合边界重建 |
 | `env:mcp:<server>` | MCP 服务器配置里的 `envPrompt`（M3） | 低（服务器启停时） | 服务器状态变化 → 回合边界重建 |
 | `skills-catalog` | Skills 注册表（M3） | 低 | 目录文本变化 → 回合边界重建 |
-| `memory-index` | `memory/INDEX.md`，包在 `<memory_index path="/memories/INDEX.md">` 里（M4） | 中 | 文件变化 → 回合边界重建 |
+| `memory-index` | `memory/INDEX.md` 的发布副本，包在 `<memory_index path="/memories/INDEX.md">` 里（超过 8000 字符截断） | 低（通常每天一次） | 压缩或交接、梦境结束、控制台修改、进程启动时发布；主会话忙时推迟到空闲 |
 
-**重建代价**：任何分段变化都会让该分段之后的缓存失效，并且此前的 thinking 块从此不再回传（它们绑定旧前缀，[05-sessions-and-agent-loop.md](05-sessions-and-agent-loop.md) §8.1）。因此变动频繁的内容（记忆索引）放在最后一段；真正高频的内容（今天的待办）不进前缀，而是由模型通过 `memory` 工具按需读取。人格钩子 `systemSegments({ defaults })` 可以改写主会话的分段（M4）。
+**重建代价**：任何分段变化都会让该分段之后的缓存失效，并且此前的 thinking 块从此不再回传（它们绑定旧前缀，[05-sessions-and-agent-loop.md](05-sessions-and-agent-loop.md) §8.1）。因此变动最多的内容（记忆索引）放在最后一段；真正高频的内容（白板、检索结果）不进前缀，只出现在历史末尾（[11-memory-and-persona.md](11-memory-and-persona.md) §3.1）。人格钩子 `systemSegments({ defaults })` 可以改写主会话的分段（M4）。
 
 ### 3.1 环境提示模板
 
@@ -66,6 +66,7 @@
 - 一批 → 一条 `user` 消息；多个 `<event>` 按游标排序。
 - `external` 事件的文本原样放入 `<event>` 内；Core 不转义语义，但会转义会破坏标签结构的字符。
 - 附件（`blobs`）渲染为 `image` / `document` content block（受 Provider 接受的 MIME 类型约束，由 `modelFacts.accepts` 给出）；不接受的类型只给出句柄文本。
+- 主会话以外的来源改过白板时，事件消息里在 `<events>` 与 `<status>` 之间带一个 `<board>` 块。压缩后的首条消息带 `<board>` 与 `<handoff_notes>` 块。这些块都写入转录，文本经过结构转义，内容是数据而不是指令。
 - `<status>` 块固定字段：`now`、`phase`、各等级 pending 数（`pending_l0..4`）；可选字段：各等级预算余量（`budget_lN="82%"`，仅在设置了 `budget.dailyUsd` 时出现）、活跃 Fork 数（`forks="2"`，为 0 时省略）。
 - Fork 的请求用另一个固定前缀：identity → Fork 运行时说明 → owner，所有 Fork 共用，工具表是该 Fork 允许的子集（[05-sessions-and-agent-loop.md](05-sessions-and-agent-loop.md) §5.1）。
 
@@ -79,8 +80,10 @@
 - 断点 #2：顶层自动缓存（请求顶层的 `cache_control`）覆盖对话尾部；不支持的平台改为手动放在上一批最后一条消息。
 - TTL 默认 `1h`（Claude 档案的 `anthropic.cacheTtl`）：个人助理的批次之间常隔 5–60 分钟，5 分钟 TTL 会频繁冷启动。两个断点使用同一 TTL。
 - 稳定性有自动化测试：连续 100 次推送中，每个请求的 system 与 tools 字节相同，消息序列（按内容块展开）是上一个请求的严格前缀（`invariants.test.ts`）。
+- **各厂商的共同点**（2026-11-10 查证）：Anthropic（显式断点，5 分钟或 1 小时）、OpenAI（自动，≥ 1024 token，`prompt_cache_key` 改善路由）、DeepSeek（自动的硬盘 KV 缓存，未使用时通常几小时到几天后清除）、通义千问（隐式缓存自动开启）都是前缀精确匹配。Kimi、GLM 的细节没有查到可靠资料。设计只依赖"前缀精确匹配 + 只追加 + 有寿命"这三点，不依赖任何一家的参数。
+- 动态内容只走末尾；非紧急的前缀变化（`INDEX.md`）只在缓存本来就冷的时刻发布；闲时压缩尽量等到缓存过期（[05-sessions-and-agent-loop.md](05-sessions-and-agent-loop.md) §8）。`prompt_cache_key` 默认只发给 `api.openai.com`（档案的 `openai.promptCacheKey` 可改），第三方兼容接口可能拒绝未知参数。
 - 验证：`usage.cache_read_input_tokens` 连续为 0 → 控制台告警"缓存未命中"，并列出最近一次前缀 diff（哪一段变了）。
 
 ## 8. 容量估算
 
-每次请求前估算输入 token：上一次响应的 usage 加上之后消息的本地估算，接近阈值（90 %）时用 Provider 的 `count_tokens` 求精确值；批开始时超过 `softTokens`、任何请求前超过 `hardTokens` 则进入交接（[05-sessions-and-agent-loop.md](05-sessions-and-agent-loop.md) §8）。当前估算与阈值见 `/api/status` 的 `context` 字段（控制台的"上下文占用环"在 M5）。可选的服务端压缩（`context.compaction`）只用于主会话请求。
+每次请求前估算输入 token：上一次响应的 usage 加上之后消息的本地估算，接近阈值（90 %）时用 Provider 的 `count_tokens` 求精确值；闲时按对话长度压缩（不含前缀，见 05 §8）；批开始时超过 `softTokens`、任何请求前超过 `hardTokens` 则进入交接（[05-sessions-and-agent-loop.md](05-sessions-and-agent-loop.md) §8）。当前估算与阈值见 `/api/status` 的 `context` 字段（控制台的"上下文占用环"在 M5）。可选的服务端压缩（`context.compaction`）只用于主会话请求。

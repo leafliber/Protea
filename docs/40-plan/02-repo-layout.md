@@ -39,7 +39,8 @@ Protea/
 │   │   │   ├── mcp/             MCP 客户端管理器（连接、监督、工具命名与注册、资源与 prompts、OAuth）
 │   │   │   ├── skills/          SKILL.md 解析、Skills 注册表与目录段、skill_load / skill_read
 │   │   │   ├── persona/         人格文件加载与热重载、可选钩子（hooks.*）
-│   │   │   ├── memory/          记忆存储（memory 工具命令面）、FTS5 索引、memory / memory_search / memory_recent
+│   │   │   ├── maintenance/     空闲时的维护：闲时压缩的策略与触发、每日记忆整理（梦境）
+│   │   │   ├── memory/          记忆存储（memory 工具命令面）、白板、FTS5 索引、memory / memory_search / memory_recent / board
 │   │   │   ├── config/          默认值、层叠加载、环境变量映射、秘密、旧供应商写法的迁移（legacy.ts）
 │   │   │   ├── auth/            控制台账号（scrypt）、会话、设置码（accounts.ts）
 │   │   │   ├── db/              SQLite 打开与内嵌迁移（含迁移前快照）、仓储（batches/usage/kv/sessions/tool_stats）
@@ -58,7 +59,7 @@ Protea/
 │   ├── rss/                     进程外来源：RSS / Atom 订阅
 │   ├── imap/                    进程外来源：IMAP 邮箱（imapflow + mailparser；测试用假 IMAP 服务器）
 │   └── shell/                   进程外工具：sh_run（工作区、超时、输出截断、环境白名单；默认不启用，M6）
-├── skills/                      内置 Skills（protea-self-ops、daily-brief、memory-hygiene）
+├── skills/                      内置 Skills（protea-self-ops、daily-brief、memory-dream）
 ├── apps/
 │   ├── daemon/                  组装 Core + 控制平面 + 内置插件；单实例锁；离线回放（replay.ts）；端到端与安全检查清单测试
 │   ├── cli/                     `protea` 命令（serve 直接启动守护进程；dev-plugin 本地运行插件；logq、migrate、healthcheck、backup、restore、replay 直接用数据目录（admin.ts）；其余经 HTTP API / SSE / WebSocket）
@@ -76,7 +77,7 @@ Protea/
 
 `protocol` ← `core` ← {`control`, 进程内插件} ← `daemon` ← `cli`；`core` 不依赖 `control`、`daemon` 或任何插件。进程外插件（内置的与第三方的）只依赖 `plugin-sdk` 与 `protocol`，并打包成单文件；`web` 只依赖 `protocol` 的类型。
 
-`packages/core` 内部按层依赖，从下到上：`util` → 各模块的 `settings.ts`（设置与默认值，纯数据；`providers/profiles.ts` 同属这一层）→ `config`、`db`、`bus`、`events`、`memory`、`observability`、`permissions`、`persona`、`skills`、`auth` → `context`、`tools`、`mcp`、`backup`、`diagnostics` → `plugins`、`providers` → `session` → `forks`、`scheduler`。运行时只能导入更低的层；`import type` 不受限制，对象之间由 `apps/daemon/src/daemon.ts` 通过构造参数连接。`packages/core/test/architecture.test.ts` 检查这个方向和各包允许的 `@protea/*` 依赖；新增 core 模块时要在其中指定层。
+`packages/core` 内部按层依赖，从下到上：`util` → 各模块的 `settings.ts`（设置与默认值，纯数据；`providers/profiles.ts` 同属这一层）→ `config`、`db`、`bus`、`events`、`memory`、`observability`、`permissions`、`persona`、`skills`、`auth` → `context`、`tools`、`mcp`、`backup`、`diagnostics` → `plugins`、`providers` → `session` → `forks`、`maintenance`、`scheduler`。运行时只能导入更低的层；`import type` 不受限制，对象之间由 `apps/daemon/src/daemon.ts` 通过构造参数连接。`packages/core/test/architecture.test.ts` 检查这个方向和各包允许的 `@protea/*` 依赖；新增 core 模块时要在其中指定层。
 
 ## 构建与运行
 

@@ -617,7 +617,7 @@ export class ForkManager {
 
   private resolveTools(requested?: string[]): string[] {
     const candidates = this.o.tools.list().filter((d) => !forkExcluded(d));
-    if (requested === undefined) return candidates.filter((d) => !d.flags?.sideEffect).map((d) => d.name);
+    if (requested === undefined) return candidates.filter((d) => !d.flags?.sideEffect && !d.flags?.forkOptIn).map((d) => d.name);
     const names = new Set(candidates.map((d) => d.name));
     const unknown = requested.filter((n) => !names.has(n));
     if (unknown.length > 0) {

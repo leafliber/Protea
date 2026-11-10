@@ -221,4 +221,28 @@ CREATE INDEX ix_events_source_received ON events(source, received_at);
 CREATE INDEX ix_events_batch ON events(batch_id) WHERE batch_id IS NOT NULL;
 `,
   },
+  {
+    version: 7,
+    name: 'memory-layers',
+    // The search index changes shape: emptying memory_files makes the sync at start index every file again.
+    sql: `
+CREATE TABLE board_items (
+  seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+  id          TEXT NOT NULL UNIQUE,
+  section     TEXT NOT NULL,
+  text        TEXT NOT NULL,
+  due         TEXT,
+  state       TEXT NOT NULL DEFAULT 'open',
+  outcome     TEXT,
+  source      TEXT,
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL,
+  closed_at   TEXT
+);
+CREATE INDEX ix_board_state ON board_items(state, section);
+DROP TABLE memory_fts;
+DELETE FROM memory_files;
+CREATE VIRTUAL TABLE memory_fts USING fts5(path UNINDEXED, summary, keywords, body, body_text UNINDEXED, tokenize = 'unicode61');
+`,
+  },
 ];

@@ -13,6 +13,8 @@ export interface ToolFlags {
   readOnly?: boolean;
   /** Changes the outside world; subject to permission policy (M2). */
   sideEffect?: boolean;
+  /** Left out of a fork's default tools; a fork gets it only when its tool list names it. */
+  forkOptIn?: boolean;
 }
 
 export interface ToolContext {

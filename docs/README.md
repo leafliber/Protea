@@ -20,6 +20,7 @@
 | 接口与格式的精确定义 | [30-specs/](30-specs/) |
 | 做到哪一步、下一步做什么 | [40-plan/01-roadmap.md](40-plan/01-roadmap.md) |
 | 在真实环境里怎么测、日志怎么导出 | [40-plan/06-real-world-testing.md](40-plan/06-real-world-testing.md) |
+| 记忆系统重构的要求与落地 | [40-plan/07-memory-system-redesign.md](40-plan/07-memory-system-redesign.md) |
 
 ## 目录结构
 
@@ -59,7 +60,8 @@ docs/
 │   ├── ADR-0007-single-image-with-node-and-python.md
 │   ├── ADR-0008-append-only-history-and-handoff.md
 │   ├── ADR-0009-single-uid-with-process-limits.md
-│   └── ADR-0010-accounts-and-provider-profiles.md
+│   ├── ADR-0010-accounts-and-provider-profiles.md
+│   └── ADR-0011-layered-memory-and-idle-compaction.md
 ├── 30-specs/                          精确规范（Schema、协议、配置、API）
 │   ├── 01-event-envelope-schema.md
 │   ├── 02-plugin-manifest.md
@@ -74,7 +76,8 @@ docs/
     ├── 03-testing-strategy.md
     ├── 04-risks-and-open-questions.md
     ├── 05-conventions.md              开发与文档规范
-    └── 06-real-world-testing.md       实际测试指南：需要真实条件的复核项、日志与诊断包
+    ├── 06-real-world-testing.md       实际测试指南：需要真实条件的复核项、日志与诊断包
+    └── 07-memory-system-redesign.md   记忆系统重构：九条要求如何落地
 ```
 
 ## 文档约定

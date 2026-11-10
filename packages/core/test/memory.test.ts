@@ -115,7 +115,7 @@ describe('memory tools', () => {
     expect(await byName('memory').handler({ command: 'view', path: '/nope' }, ctx)).toEqual({ text: 'Path must start with /memories, got: /nope', failed: true });
     expect(await byName('memory_recent').handler({ days: 3 }, ctx)).toBe('/memories/journal/2026-11-03.md (5 bytes)\n/memories/journal/2026-11-01.md (12 bytes)');
     index.sync();
-    expect(await byName('memory_search').handler({ query: 'ago' }, ctx)).toMatch(/^2 file\(s\) match "ago":/);
+    expect(await byName('memory_search').handler({ query: 'ago', scope: 'raw' }, ctx)).toMatch(/^2 file\(s\) match "ago":/);
     const native = memoryTools({ store, index, clock: { now: () => now }, timezone: 'UTC', nativeType: true })[0];
     expect(native?.providerType).toBe('memory_20250818');
   });

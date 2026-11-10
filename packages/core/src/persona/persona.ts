@@ -47,7 +47,7 @@ export interface PersonaHooks {
   /** Replace or reorder the system segments of the main session. */
   systemSegments?(ctx: { defaults: SystemSegment[] }): SystemSegment[];
   /** Custom handoff: choose the tail and write the notes. */
-  onHandoff?(snapshot: HandoffSnapshot, ctx: { hardTokens: number; keepTokens: number }): HandoffPlan | Promise<HandoffPlan>;
+  onHandoff?(snapshot: HandoffSnapshot, ctx: { hardTokens: number; keepTokens: number; signal: AbortSignal }): HandoffPlan | Promise<HandoffPlan>;
   /** Called after each batch of the main session. */
   onBatchEnd?(stats: { batchId: string; level: Level; endReason: string; rounds: number }): void | Promise<void>;
   /** Model rounds per batch (default from `session.rounds`). */

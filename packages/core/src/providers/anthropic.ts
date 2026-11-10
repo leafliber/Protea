@@ -100,6 +100,11 @@ export class AnthropicProvider implements Provider {
     return this.settings.contextWindow ?? contextWindowOf(this.modelFor(role));
   }
 
+  cacheHorizonMs(): number | undefined {
+    if (!this.full) return undefined;
+    return this.settings.anthropic.cacheTtl === '1h' ? 3_600_000 : 300_000;
+  }
+
   async countTokens(req: ProviderRequest, opts: { signal: AbortSignal }): Promise<number | undefined> {
     if (!this.client || !this.full) return undefined;
     const p = this.buildParams(req);
