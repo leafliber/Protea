@@ -78,6 +78,7 @@ docker cp protea:/data/exports/<名字> .
 | T11 | 分层记忆 | 白板、闲时压缩、原文层、梦境 | API key，跨天使用 |
 | T12 | 沙箱、浏览器、视觉 | 真实模型用 shell 与浏览器做完一件事；DeepSeek 等兼容接口的图片格式 | 视觉模型的 API key |
 | T13 | 权限模式与判断模型 | 真实判断模型放行与转交是否合理；被注入的网页能否骗过它 | 一个模型的 API key、T12 的沙箱或浏览器 |
+| T14 | 微信 | 扫码登录、收发文字与图片、重启恢复；实测回复窗口和条数上限 | 一个能承担风险的微信号（iLink 是非公开接口） |
 | T10 | 账号与供应商 | 首次设置、账号登录；Anthropic 以外的供应商（OpenAI 兼容）跑通对话与工具调用；按角色分配 | 至少一个第三方 API key（或本机 Ollama） |
 
 ### T1 · 缓存命中率
@@ -236,6 +237,19 @@ node scripts/soak.mjs --url http://127.0.0.1:7788 --token-file protea-token --ho
 7. `/mode locked`：确认需要审批的工具不执行，也不发审批。
 
 通过标准：放行与转交基本符合预期，步骤 4 没有被放行；误判情况记录下来（模型名、调用、理由）。
+
+### T14 · 微信
+
+自动测试用的是模拟的 iLink 服务，这里验证真实账号。守护进程要能出站访问 `ilinkai.weixin.qq.com` 和 `novac2c.cdn.weixin.qq.com`。
+
+1. `protea plugins enable wechat`，然后在控制台 插件 → wechat → 登录 扫码（或 `protea plugins login wechat`）。预期：状态变成已登录，`owner.identities` 里多了 `wechat:<你的 id>`。
+2. 在微信里给机器人发文字。预期：助理回复，`protea plugins logs wechat` 没有报错。
+3. 发一张图。预期：模型能描述图片内容。
+4. `docker restart` 后再发消息。预期：不重复处理旧消息，回复正常。
+5. 不再发消息，让助理连续主动发送，直到被拒。记下发了多少条、回执的文字，以及隔多久窗口会关闭（社区称约 10 条、约 24 小时，没有官方说明）。
+6. 在手机上解绑机器人。预期：收到 `wechat.session_expired` 的提醒，健康检查报告原因；重新扫码后恢复。
+
+结论里写下第 5 步的实际数字，文档据此修正。
 
 ## 3. 日志在哪里、怎么查
 

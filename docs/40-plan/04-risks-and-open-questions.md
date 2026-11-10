@@ -16,6 +16,7 @@
 | R8 | 单镜像体积与基础镜像漏洞 | 运维 | slim 变体；定期重建；扫描 |
 | R9 | 一人项目范围过大 | 延期 | 里程碑验收驱动；M7 可无限期推迟 |
 | R10 | 守护进程 RSS 缓慢上升而 V8 堆平稳（M6 长稳短程里约 +9 MB/h，原生内存） | 30 天后可能顶到 1 GB 的容器上限 | 实际使用中观察 `process_resident_memory_bytes` 是否封顶；不封顶就先试 `MALLOC_ARENA_MAX` 与 SQLite `cache_size`；compose 示例有内存上限与 `restart: unless-stopped` 兜底 |
+| R11 | 微信 iLink 不是公开 API，官方包的内部路径和服务端行为都可能变化 | 微信连接中断 | 官方包版本锁定，引用集中在 `plugins/wechat/src/ilink.ts`；`wechat.e2e` 用打包产物校验请求头；真实账号测试 T14；微信不作为唯一的提醒渠道 |
 
 ## 待决问题
 

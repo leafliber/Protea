@@ -375,7 +375,7 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 - Protea 作为 MCP 服务器（对外暴露事件推送、记忆检索与状态查询）。
 - Claude Agent SDK Fork 执行器插件（[ADR-0003](../20-decisions/ADR-0003-own-agent-loop-over-agent-sdk.md) 的可选路径）。
 - 控制台多语言（先英文）与打磨。
-- 一个新连接器（Slack、Discord 或 CalDAV 之一），沿用 `telegram` 的审批与主人映射。
+- 一个新连接器（Slack、Discord 或 CalDAV 之一），沿用 `telegram` 的审批与主人映射。微信（`wechat`）已于 2026-11-10 实现（[ADR-0016](../20-decisions/ADR-0016-wechat-and-plugin-sign-in.md)），真实账号测试见 T14。
 - 向量记忆（sqlite-vec）；插件 CPU 上限；OpenTelemetry；Cortico World 适配器（探索）。
 - ~~`openai-compat` Provider 插件~~：已内置为 `openai-chat` 与 `openai-responses` 协议（2026-11-05）。
 

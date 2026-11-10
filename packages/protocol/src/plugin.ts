@@ -32,12 +32,16 @@ export interface PluginManifest {
   /** Tools whose default permission policy is `ask`. */
   sideEffectTools?: string[];
   secrets?: string[];
+  /** Injected when set, but the plugin also starts without them (a sign-in fills them in). */
+  optionalSecrets?: string[];
   configSchema?: string;
   envPrompt?: string;
   /** Directory of skills the plugin ships (default `skills/`), relative to the plugin. */
   skills?: string;
   /** Present on a chat platform; the plugin must also advertise the `chat` capability and answer `chat/send`. */
   chat?: ChatPlatformDecl;
+  /** Present on a plugin an operator signs in to; it must also advertise the `login` capability. */
+  login?: PluginLoginDecl;
   healthcheck?: { intervalMs?: number; timeoutMs?: number };
   resources?: { maxMemoryMb?: number; maxCpu?: number; maxFds?: number };
   homepage?: string;
@@ -55,6 +59,45 @@ export interface ChatPlatformDecl {
   markdown?: ChatMarkdown;
   /** Longest single message the platform shows; longer text is the plugin's to split. */
   maxChars?: number;
+}
+
+/** How an operator signs in to a plugin (docs/30-specs/02-plugin-manifest.md). */
+export const PLUGIN_LOGIN_METHODS = ['qr'] as const;
+export type PluginLoginMethod = (typeof PLUGIN_LOGIN_METHODS)[number];
+
+export interface PluginLoginDecl {
+  method: PluginLoginMethod;
+}
+
+/**
+ * `idle`: not signed in and nothing in progress. `waiting` and `scanned`: a QR code is on offer.
+ * `need_code`: the phone shows a number the operator has to type (`login/submit`).
+ * `connected`: signed in. `already_bound`: the service says this account is already linked and
+ * issued no new credentials. `failed`: the attempt is over; `message` says why.
+ */
+export const PLUGIN_LOGIN_STATES = ['idle', 'waiting', 'scanned', 'need_code', 'connected', 'already_bound', 'failed'] as const;
+export type PluginLoginState = (typeof PLUGIN_LOGIN_STATES)[number];
+
+export interface PluginLoginStatus {
+  state: PluginLoginState;
+  /** The text to encode as a QR code; the host renders it. */
+  qr?: string;
+  expiresAt?: string;
+  message?: string;
+  /** Who is signed in, for display. */
+  account?: string;
+}
+
+export interface LoginSubmitParams {
+  code: string;
+}
+
+/** `login/complete`: the sign-in succeeded. Only accepted while a sign-in the host started is open. */
+export interface LoginCompleteParams {
+  /** Stored in the secret store; every name must be declared in the manifest. */
+  secrets: Record<string, string>;
+  /** Becomes the owner on this plugin (`owner.identities`), replacing its previous owner. */
+  ownerSenderKey?: string;
 }
 
 export interface ToolDecl {
@@ -96,6 +139,8 @@ export interface PluginCapabilities {
   chat?: boolean;
   /** Webhook names served under `/hooks/<name>` (`http/request`). */
   hooks?: string[];
+  /** Answers `login/*`: an operator can sign in to it from the console. */
+  login?: boolean;
 }
 
 export interface InitializeResult {
@@ -272,6 +317,10 @@ export const HOST_TO_PLUGIN = {
   approvalsRequest: 'approvals/request',
   chatSend: 'chat/send',
   httpRequest: 'http/request',
+  loginStart: 'login/start',
+  loginStatus: 'login/status',
+  loginSubmit: 'login/submit',
+  loginCancel: 'login/cancel',
 } as const;
 
 export const PLUGIN_TO_HOST = {
@@ -289,6 +338,7 @@ export const PLUGIN_TO_HOST = {
   permissionsMode: 'permissions/mode',
   blobPut: 'blob/put',
   blobGet: 'blob/get',
+  loginComplete: 'login/complete',
 } as const;
 
 /** Lifecycle states (docs/10-architecture/07-plugin-system.md §4). */

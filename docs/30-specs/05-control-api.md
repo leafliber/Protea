@@ -93,6 +93,10 @@
 | DELETE | `/api/plugins/:id?keepData=true` | 卸载（须先禁用）；返回 `{ ok, replacedBy }`（重新出现的同名内置插件） |
 | GET | `/api/plugins/:id/config` | `{ config, schema, coldKeys }`：`schema` 为插件的 JSON Schema（没有则 null）；`x-secret` 键若不是 `${secret:…}` 引用则显示为 `********`；`coldKeys` 是 `x-hot: false` 的键 |
 | PATCH | `/api/plugins/:id/config` | `{ config }` 整体替换：按 schema 校验，写回 `config.yaml` 并应用 |
+| GET | `/api/plugins/:id/login` | 仅管理员。`PluginLoginView`：`{ state, qr?: { text, svg, terminal }, expiresAt?, message?, account? }`；插件没运行时 `state` 为 `unavailable`；清单没有 `login` 时 404 |
+| POST | `/api/plugins/:id/login` | 仅管理员。发起登录，返回 `PluginLoginView`；插件没运行时 409 `login_failed` |
+| POST | `/api/plugins/:id/login/code` · `/login/cancel` | 仅管理员。`{ code }` 提交手机上显示的数字；取消登录 |
+| DELETE | `/api/plugins/:id/login` | 仅管理员。退出登录：删除 `optionalSecrets` 中的秘密和这个插件的主人身份，运行中的插件随之重启；返回 `PluginStatus` |
 | GET | `/api/plugins/:id/logs?limit=&level=&q=&since=` | `{ logs }`：本次运行中带该插件字段的日志 |
 | GET | `/api/mcp/servers` · `/api/mcp/servers/:id` | `{ servers: McpServerStatus[] }` · `McpServerStatus` |
 | POST | `/api/mcp/servers` | `{ id, ...配置项 }`（同 `mcp.servers.<id>`）：校验、写回 `config.yaml`、启动并等它就绪或失败；新建 201、替换 200；配置无效 400 |

@@ -115,6 +115,9 @@ importers:
       hono:
         specifier: ^4.13.16
         version: 4.13.16
+      qrcode-generator:
+        specifier: ^2.0.4
+        version: 2.0.4
       ws:
         specifier: ^8.22.1
         version: 8.22.1
@@ -273,6 +276,21 @@ importers:
       '@protea/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+
+  plugins/wechat:
+    dependencies:
+      '@protea/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      '@protea/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      '@tencent-weixin/openclaw-weixin':
+        specifier: 2.4.10
+        version: 2.4.10(openclaw@plugins+wechat+shims+openclaw)
+      openclaw:
+        specifier: link:./shims/openclaw
+        version: link:shims/openclaw
 
 packages:
 
@@ -590,6 +608,12 @@ packages:
 
   '@stablelib/base64@1.0.1':
     resolution: {integrity: sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ==}
+
+  '@tencent-weixin/openclaw-weixin@2.4.10':
+    resolution: {integrity: sha512-qCN7rFtBK5BO/i5YGEJLdpC/8WQrm0dtPlQ0xNxku4RSyzGaRsiBoLVheU5hgpoOIBvfc5pUwKTktMbROLcIVg==}
+    engines: {node: '>=22.13.0'}
+    peerDependencies:
+      openclaw: '>=2026.5.12'
 
   '@types/better-sqlite3@9.6.0':
     resolution: {integrity: sha512-ZEEwBSgMu7GYJOynoagg5X9JbxfL6dTJDsgViJIqh67jV44kyOr9RXfmFjLK5rzC4MWssP06t9hu/JwGDnUbCg==}
@@ -1335,6 +1359,13 @@ packages:
   pure-rand@8.4.2:
     resolution: {integrity: sha512-vvuOGgcuPJAirlHvuQw1TrOiw7ptaIXXmIbNuiNOY6lNGJJH49PQ1Kj4nd783nPdQhQdicgOjVI2yI/9BD6/Ng==}
 
+  qrcode-generator@2.0.4:
+    resolution: {integrity: sha512-mZSiP6RnbHl4xL2Ap5HfkjLnmxfKcPWpWe/c+5XxCuetEenqmNFf1FH/ftXPCtFG5/TDobjsjz6sSNL0Sr8Z9g==}
+
+  qrcode-terminal@0.12.0:
+    resolution: {integrity: sha512-EXtzRZmC+YGmGlDFbXKxQiMZNwCLEO6BANKXG4iCtSIM0yqc/pappSx3RIKr4r0uh5JsBckOXeKrB3Iz7mdQpQ==}
+    hasBin: true
+
   qs@6.17.1:
     resolution: {integrity: sha512-jd3COkaKVgGUW+ZHyEHCG9bH7RoaaiWuMgzsIBjUMVjLAaWGWpoUAVwljVvBHxRu/2qEHnadLGZrkutYUBPQJA==}
     engines: {node: '>=0.6'}
@@ -1834,6 +1865,12 @@ snapshots:
       selderee: 0.12.0
 
   '@stablelib/base64@1.0.1': {}
+
+  '@tencent-weixin/openclaw-weixin@2.4.10(openclaw@plugins+wechat+shims+openclaw)':
+    dependencies:
+      openclaw: link:plugins/wechat/shims/openclaw
+      qrcode-terminal: 0.12.0
+      zod: 4.6.7
 
   '@types/better-sqlite3@9.6.0':
     dependencies:
@@ -2512,6 +2549,10 @@ snapshots:
   punycode.js@2.3.1: {}
 
   pure-rand@8.4.2: {}
+
+  qrcode-generator@2.0.4: {}
+
+  qrcode-terminal@0.12.0: {}
 
   qs@6.17.1:
     dependencies:

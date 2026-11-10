@@ -7,6 +7,7 @@ import {
   LEVEL_TRIGGERS,
   PLUGIN_API_VERSION,
   PLUGIN_KINDS,
+  PLUGIN_LOGIN_METHODS,
   TRIGGERS,
   type Level,
   type PluginManifest,
@@ -58,6 +59,8 @@ const KNOWN_FIELDS = new Set([
   'envPrompt',
   'skills',
   'chat',
+  'login',
+  'optionalSecrets',
   'healthcheck',
   'resources',
   'mcp',
@@ -161,8 +164,17 @@ export function loadManifest(dir: string, origin: LoadedManifest['origin']): Loa
       if (c['maxChars'] !== undefined && (!Number.isInteger(c['maxChars']) || (c['maxChars'] as number) < 1)) errors.push('chat.maxChars must be a positive integer');
     }
   }
-  if (m['secrets'] !== undefined && (!isStringArray(m['secrets']) || !m['secrets'].every((s) => /^[A-Z][A-Z0-9_]{0,63}$/.test(s)))) {
-    errors.push('secrets must be a list of UPPER_CASE names');
+  for (const field of ['secrets', 'optionalSecrets']) {
+    const names = m[field];
+    if (names !== undefined && (!isStringArray(names) || !names.every((s) => /^[A-Z][A-Z0-9_]{0,63}$/.test(s)))) {
+      errors.push(`${field} must be a list of UPPER_CASE names`);
+    }
+  }
+  const login = m['login'];
+  if (login !== undefined) {
+    const l = login as Record<string, unknown>;
+    if (typeof login !== 'object' || login === null || Array.isArray(login)) errors.push('login must be an object');
+    else if (!(PLUGIN_LOGIN_METHODS as readonly unknown[]).includes(l['method'])) errors.push(`login.method must be one of ${PLUGIN_LOGIN_METHODS.join(', ')}`);
   }
 
   if (typeof m['configSchema'] === 'string') {

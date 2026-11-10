@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  HOST_TO_PLUGIN,
   PLUGIN_TO_HOST,
   RPC_ERRORS,
   RpcError,
@@ -17,7 +18,9 @@ import {
   type HttpResponse,
   type Level,
   type LogParams,
+  type LoginCompleteParams,
   type PluginCapabilities,
+  type PluginLoginStatus,
   type PluginState,
   type PluginStatus,
   type RpcHandler,
@@ -81,6 +84,8 @@ export interface PluginHostOptions {
   blobs?: BlobStore;
   /** Chat platforms register here when they start; `chat_send` routes to them. */
   chat?: ChatHub;
+  /** A sign-in finished (`ownerSenderKey` set) or was undone (null): update who the owner is on this plugin. */
+  onOwnerSignIn?: (id: string, ownerSenderKey: string | null) => void;
 }
 
 interface Entry {
@@ -107,6 +112,8 @@ interface Entry {
   killReason?: string | null;
   /** Resident memory of the process tree at the last sample. */
   rssBytes?: number;
+  /** Until when `login/complete` is accepted: set when the host starts a sign-in. */
+  loginOpenUntil?: number;
 }
 
 /** Where a plugin's environment prompt comes from (consumed by SystemSegments). */
@@ -118,6 +125,9 @@ export interface EnvPromptSource {
 
 const SECRET_REF = /^\$\{secret:([A-Z][A-Z0-9_]{0,63})\}$/;
 const MAX_PENDING_SETTLED = 1000;
+/** A sign-in the operator started stays open this long; longer than any plugin waits for a scan. */
+const LOGIN_WINDOW_MS = 15 * 60_000;
+const LOGIN_RPC_TIMEOUT_MS = 20_000;
 
 function shallowPatch(prev: Record<string, unknown>, next: Record<string, unknown>): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
@@ -299,7 +309,7 @@ export class PluginHost {
     if (e.inproc) return { id, kind: e.kind, displayName: id, builtIn: true };
     const m = e.loaded?.manifest as unknown as Record<string, unknown> | undefined;
     if (!m) return { id, kind: e.kind, errors: e.loaded?.errors ?? [] };
-    const pick = ['id', 'kind', 'version', 'displayName', 'description', 'runtime', 'level', 'triggers', 'secrets', 'hooks', 'skills', 'capabilities'];
+    const pick = ['id', 'kind', 'version', 'displayName', 'description', 'runtime', 'level', 'triggers', 'secrets', 'optionalSecrets', 'login', 'hooks', 'skills', 'capabilities'];
     return { ...Object.fromEntries(pick.filter((k) => m[k] !== undefined).map((k) => [k, m[k]])), dir: e.loaded?.dir, errors: e.loaded?.errors ?? [], warnings: e.loaded?.warnings ?? [] };
   }
 
@@ -638,6 +648,10 @@ export class PluginHost {
       if (v === undefined) throw new Error(`secret ${name} is not set`);
       secrets[name] = v;
     }
+    for (const name of m.optionalSecrets ?? []) {
+      const v = this.o.secrets?.get(name);
+      if (v !== undefined) secrets[name] = v;
+    }
     const config = this.resolveSecrets(e.config);
     const runtime = m.runtime as NonNullable<typeof m.runtime>;
     const dataDir = path.join(this.o.dataDir, 'plugin-data', e.id);
@@ -701,7 +715,7 @@ export class PluginHost {
         hostDataDir: this.o.dataDir,
         timezone: this.o.timezone,
         language: this.o.language ?? 'en',
-        hostCapabilities: ['events', 'kv', 'owner', 'approvals', 'hooks', 'chat', 'blobs'],
+        hostCapabilities: ['events', 'kv', 'owner', 'approvals', 'hooks', 'chat', 'blobs', 'login'],
         modelFacts: { mainModel: this.o.mainModel?.() ?? '' },
         levelCap: caps.maxLevel,
         allowedTriggers: allowedTriggers(m),
@@ -959,7 +973,7 @@ export class PluginHost {
       }),
       [PLUGIN_TO_HOST.secretsExists]: (params) => {
         const name = str((params as { name: unknown }).name, 'name');
-        const declared = e.loaded?.manifest?.secrets ?? [];
+        const declared = [...(e.loaded?.manifest?.secrets ?? []), ...(e.loaded?.manifest?.optionalSecrets ?? [])];
         return { exists: declared.includes(name) && this.o.secrets?.get(name) !== undefined };
       },
       [PLUGIN_TO_HOST.blobPut]: (params) => {
@@ -988,6 +1002,7 @@ export class PluginHost {
         if (p.decision !== 'approve' && p.decision !== 'deny') throw new RpcError(RPC_ERRORS.InvalidParams, 'decision must be approve or deny');
         return this.approvals.decide(str(p.id, 'id'), p.decision, `${e.id}:${senderKey}`, p.grantMs !== undefined ? { grantMs: Number(p.grantMs) } : {});
       },
+      [PLUGIN_TO_HOST.loginComplete]: (params) => this.completeLogin(e, params as LoginCompleteParams, log),
       [PLUGIN_TO_HOST.permissionsMode]: async (params) => {
         const p = params as PermissionModeParams;
         const senderKey = str(p.senderKey, 'senderKey');
@@ -1047,6 +1062,88 @@ export class PluginHost {
       }),
     );
     return delivered;
+  }
+
+  // —— Sign-in (docs/30-specs/03-plugin-protocol.md §3) ——
+
+  /** True when the plugin's manifest offers a sign-in. */
+  supportsLogin(id: string): boolean {
+    return this.entries.get(id)?.loaded?.manifest?.login !== undefined;
+  }
+
+  private loginTarget(id: string): { e: Entry; proc: ProcessPlugin } {
+    const e = this.entry(id);
+    if (e.loaded?.manifest?.login === undefined) throw new Error(`plugin ${id} has no sign-in`);
+    if (e.state !== 'running' || !e.proc) throw new Error(`plugin ${id} is not running; enable it first`);
+    if (!e.capabilities.login) throw new Error(`plugin ${id} declares a sign-in but does not answer one`);
+    return { e, proc: e.proc };
+  }
+
+  async loginStart(id: string): Promise<PluginLoginStatus> {
+    const { e, proc } = this.loginTarget(id);
+    e.loginOpenUntil = this.o.clock.now() + LOGIN_WINDOW_MS;
+    try {
+      return await proc.request<PluginLoginStatus>(HOST_TO_PLUGIN.loginStart, {}, LOGIN_RPC_TIMEOUT_MS);
+    } catch (err) {
+      delete e.loginOpenUntil;
+      throw err;
+    }
+  }
+
+  loginStatus(id: string): Promise<PluginLoginStatus> {
+    return this.loginTarget(id).proc.request<PluginLoginStatus>(HOST_TO_PLUGIN.loginStatus, {}, LOGIN_RPC_TIMEOUT_MS);
+  }
+
+  loginSubmit(id: string, code: string): Promise<PluginLoginStatus> {
+    return this.loginTarget(id).proc.request<PluginLoginStatus>(HOST_TO_PLUGIN.loginSubmit, { code }, LOGIN_RPC_TIMEOUT_MS);
+  }
+
+  async loginCancel(id: string): Promise<PluginLoginStatus> {
+    const { e, proc } = this.loginTarget(id);
+    delete e.loginOpenUntil;
+    return proc.request<PluginLoginStatus>(HOST_TO_PLUGIN.loginCancel, {}, LOGIN_RPC_TIMEOUT_MS);
+  }
+
+  /** Forget the credentials a sign-in stored and who it made the owner; a running plugin restarts without them. */
+  async logout(id: string): Promise<PluginStatus> {
+    const e = this.entry(id);
+    const m = e.loaded?.manifest;
+    if (m?.login === undefined) throw new Error(`plugin ${id} has no sign-in`);
+    delete e.loginOpenUntil;
+    for (const name of m.optionalSecrets ?? []) {
+      if (this.o.secrets?.delete(name).fromEnv) this.o.log.warn({ plugin: id, secret: name }, 'this secret is still set in the environment, so the plugin stays signed in');
+    }
+    this.o.onOwnerSignIn?.(id, null);
+    if (e.state === 'running') await this.restart(id);
+    return this.statusOf(e);
+  }
+
+  /** The plugin reports a finished sign-in: keep its credentials, name the owner, restart it with them. */
+  private completeLogin(e: Entry, p: LoginCompleteParams, log: Logger): { ok: true } {
+    if (e.loginOpenUntil === undefined || this.o.clock.now() > e.loginOpenUntil) throw new RpcError(RPC_ERRORS.Unauthorized, 'no sign-in is in progress');
+    const m = e.loaded?.manifest;
+    const declared = new Set([...(m?.secrets ?? []), ...(m?.optionalSecrets ?? [])]);
+    const entries = Object.entries(p?.secrets ?? {});
+    if (entries.length === 0) throw new RpcError(RPC_ERRORS.InvalidParams, 'a sign-in must hand over at least one secret');
+    for (const [name, value] of entries) {
+      if (!declared.has(name)) throw new RpcError(RPC_ERRORS.InvalidParams, `secret ${name} is not declared in the manifest`);
+      if (typeof value !== 'string' || value.trim() === '') throw new RpcError(RPC_ERRORS.InvalidParams, `secret ${name} must be a non-empty string`);
+    }
+    // A sign-in names one person; "*" would make everyone on this platform the owner.
+    if (p.ownerSenderKey !== undefined && (typeof p.ownerSenderKey !== 'string' || p.ownerSenderKey === '' || p.ownerSenderKey.includes('*'))) {
+      throw new RpcError(RPC_ERRORS.InvalidParams, 'ownerSenderKey must name one sender');
+    }
+    const secrets = this.o.secrets;
+    if (!secrets) throw new RpcError(RPC_ERRORS.Internal, 'the secret store is not available');
+    delete e.loginOpenUntil;
+    for (const [name, value] of entries) secrets.set(name, value);
+    if (p.ownerSenderKey !== undefined) this.o.onOwnerSignIn?.(e.id, p.ownerSenderKey);
+    log.info({ secrets: entries.map(([name]) => name), owner: p.ownerSenderKey !== undefined }, 'sign-in completed; restarting the plugin with its credentials');
+    // After the reply went out: the plugin is still waiting for it.
+    setImmediate(() => {
+      this.restart(e.id).catch((err: unknown) => log.error({ err: errorMessage(err) }, 'could not restart the plugin after its sign-in'));
+    });
+    return { ok: true };
   }
 
   /** Forward `/hooks/<name>` to the running plugin that serves it; undefined if none does. */

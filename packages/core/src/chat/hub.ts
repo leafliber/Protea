@@ -130,20 +130,24 @@ export class ChatHub {
     return { text: `sent to ${id}${ids.length > 0 ? ` as message ${ids.join(', ')}` : ''} (${text.length} characters)` };
   }
 
-  /** A message from Protea itself, to where the owner last wrote; false when it could not be sent. */
+  /**
+   * A message from Protea itself: to where the owner last wrote, then to the other running
+   * platforms until one takes it (some can only answer within a time window). False when none did.
+   */
   async notifyOwner(text: string): Promise<boolean> {
-    const id = this.lastPlatform ?? [...this.platforms.keys()].sort()[0];
-    const platform = id !== undefined ? this.platforms.get(id) : undefined;
-    if (id === undefined || !platform) return false;
-    try {
-      const result = await platform.send({ text });
-      if (!result.ok) throw new Error(result.error ?? 'the platform did not send it');
-      this.record(id, text, {});
-      return true;
-    } catch (err) {
-      this.o.log.warn({ platform: id, err: errorMessage(err) }, 'could not send a notice to the owner');
-      return false;
+    const last = this.lastPlatform;
+    const others = [...this.platforms.keys()].filter((id) => id !== last).sort();
+    for (const id of last !== undefined ? [last, ...others] : others) {
+      try {
+        const result = await this.platforms.get(id)?.send({ text });
+        if (!result?.ok) throw new Error(result?.error ?? 'the platform did not send it');
+        this.record(id, text, {});
+        return true;
+      } catch (err) {
+        this.o.log.warn({ platform: id, err: errorMessage(err) }, 'could not send a notice to the owner');
+      }
     }
+    return false;
   }
 
   private record(plugin: string, text: string, call: Partial<Pick<ToolContext, 'sessionId' | 'batchId'>>, callId?: string): void {

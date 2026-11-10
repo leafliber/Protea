@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "apiBase": { "type": "string", "default": "https://ilinkai.weixin.qq.com", "x-hot": false, "description": "iLink API base URL used for sign-in (for tests); after sign-in the address the service gave is used." },
+    "cdnBase": { "type": "string", "default": "https://novac2c.cdn.weixin.qq.com/c2c", "x-hot": false, "description": "CDN base URL for images (for tests)." },
+    "stopWords": { "type": "array", "items": { "type": "string" }, "description": "Owner messages equal to one of these interrupt the current turn." }
+  }
+}

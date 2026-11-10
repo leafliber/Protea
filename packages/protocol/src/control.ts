@@ -1,6 +1,6 @@
 /** Control API request/response shapes (docs/30-specs/05-control-api.md). */
 import type { EventEnvelope, EventState, Level, TerminalOutcome, Trigger } from './events.js';
-import type { PluginState } from './plugin.js';
+import type { PluginLoginStatus, PluginState } from './plugin.js';
 import type { ChatMarkdown } from './plugin.js';
 import type { BatchEndReason, BatchReason, CancelKind, ContentBlock, Effort, ForkState, ModelRole, RunPhase, TranscriptMessage } from './session.js';
 
@@ -93,6 +93,13 @@ export interface UsageTotals {
   costUsd: number;
   /** cache_read / (input + cache_read + cache_write); null when no calls. */
   cacheHitRatio: number | null;
+}
+
+/** `GET /api/plugins/:id/login`: the plugin's sign-in state, with its QR code rendered. */
+export interface PluginLoginView extends Omit<PluginLoginStatus, 'state' | 'qr'> {
+  /** `unavailable`: the plugin is not running, so nobody can answer. */
+  state: PluginLoginStatus['state'] | 'unavailable';
+  qr?: { text: string; svg: string; terminal: string };
 }
 
 export interface PluginStatus {

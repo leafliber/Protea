@@ -109,6 +109,7 @@ describe('M2 acceptance: plugins are hot-pluggable while the main session keeps 
       'telegram',
       'webchat',
       'webhook',
+      'wechat',
     ]);
 
     // Configure, then install a shipped build into the data volume — all while running.

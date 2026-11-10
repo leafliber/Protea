@@ -41,6 +41,7 @@ import {
 } from '@protea/core';
 import { addressGate } from './allow.js';
 import { actorOf, principal, registerAccountRoutes, registerAuthRoutes, requireAuth, type AuthDeps } from './auth.js';
+import { loginView } from './login.js';
 import { installFrom, registerOpsRoutes, type OpsDeps } from './ops.js';
 import { registerProviderRoutes, type ProviderOps } from './providers.js';
 import { registerConsole } from './static.js';
@@ -520,6 +521,57 @@ export function createControlApp(d: ControlDeps): Hono {
       return c.json({ ok: true, replacedBy: d.plugins.get(id) ?? null });
     } catch (err) {
       return errorJson(c, 409, 'uninstall_failed', err);
+    }
+  });
+
+  // Sign-in of plugins that have one.
+  const noLogin = (c: Context) => c.json({ error: { code: 'not_found', message: 'this plugin has no sign-in' } }, 404);
+  app.get('/api/plugins/:id/login', async (c) => {
+    const id = c.req.param('id');
+    if (!d.plugins?.supportsLogin(id)) return noLogin(c);
+    if (d.plugins.get(id)?.state !== 'running') return c.json({ state: 'unavailable', message: `plugin ${id} is not running` });
+    try {
+      return c.json(loginView(await d.plugins.loginStatus(id)));
+    } catch (err) {
+      return c.json({ state: 'unavailable', message: err instanceof Error ? err.message : String(err) });
+    }
+  });
+  app.post('/api/plugins/:id/login', async (c) => {
+    const id = c.req.param('id');
+    if (!d.plugins?.supportsLogin(id)) return noLogin(c);
+    try {
+      return c.json(loginView(await d.plugins.loginStart(id)));
+    } catch (err) {
+      return errorJson(c, 409, 'login_failed', err);
+    }
+  });
+  app.post('/api/plugins/:id/login/code', async (c) => {
+    const id = c.req.param('id');
+    if (!d.plugins?.supportsLogin(id)) return noLogin(c);
+    const body = (await c.req.json().catch(() => null)) as { code?: unknown } | null;
+    if (typeof body?.code !== 'string' || body.code.trim() === '') return c.json({ error: { code: 'bad_request', message: 'code must be a non-empty string' } }, 400);
+    try {
+      return c.json(loginView(await d.plugins.loginSubmit(id, body.code)));
+    } catch (err) {
+      return errorJson(c, 409, 'login_failed', err);
+    }
+  });
+  app.post('/api/plugins/:id/login/cancel', async (c) => {
+    const id = c.req.param('id');
+    if (!d.plugins?.supportsLogin(id)) return noLogin(c);
+    try {
+      return c.json(loginView(await d.plugins.loginCancel(id)));
+    } catch (err) {
+      return errorJson(c, 409, 'login_failed', err);
+    }
+  });
+  app.delete('/api/plugins/:id/login', async (c) => {
+    const id = c.req.param('id');
+    if (!d.plugins?.supportsLogin(id)) return noLogin(c);
+    try {
+      return c.json(await d.plugins.logout(id));
+    } catch (err) {
+      return errorJson(c, 409, 'logout_failed', err);
     }
   });
 

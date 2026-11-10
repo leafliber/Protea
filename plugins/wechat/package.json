@@ -1,0 +1,28 @@
+{
+  "name": "@protea/plugin-wechat",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist",
+    "protea.plugin.json",
+    "config.schema.json",
+    "ENV_PROMPT.md",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "scripts": {
+    "build": "node ../../scripts/bundle-plugin.mjs ."
+  },
+  "protea": {
+    "bundle": {
+      "external": ["silk-wasm"],
+      "packageJsonOf": "@tencent-weixin/openclaw-weixin"
+    }
+  },
+  "dependencies": {
+    "@protea/plugin-sdk": "workspace:*",
+    "@protea/protocol": "workspace:*",
+    "@tencent-weixin/openclaw-weixin": "2.4.10",
+    "openclaw": "link:./shims/openclaw"
+  }
+}

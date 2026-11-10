@@ -171,6 +171,7 @@ tini → protea-entrypoint
 ## 6. 云端注意事项
 
 - **出站为主**：Telegram 长轮询、IMAP、RSS、Anthropic API 都只需出站；没有 Webhook 时可以不暴露任何入站端口，控制台通过 SSH 隧道访问。
+- **微信**：长轮询同样只需出站，要能访问 `ilinkai.weixin.qq.com` 和 `novac2c.cdn.weixin.qq.com`，扫码时服务端可能重定向到其他主机。
 - **TLS**：需要公网访问控制台或 Webhook 时，用 Caddy/Traefik 做反向代理与自动证书（compose 的 `tls` 档）；Protea 自身不终止 TLS。
 - **地址白名单**：`control.allowCidrs` 限制能访问控制平面的地址（回环总是允许，`/hooks/*` 不受限）。经反向代理时守护进程看到的是代理的地址，白名单应设在代理上。
 - **监控**：Prometheus 抓 `/metrics`，用只读令牌（秘密 `PROTEA_READONLY_TOKEN`）作 Bearer；示例抓取配置与 Grafana 面板在 `docker/observability/`。
