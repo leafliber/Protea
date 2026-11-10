@@ -107,6 +107,9 @@ export const STARTER_CONFIG_YAML = `# Protea configuration. Every key is optiona
 #   telegram:                 # needs the secret TELEGRAM_BOT_TOKEN; add the owner to owner.identities
 #     enabled: true
 #     config: {}
+#   wechat:                   # enable it, then scan the QR code (console or "protea plugins login wechat")
+#     enabled: true
+#     config: {}
 
 # permissions:
 #   tools: { tg_send_chat: ask }    # allow | ask | deny; globs like "mcp__*" work too; an ask written here always reaches you

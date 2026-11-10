@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import type { LogRecord, PluginStatus } from '@protea/protocol';
+import type { LogRecord, PluginLoginView, PluginStatus } from '@protea/protocol';
 import { api, enc, post, qs, useAction, useApi } from '../api';
 import { SchemaForm } from '../components/SchemaForm';
 import { Badge, Button, PageActions, Card, Empty, ErrorText, KV, StateBadge, Tabs, oneLine } from '../components/ui';
@@ -48,9 +48,74 @@ export function InstallForm({ kind, onDone }: { kind: 'plugin' | 'skill'; onDone
   );
 }
 
+const LOGIN_TEXT: Record<PluginLoginView['state'], string> = {
+  idle: '还没有登录。',
+  waiting: '用手机扫描这个二维码。',
+  scanned: '已扫描，请在手机上确认。',
+  need_code: '输入手机上显示的数字。',
+  connected: '已登录',
+  already_bound: '这个账号已经连接过，这次没有下发新的登录凭据。',
+  failed: '登录没有完成。',
+  unavailable: '插件没有运行，启用后才能登录。',
+};
+
+function LoginPanel({ id }: { id: string }) {
+  const { canWrite } = useSession();
+  const view = useApi<PluginLoginView>(`/api/plugins/${enc(id)}/login`, { refreshMs: 2000 });
+  const act = useAction();
+  const [code, setCode] = useState('');
+  const base = `/api/plugins/${enc(id)}/login`;
+  const run = (fn: () => Promise<unknown>) => void act.run(fn).then(() => view.reload());
+  const v = view.data;
+  if (!v) return <ErrorText error={view.error} />;
+  const inProgress = v.state === 'waiting' || v.state === 'scanned' || v.state === 'need_code';
+  return (
+    <div className="form-grid">
+      <div>
+        {LOGIN_TEXT[v.state]}
+        {v.state === 'connected' && v.account ? `：${v.account}` : ''}
+      </div>
+      {v.message && <div className="muted small">{v.message}</div>}
+      {v.qr && <img className="login-qr" alt="登录二维码" src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(v.qr.svg)}`} />}
+      {v.expiresAt && inProgress && <div className="muted small">二维码有效期至 {new Date(v.expiresAt).toLocaleTimeString()}，过期后会自动刷新。</div>}
+      <ErrorText error={act.error} />
+      {canWrite && v.state === 'need_code' && (
+        <form
+          className="row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            run(() => post(`${base}/code`, { code }));
+            setCode('');
+          }}
+        >
+          <input value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" placeholder="手机上显示的数字" />
+          <Button kind="primary" type="submit" busy={act.busy} disabled={!code.trim()}>
+            提交
+          </Button>
+        </form>
+      )}
+      {canWrite && v.state !== 'unavailable' && (
+        <div className="row">
+          {!inProgress && (
+            <Button kind="primary" busy={act.busy} onClick={() => run(() => post(base))}>
+              {v.state === 'connected' ? '重新扫码' : '扫码登录'}
+            </Button>
+          )}
+          {inProgress && <Button onClick={() => run(() => post(`${base}/cancel`))}>取消</Button>}
+          {v.state === 'connected' && (
+            <Button kind="danger" onClick={() => confirm('退出登录？登录凭据和这个平台上的主人身份都会清除。') && run(() => api('DELETE', base))}>
+              退出登录
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PluginDetail({ id, onChanged }: { id: string; onChanged: () => void }) {
   const { canWrite } = useSession();
-  const [tab, setTab] = useState<'config' | 'logs' | 'manifest'>('config');
+  const [picked, setTab] = useState<'login' | 'config' | 'logs' | 'manifest' | null>(null);
   const p = useApi<PluginStatus & { manifest: Record<string, unknown> | null }>(`/api/plugins/${enc(id)}`);
   const cfg = useApi<{ config: Record<string, unknown>; schema: Record<string, unknown> | null; coldKeys: string[] }>(`/api/plugins/${enc(id)}/config`);
   const logs = useApi<{ logs: LogRecord[] }>(`/api/plugins/${enc(id)}/logs${qs({ limit: 300 })}`, { refreshMs: 5000 });
@@ -63,6 +128,8 @@ function PluginDetail({ id, onChanged }: { id: string; onChanged: () => void }) 
   const s = p.data;
   if (!s) return <ErrorText error={p.error} />;
   const m = s.manifest ?? {};
+  const hasLogin = m['login'] !== undefined;
+  const tab = picked ?? (hasLogin ? 'login' : 'config');
   return (
     <Card
       title={
@@ -108,6 +175,7 @@ function PluginDetail({ id, onChanged }: { id: string; onChanged: () => void }) 
       />
       <Tabs
         tabs={[
+          ...(hasLogin ? ([['login', '登录']] as Array<['login', string]>) : []),
           ['config', '配置'],
           ['logs', '日志'],
           ['manifest', '清单'],
@@ -115,6 +183,7 @@ function PluginDetail({ id, onChanged }: { id: string; onChanged: () => void }) 
         value={tab}
         onChange={setTab}
       />
+      {tab === 'login' && <LoginPanel id={id} />}
       {tab === 'config' &&
         (cfg.data ? (
           <SchemaForm

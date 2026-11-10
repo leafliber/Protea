@@ -79,6 +79,7 @@ describe('daemon', () => {
       'telegram:loaded',
       'webchat:running',
       'webhook:loaded',
+      'wechat:loaded',
     ]);
 
     // The system prefix: persona, runtime notes, plugin environment prompts, then the Skills catalog; kernel and plugin tools.

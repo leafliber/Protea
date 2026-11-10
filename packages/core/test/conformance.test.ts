@@ -21,6 +21,14 @@ describe('plugin protocol conformance', () => {
     });
   }
 
+  it('the WeChat connector passes while it waits to be signed in', async () => {
+    const r = await checkConformance(path.join(REPO, 'plugins/wechat'), { dev, pythonPath });
+    const failed = r.checks.filter((c) => !c.ok);
+    expect(failed, JSON.stringify(failed, null, 2)).toEqual([]);
+    expect(r.checks.map((c) => c.name)).toContain('the manifest block "login" and the "login" capability go together');
+    expect(r.checks.map((c) => c.name)).toContain('the manifest block "chat" and the "chat" capability go together');
+  });
+
   it('reports what is wrong with a broken plugin', async () => {
     const r = await checkConformance(path.join(REPO, 'packages/core/test/fixtures/broken-plugin'), { dev, pythonPath });
     expect(r.ok).toBe(false);

@@ -1,5 +1,5 @@
-import { definePlugin, type Host, type PluginDefinition } from '@protea/plugin-sdk';
-import { CHAT_MESSAGE_EVENT, type EventInput, type PermissionMode, type PermissionModeInfo } from '@protea/protocol';
+import { DEFAULT_STOP_WORDS, approvalCommand, definePlugin, isModeCommand, isStopWord, modeCommand, splitMessage as splitAt, type Host, type PluginDefinition } from '@protea/plugin-sdk';
+import { CHAT_MESSAGE_EVENT, type EventInput } from '@protea/protocol';
 
 export interface TelegramConfig {
   apiBase?: string;
@@ -104,25 +104,11 @@ export class TelegramClient {
   }
 }
 
-export const DEFAULT_STOP_WORDS = ['stop', 'wait', '停', '停下', '等一下', '别说了'];
+export { DEFAULT_STOP_WORDS };
 const CHUNK = 3500;
 const MAX_TEXT = 4000;
 
-/** Split at paragraph or line breaks near the limit, so long replies stay readable. */
-export function splitMessage(text: string, limit = CHUNK): string[] {
-  const parts: string[] = [];
-  let rest = text;
-  while (rest.length > limit) {
-    let cut = rest.lastIndexOf('\n\n', limit);
-    if (cut < limit / 2) cut = rest.lastIndexOf('\n', limit);
-    if (cut < limit / 2) cut = rest.lastIndexOf(' ', limit);
-    if (cut < limit / 2) cut = limit;
-    parts.push(rest.slice(0, cut).trimEnd());
-    rest = rest.slice(cut).trimStart();
-  }
-  if (rest.length > 0 || parts.length === 0) parts.push(rest);
-  return parts;
-}
+export const splitMessage = (text: string, limit = CHUNK): string[] => splitAt(text, limit);
 
 function displayName(u: TgUser | undefined): string {
   if (!u) return 'unknown';
@@ -141,30 +127,6 @@ const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
     const t = setTimeout(resolve, ms);
     signal.addEventListener('abort', () => (clearTimeout(t), resolve()), { once: true });
   });
-
-/** The reply to /mode. */
-function describeMode(i: PermissionModeInfo): string {
-  const lines = [`Permission mode: ${i.mode}${i.override ? ` until ${i.override.until}, then ${i.baseline}` : ''}.`];
-  if (i.paused) lines.push(`Auto is paused: ${i.paused.reason}. Send /mode auto to resume.`);
-  if (i.mode === 'auto' || i.paused) {
-    const { judge, since, allowed, held } = i.auto;
-    lines.push(`Judge: ${judge.model}${judge.ready ? '' : ` (not ready: ${judge.problem ?? 'unknown'})`}.`, `Since ${since}: ${allowed} allowed, ${held} sent to you.`);
-  }
-  return lines.join('\n');
-}
-
-/** "/mode", "/mode auto", "/mode auto 2h", "/mode bypass 30m". A bare number means minutes. */
-async function modeCommand(host: Pick<Host, 'permissions'>, senderKey: string, text: string): Promise<string> {
-  const m = /^\/mode(?:\s+(ask|auto|bypass|locked)(?:\s+(\d+)\s*(m|min|h|hr)?)?)?\s*$/i.exec(text);
-  if (!m) return 'Usage: /mode, /mode ask|auto|locked [30m|2h], /mode bypass 30m';
-  const mode = m[1]?.toLowerCase() as PermissionMode | undefined;
-  const forMs = m[2] ? Number(m[2]) * (/^h/i.test(m[3] ?? '') ? 3_600_000 : 60_000) : undefined;
-  try {
-    return describeMode(await host.permissions.mode(senderKey, { ...(mode !== undefined ? { mode } : {}), ...(forMs !== undefined ? { forMs } : {}) }));
-  } catch (err) {
-    return `Could not change the mode: ${(err as Error).message}`;
-  }
-}
 
 /**
  * The Telegram connector: long-polls getUpdates, turns messages into events (owner
@@ -238,21 +200,18 @@ export function createTelegramPlugin(): PluginDefinition<TelegramConfig> {
           ownerChatId = m.chat.id;
           await host.kv.set('ownerChatId', m.chat.id);
         }
-        const cmd = /^\/(approve|deny)\s+(a\d+)(?:\s+(\d+)\s*(m|min|h|hr)?)?\s*$/i.exec(text.trim());
-        if (cmd && !edited) {
-          const decision = (cmd[1] as string).toLowerCase() === 'approve' ? 'approve' : 'deny';
-          // "/approve a12 1h": also allow this tool family for an hour. A bare number means minutes.
-          const grantMs = cmd[3] && decision === 'approve' ? Number(cmd[3]) * (/^h/i.test(cmd[4] ?? '') ? 3_600_000 : 60_000) : undefined;
-          const r = await host.approvals.decide(cmd[2] as string, decision, senderKey, grantMs !== undefined ? { grantMs } : {}).catch((err: Error) => ({ ok: false, message: err.message }));
-          await send(m.chat.id, r.ok ? `${cmd[2]} ${decision === 'approve' ? `approved${grantMs !== undefined ? ` (and its tools for ${cmd[3]}${cmd[4] ?? 'm'})` : ''}` : 'denied'}.` : `Could not ${decision} ${cmd[2]}: ${r.message ?? 'unknown error'}`, m.message_id);
-          return;
+        if (!edited) {
+          const answer = await approvalCommand(host, senderKey, text);
+          if (answer !== null) {
+            await send(m.chat.id, answer, m.message_id);
+            return;
+          }
+          if (isModeCommand(text)) {
+            await send(m.chat.id, await modeCommand(host, senderKey, text), m.message_id);
+            return;
+          }
         }
-        if (/^\/mode(\s|$)/i.test(text.trim()) && !edited) {
-          await send(m.chat.id, await modeCommand(host, senderKey, text.trim()), m.message_id);
-          return;
-        }
-        const stopWords = (host.config.stopWords ?? DEFAULT_STOP_WORDS).map((w) => w.toLowerCase());
-        const isStop = stopWords.includes(text.trim().toLowerCase().replace(/[.!。！]+$/u, ''));
+        const isStop = isStopWord(text, host.config.stopWords ?? DEFAULT_STOP_WORDS);
         const blobs = await ownerImages(host, m);
         await host.events.push({ ...base, ...(blobs.length > 0 ? { blobs } : {}), type: ownerType, level: 1, trigger: isStop && !edited ? 'interrupt' : 'flush', text: `Message from owner in private chat (${ref}):\n${text}` });
         return;

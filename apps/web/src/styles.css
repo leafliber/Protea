@@ -2370,3 +2370,12 @@ ul.plain {
   gap: 6px;
   margin-bottom: 4px;
 }
+
+.login-qr {
+  display: block;
+  width: 240px;
+  height: 240px;
+  padding: 8px;
+  background: #fff;
+  border-radius: 8px;
+}

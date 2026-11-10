@@ -83,6 +83,34 @@ describe('ChatHub and chat_send', () => {
     expect(hub.lastPlatform).toBeUndefined();
   });
 
+  it('sends its own notices where the owner last wrote, then to whichever platform takes them', async () => {
+    const { bus, hub, platform } = setup();
+    const tried: string[] = [];
+    const recorded: string[] = [];
+    bus.on('plugin.output', (o) => recorded.push(o.plugin));
+    let wechatOpen = true;
+    platform('webchat', () => (tried.push('webchat'), { ok: true }));
+    platform('wechat', () => (tried.push('wechat'), wechatOpen ? { ok: true } : { ok: false, error: 'window closed' }));
+    bus.emit('event.stored', { source: 'wechat', senderRole: 'owner', type: 'chat.message' } as never);
+    expect(await hub.notifyOwner('first')).toBe(true);
+    expect(tried).toEqual(['wechat']);
+    wechatOpen = false;
+    tried.length = 0;
+    expect(await hub.notifyOwner('second')).toBe(true);
+    expect(tried).toEqual(['wechat', 'webchat']);
+    expect(recorded).toEqual(['wechat', 'webchat']);
+  });
+
+  it('reports a notice no platform would take', async () => {
+    const { hub, platform } = setup();
+    expect(await hub.notifyOwner('nobody here')).toBe(false);
+    platform('wechat', () => ({ ok: false, error: 'window closed' }));
+    platform('telegram', () => {
+      throw new Error('down');
+    });
+    expect(await hub.notifyOwner('still nobody')).toBe(false);
+  });
+
   it('counts chat_send against the platform it sends to', async () => {
     const { dispatcher, call, platform, tools } = setup();
     platform('webchat');

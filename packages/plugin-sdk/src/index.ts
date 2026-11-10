@@ -2,6 +2,7 @@ import { RpcPeer, lineSplitter } from '@protea/protocol';
 import { servePlugin, type PluginDefinition } from './plugin.js';
 
 export * from './plugin.js';
+export * from './owner-commands.js';
 
 /**
  * Run a plugin over stdio (the out-of-process protocol). stdout carries only protocol

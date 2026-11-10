@@ -1,0 +1,12 @@
+{
+  "name": "openclaw",
+  "version": "2026.8.1",
+  "private": true,
+  "type": "module",
+  "description": "Stands in for the OpenClaw framework (about 200 MB), a peer of @tencent-weixin/openclaw-weixin. Only the imports that package loads at run time.",
+  "exports": {
+    "./plugin-sdk/temp-path": "./temp-path.js",
+    "./plugin-sdk/account-id": "./account-id.js",
+    "./plugin-sdk/config-mutation": "./config-mutation.js"
+  }
+}

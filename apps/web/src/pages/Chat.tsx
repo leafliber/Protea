@@ -24,7 +24,7 @@ const PHASE_TEXT: Partial<Record<RunPhase, string>> = {
 /** This window is the web chat; the other platforms are their own conversations. */
 const PLATFORM = 'webchat';
 
-const SOURCE_LABEL: Record<string, string> = { cron: '定时提醒', core: '后台任务', telegram: 'Telegram', rss: '订阅更新', imap: '新邮件', webhook: 'Webhook', filewatch: '文件变化', shell: '命令' };
+const SOURCE_LABEL: Record<string, string> = { cron: '定时提醒', core: '后台任务', telegram: 'Telegram', wechat: '微信', rss: '订阅更新', imap: '新邮件', webhook: 'Webhook', filewatch: '文件变化', shell: '命令' };
 
 function order(a: ChatItem, b: ChatItem): number {
   if (a.at !== b.at) return a.at < b.at ? -1 : 1;

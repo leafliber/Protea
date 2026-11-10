@@ -14,6 +14,7 @@ import {
   type McpServerStatus,
   type McpToolInfo,
   type PermissionModeInfo,
+  type PluginLoginView,
   type PluginStatus,
   type SkillInfo,
   type PushEventResponse,
@@ -86,6 +87,8 @@ Usage:
   protea plugins enable|disable|reload|restart <id>
   protea plugins config <id> <json>             replace a plugin's configuration (validated, saved)
   protea plugins uninstall <id> [--keep-data]   remove a disabled data-volume plugin
+  protea plugins login <id>                     sign in to a plugin (shows a QR code; e.g. wechat)
+  protea plugins logout <id>                    forget that sign-in and the owner it named
   protea mcp [ls]                               list MCP servers
   protea mcp add <id> [--env K=V]… [--trust T] -- <command> [args…]
                                                 add a local (stdio) MCP server, e.g. -- uvx mcp-server-fetch
@@ -470,6 +473,49 @@ async function forks(sub: string | undefined, id: string | undefined): Promise<n
   throw new Error(`unknown forks command: ${sub}`);
 }
 
+/** Follow a plugin's sign-in in the terminal until it ends. */
+async function pluginLogin(o: ReturnType<typeof client>, id: string): Promise<number> {
+  const base = `/api/plugins/${encodeURIComponent(id)}/login`;
+  let view = await api<PluginLoginView>(o, 'POST', base, {});
+  let shown: string | undefined;
+  const deadline = Date.now() + 10 * 60_000;
+  while (Date.now() < deadline) {
+    if (view.qr && view.qr.text !== shown) {
+      shown = view.qr.text;
+      console.log(`${view.qr.terminal}\n${view.qr.text}`);
+    }
+    if (view.message && view.state !== 'unavailable') console.log(dim(view.message));
+    switch (view.state) {
+      case 'connected':
+        console.log(`signed in${view.account ? ` as ${view.account}` : ''}`);
+        return 0;
+      case 'already_bound':
+        return 0;
+      case 'failed':
+      case 'idle':
+        console.error(`not signed in${view.message ? `: ${view.message}` : ''}`);
+        return 1;
+      case 'need_code': {
+        const { createInterface } = await import('node:readline/promises');
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        const code = await rl.question('number shown on the phone: ');
+        rl.close();
+        view = await api<PluginLoginView>(o, 'POST', `${base}/code`, { code });
+        continue;
+      }
+      default:
+        break;
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+    const previous = view.message;
+    view = await api<PluginLoginView>(o, 'GET', base);
+    if (view.message === previous) delete view.message;
+  }
+  await api(o, 'POST', `${base}/cancel`, {}).catch(() => undefined);
+  console.error('timed out waiting for the sign-in');
+  return 1;
+}
+
 async function plugins(sub: string | undefined, args: string[]): Promise<number> {
   const o = client();
   const id = args[0];
@@ -496,6 +542,11 @@ async function plugins(sub: string | undefined, args: string[]): Promise<number>
       console.log(formatPlugin(await api<PluginStatus>(o, 'PATCH', `/api/plugins/${encodeURIComponent(id)}/config`, { config: JSON.parse(args[1]) as unknown })));
       return 0;
     }
+    case 'login':
+      return pluginLogin(o, id);
+    case 'logout':
+      console.log(formatPlugin(await api<PluginStatus>(o, 'DELETE', `/api/plugins/${encodeURIComponent(id)}/login`)));
+      return 0;
     case 'uninstall': {
       const r = await api<{ replacedBy: PluginStatus | null }>(o, 'DELETE', `/api/plugins/${encodeURIComponent(id)}${values['keep-data'] ? '?keepData=true' : ''}`);
       console.log(`uninstalled ${id}${r.replacedBy ? ` (the built-in ${id} is back: ${r.replacedBy.state})` : ''}`);

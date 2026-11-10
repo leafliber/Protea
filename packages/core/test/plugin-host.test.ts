@@ -21,6 +21,74 @@ async function started(h: H, id = 'fx'): Promise<void> {
   expect(h.host.get(id)?.state, h.host.get(id)?.error).toBe('running');
 }
 
+describe('plugin host: sign-in', () => {
+  const signInHarness = async () => {
+    const h = harness({ settings: { fx: { enabled: true, config: {} } } });
+    writeFixture(h.pluginsDir, { manifest: { optionalSecrets: ['FX_TOKEN'], login: { method: 'qr' } } });
+    await started(h);
+    return h;
+  };
+
+  it('stores what the plugin hands over, names the owner and restarts it with the secret', async () => {
+    const h = await signInHarness();
+    const firstPid = h.host.get('fx')?.pid;
+    expect(await h.host.loginStatus('fx')).toEqual({ state: 'idle' });
+    expect(await h.host.loginStart('fx')).toEqual({ state: 'waiting', qr: 'https://example.test/qr' });
+    expect(await h.host.loginSubmit('fx', '42')).toMatchObject({ message: 'got 42' });
+    expect((await h.call('fx_login', { secrets: { FX_TOKEN: 'fresh-token' }, ownerSenderKey: 'fx:scanner' })).content).toBe('completed');
+    await waitFor(() => h.host.get('fx')?.state === 'running' && h.host.get('fx')?.pid !== firstPid);
+    expect(h.secrets.get('FX_TOKEN')).toBe('fresh-token');
+    expect(h.signIns).toEqual([['fx', 'fx:scanner']]);
+    expect((await h.call('fx_secret')).content).toBe('11');
+    expect(await h.host.loginStatus('fx')).toEqual({ state: 'connected', account: 'fx-account' });
+  });
+
+  it('accepts login/complete only during a sign-in the host started, and only once', async () => {
+    const h = await signInHarness();
+    const unasked = await h.call('fx_login', { secrets: { FX_TOKEN: 'sneaky' }, ownerSenderKey: 'fx:attacker' });
+    expect(unasked.is_error).toBe(true);
+    expect(unasked.content).toContain('no sign-in is in progress');
+    expect(h.secrets.get('FX_TOKEN')).toBeUndefined();
+    expect(h.signIns).toEqual([]);
+    await h.host.loginStart('fx');
+    await h.host.loginCancel('fx');
+    expect((await h.call('fx_login', { secrets: { FX_TOKEN: 'late' } })).content).toContain('no sign-in is in progress');
+  });
+
+  it('refuses a secret the manifest does not declare, and an empty hand-over', async () => {
+    const h = await signInHarness();
+    await h.host.loginStart('fx');
+    expect((await h.call('fx_login', { secrets: { ADMIN_TOKEN: 'x' } })).content).toContain('secret ADMIN_TOKEN is not declared');
+    expect((await h.call('fx_login', { secrets: {} })).content).toContain('at least one secret');
+    expect((await h.call('fx_login', { secrets: { FX_TOKEN: 'x' }, ownerSenderKey: '*' })).content).toContain('must name one sender');
+    expect(h.signIns).toEqual([]);
+    expect(h.secrets.get('ADMIN_TOKEN')).toBeUndefined();
+  });
+
+  it('signs out: forgets the secret and the owner, and restarts without them', async () => {
+    const h = await signInHarness();
+    h.secrets.set('FX_TOKEN', 'stored-token');
+    await h.host.restart('fx');
+    expect((await h.call('fx_secret')).content).toBe('12');
+    await h.host.logout('fx');
+    expect(h.secrets.get('FX_TOKEN')).toBeUndefined();
+    expect(h.signIns).toEqual([['fx', null]]);
+    expect(h.host.get('fx')?.state).toBe('running');
+    expect((await h.call('fx_secret')).content).toBe('0');
+  });
+
+  it('says why a sign-in cannot start', async () => {
+    const h = harness();
+    writeFixture(h.pluginsDir);
+    writeFixture(h.pluginsDir, { id: 'fy', manifest: { login: { method: 'qr' } } });
+    await h.rescan();
+    expect(h.host.supportsLogin('fx')).toBe(false);
+    expect(h.host.supportsLogin('fy')).toBe(true);
+    await expect(h.host.loginStart('fx')).rejects.toThrow('has no sign-in');
+    await expect(h.host.loginStart('fy')).rejects.toThrow('is not running');
+  });
+});
+
 describe('plugin host: out-of-process plugins', () => {
   it('starts a plugin, registers its tools and answers calls over the protocol', async () => {
     const h = harness({ settings: { fx: { enabled: true, config: { greeting: 'hi', pushOnStart: true } } } });
@@ -30,7 +98,7 @@ describe('plugin host: out-of-process plugins', () => {
     const s = h.host.get('fx');
     expect(s).toMatchObject({ state: 'running', enabled: true, origin: 'data', version: '1.0.0' });
     expect(s?.pid).toBeGreaterThan(0);
-    expect(h.tools.namesOf('fx')).toEqual(['fx_config', 'fx_crash', 'fx_echo', 'fx_env', 'fx_kv', 'fx_push', 'fx_secret', 'fx_slow', 'fx_version']);
+    expect(h.tools.namesOf('fx')).toEqual(['fx_config', 'fx_crash', 'fx_echo', 'fx_env', 'fx_kv', 'fx_login', 'fx_push', 'fx_secret', 'fx_slow', 'fx_version']);
 
     expect((await h.call('fx_echo', { text: 'ping' })).content).toBe('echo: ping');
     // The start event went through the gate and the store like any other source's.
@@ -72,6 +140,25 @@ describe('plugin host: out-of-process plugins', () => {
     await h.rescan();
     await h.host.startAll();
     expect(h.host.get('fx')).toMatchObject({ state: 'failed', enabled: true, error: 'secret FX_TOKEN is not set' });
+  });
+
+  it('starts without an optional secret and injects it when set', async () => {
+    const without = harness({ settings: { fx: { enabled: true, config: {} } } });
+    writeFixture(without.pluginsDir, { manifest: { optionalSecrets: ['FX_TOKEN'] } });
+    await started(without);
+    expect((await without.call('fx_secret')).content).toBe('0');
+    const withIt = harness({ env: { PROTEA_SECRET_FX_TOKEN: 'tok-123456' }, settings: { fx: { enabled: true, config: {} } } });
+    writeFixture(withIt.pluginsDir, { manifest: { optionalSecrets: ['FX_TOKEN'] } });
+    await started(withIt);
+    expect((await withIt.call('fx_secret')).content).toBe('10');
+  });
+
+  it('rejects malformed sign-in and optional-secret declarations', async () => {
+    const h = harness();
+    writeFixture(h.pluginsDir, { id: 'badlogin', manifest: { login: { method: 'password' } as never, optionalSecrets: ['lower'] } });
+    await h.rescan();
+    expect(h.host.get('badlogin')).toMatchObject({ state: 'invalid', error: expect.stringContaining('login.method must be one of qr') });
+    expect(h.host.get('badlogin')?.error).toContain('optionalSecrets must be a list of UPPER_CASE names');
   });
 
   it('marks invalid manifests with the reasons', async () => {

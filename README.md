@@ -151,6 +151,22 @@ PROTEA_DATA_DIR=.dev-data pnpm protea plugins
 
 需要审批的操作（例如 `tg_send_chat` 发到群里）会在 Telegram 里问你，回复 `/approve a1` 即可；也可以在终端运行 `protea approvals approve a1`。想少点确认，可以切换权限模式：`/mode auto 2h` 让判断模型放行，没放行的再问你（[ADR-0015](docs/20-decisions/ADR-0015-permission-modes-and-auto-review.md)）。
 
+## 接入微信
+
+走微信官方的 iLink 机器人通道，扫码绑定，不需要入站端口。
+
+```bash
+PROTEA_DATA_DIR=.dev-data pnpm protea plugins enable wechat
+```
+
+```bash
+PROTEA_DATA_DIR=.dev-data pnpm protea plugins login wechat
+```
+
+也可以在控制台的 插件 → wechat → 登录 里扫码。扫码的人自动成为这个平台的主人，登录凭据存进秘密库。需要审批的操作会在微信里问你，回复 `/approve a1` 即可。
+
+有两点要知道：iLink 是非公开接口，建议用能承担风险的微信号；机器人不能先开口，主人一段时间没发消息后助理就发不出去了，要紧的提醒请放在其他平台。
+
 ## 接入 MCP 服务器
 
 运行中添加，下一回合模型就能调用；`--` 之后是启动命令：

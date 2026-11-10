@@ -50,7 +50,7 @@ RUN set -e; A=/out/app/assets; mkdir -p "$A/plugins" "$A/sdks" "$A/apps/web"; \
     for m in plugins/*/protea.plugin.json; do \
       d="$(dirname "$m")"; id="$(basename "$d")"; mkdir -p "$A/plugins/$id"; \
       for f in "$d"/*; do \
-        case "$(basename "$f")" in src|test|node_modules|tsconfig*.json|package.json) ;; *) cp -r "$f" "$A/plugins/$id/" ;; esac; \
+        case "$(basename "$f")" in src|test|shims|node_modules|tsconfig*.json|package.json) ;; *) cp -r "$f" "$A/plugins/$id/" ;; esac; \
       done; \
     done; \
     find "$A" -name '__pycache__' -prune -exec rm -rf {} +

@@ -209,6 +209,9 @@ export async function checkConformance(dir: string, opts: ConformanceOptions = {
     const declaresChat = m.chat !== undefined;
     const advertisesChat = started.init.capabilities.chat === true;
     if (declaresChat || advertisesChat) add('the manifest block "chat" and the "chat" capability go together', declaresChat && advertisesChat, `manifest: ${declaresChat}, capability: ${advertisesChat}`);
+    const declaresLogin = m.login !== undefined;
+    const advertisesLogin = started.init.capabilities.login === true;
+    if (declaresLogin || advertisesLogin) add('the manifest block "login" and the "login" capability go together', declaresLogin && advertisesLogin, `manifest: ${declaresLogin}, capability: ${advertisesLogin}`);
     if (probe.chat) {
       const r = await proc.chatSend({ text: probe.chat.text }).catch((err: Error) => ({ ok: false, error: err.message }));
       add('chat/send delivers a message', r.ok === true, r.ok ? undefined : JSON.stringify(r));

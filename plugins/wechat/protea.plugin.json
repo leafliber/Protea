@@ -1,0 +1,17 @@
+{
+  "id": "wechat",
+  "kind": "connector",
+  "api": 1,
+  "version": "0.1.0",
+  "displayName": "微信",
+  "description": "Talk to the owner through WeChat's official iLink bot channel (sign in with a QR code; long polling, no inbound port needed).",
+  "runtime": { "exec": "node", "args": ["dist/main.js"], "dev": { "args": ["src/main.ts"] } },
+  "level": 1,
+  "triggers": ["debounce", "flush", "preempt", "interrupt", "piggyback", "store"],
+  "optionalSecrets": ["WECHAT_BOT_TOKEN"],
+  "login": { "method": "qr" },
+  "configSchema": "./config.schema.json",
+  "envPrompt": "./ENV_PROMPT.md",
+  "chat": { "displayName": "微信", "markdown": "basic", "maxChars": 4000 },
+  "healthcheck": { "intervalMs": 30000, "timeoutMs": 5000 }
+}

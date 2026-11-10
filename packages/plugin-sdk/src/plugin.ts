@@ -20,6 +20,9 @@ import {
   type InitializeResult,
   type Level,
   type LogParams,
+  type LoginCompleteParams,
+  type LoginSubmitParams,
+  type PluginLoginStatus,
   type PluginCapabilities,
   type PushResultMsg,
   type RpcPeer,
@@ -71,6 +74,10 @@ export interface Host<C = Record<string, unknown>> {
   };
   /** A secret the manifest declared; the host injects it into the environment at start. */
   secret(name: string): string | undefined;
+  login: {
+    /** The sign-in the host started succeeded. The host stores the secrets and restarts this plugin with them. */
+    complete(result: LoginCompleteParams): Promise<void>;
+  };
 }
 
 export interface ToolContext {
@@ -104,6 +111,16 @@ export interface PluginDefinition<C = Record<string, unknown>> {
   /** Webhook names this plugin serves under `/hooks/<name>`, decided from the initial config. */
   hooks?(config: C): string[];
   onHttpRequest?(host: Host<C>, req: HttpRequestParams): Promise<HttpResponse> | HttpResponse;
+  /** Makes the plugin one an operator signs in to (with the manifest block `login`). */
+  login?: PluginLoginHandlers<C>;
+}
+
+/** The sign-in of a plugin, driven from the console; each call answers with the current state at once. */
+export interface PluginLoginHandlers<C = Record<string, unknown>> {
+  start(host: Host<C>): Promise<PluginLoginStatus> | PluginLoginStatus;
+  status(host: Host<C>): Promise<PluginLoginStatus> | PluginLoginStatus;
+  submit(host: Host<C>, code: string): Promise<PluginLoginStatus> | PluginLoginStatus;
+  cancel(host: Host<C>): Promise<PluginLoginStatus> | PluginLoginStatus;
 }
 
 /** Identity helper that gives a plugin definition its types. */
@@ -192,11 +209,21 @@ export function servePlugin<C>(peer: RpcPeer, def: PluginDefinition<C>, opts: Se
       },
     },
     secret: (name) => env[name],
+    login: {
+      complete: async (result) => {
+        await peer.request(PLUGIN_TO_HOST.loginComplete, result);
+      },
+    },
   };
 
   const toolList = (): PluginTool<any, C>[] => (typeof def.tools === 'function' ? def.tools(host) : (def.tools ?? []));
   const needInit = (): void => {
     if (!init) throw new RpcError(RPC_ERRORS.InvalidRequest, 'not initialized');
+  };
+  const needLogin = (): PluginLoginHandlers<C> => {
+    needInit();
+    if (!def.login) throw new RpcError(RPC_ERRORS.MethodNotFound, 'this plugin has no sign-in');
+    return def.login;
   };
 
   peer
@@ -215,6 +242,7 @@ export function servePlugin<C>(peer: RpcPeer, def: PluginDefinition<C>, opts: Se
           shutdownVerify: def.shutdownVerify !== undefined,
           ...(def.onApprovalRequest ? { approvals: true } : {}),
           ...(def.chat ? { chat: true } : {}),
+          ...(def.login ? { login: true } : {}),
           ...(hooks.length > 0 ? { hooks } : {}),
           ...def.capabilities,
         },
@@ -266,6 +294,10 @@ export function servePlugin<C>(peer: RpcPeer, def: PluginDefinition<C>, opts: Se
         return { ok: false, error: err instanceof Error ? err.message : String(err) };
       }
     })
+    .handle(HOST_TO_PLUGIN.loginStart, () => needLogin().start(host))
+    .handle(HOST_TO_PLUGIN.loginStatus, () => needLogin().status(host))
+    .handle(HOST_TO_PLUGIN.loginSubmit, (params) => needLogin().submit(host, (params as LoginSubmitParams).code))
+    .handle(HOST_TO_PLUGIN.loginCancel, () => needLogin().cancel(host))
     .handle(HOST_TO_PLUGIN.toolsCancel, (params) => {
       calls.get((params as { callId: string }).callId)?.abort('cancelled');
     })

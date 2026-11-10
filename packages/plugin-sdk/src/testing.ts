@@ -17,6 +17,8 @@ import {
   type InitializeResult,
   type Level,
   type LogParams,
+  type LoginCompleteParams,
+  type PluginLoginStatus,
   type PushResultMsg,
   type SettledParams,
   type ToolCallResult,
@@ -54,6 +56,8 @@ export class FakeHost {
   readonly modeRequests: PermissionModeParams[] = [];
   /** Images stored through `blob/put`, by handle. */
   readonly blobs = new Map<string, { data: Buffer; mime: string }>();
+  /** What the plugin handed over with `login/complete`. */
+  readonly logins: LoginCompleteParams[] = [];
   capabilities: InitializeResult['capabilities'] = {};
   private readonly host: RpcPeer;
   private cursor = 0;
@@ -113,6 +117,10 @@ export class FakeHost {
         const b = this.blobs.get((p as BlobGetParams).handle);
         if (!b) throw new Error('not stored');
         return { dataBase64: b.data.toString('base64'), mime: b.mime, size: b.data.length };
+      })
+      .handle(PLUGIN_TO_HOST.loginComplete, (p) => {
+        this.logins.push(p as LoginCompleteParams);
+        return { ok: true };
       })
       .handle(PLUGIN_TO_HOST.eventsPromote, () => ({ ok: true }))
       .handle(PLUGIN_TO_HOST.eventsWithdraw, () => ({ ok: true }));
@@ -179,6 +187,14 @@ export class FakeHost {
   chatSend(req: ChatSendParams): Promise<ChatSendResult> {
     return this.host.request<ChatSendResult>(HOST_TO_PLUGIN.chatSend, req);
   }
+
+  /** Drive the plugin's sign-in the way the console does. */
+  readonly login = {
+    start: (): Promise<PluginLoginStatus> => this.host.request<PluginLoginStatus>(HOST_TO_PLUGIN.loginStart, {}),
+    status: (): Promise<PluginLoginStatus> => this.host.request<PluginLoginStatus>(HOST_TO_PLUGIN.loginStatus, {}),
+    submit: (code: string): Promise<PluginLoginStatus> => this.host.request<PluginLoginStatus>(HOST_TO_PLUGIN.loginSubmit, { code }),
+    cancel: (): Promise<PluginLoginStatus> => this.host.request<PluginLoginStatus>(HOST_TO_PLUGIN.loginCancel, {}),
+  };
 
   settled(events: SettledParams['events']): void {
     this.host.notify(HOST_TO_PLUGIN.eventsSettled, { events });

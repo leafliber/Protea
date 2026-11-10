@@ -421,6 +421,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     ...(loader ? { dev: { loader } } : {}),
     pythonPath: path.join(assets, 'sdks', 'python'),
     // Keep the running configuration in step with the file, without waiting for the watcher.
+    onOwnerSignIn: (id, senderKey) => {
+      const identities = [...config.owner.identities.filter((i) => i.plugin !== id), ...(senderKey !== null ? [{ plugin: id, senderKey }] : [])];
+      config.owner = { ...config.owner, identities };
+      persist(['owner', 'identities'], identities);
+      owner.update(ownerIdentities(identities));
+    },
     onEnabledChanged: (id, enabled) => {
       config.plugins[id] = { config: config.plugins[id]?.config ?? {}, enabled };
       persist(['plugins', id, 'enabled'], enabled);

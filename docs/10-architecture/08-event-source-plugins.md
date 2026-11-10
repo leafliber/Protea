@@ -75,6 +75,7 @@ Approvals: the owner replies "/approve <id>" or "/deny <id>"; those replies arri
 | `internal` | source | L0 | Core 专用：生命周期、预算、抢占通知 | M0 |
 | `webhook` | source | L2 | HTTP 入站（`/hooks/<name>`），签名校验（GitHub/通用 HMAC/token） | M2 ✓ |
 | `telegram` | connector（对话平台） | L1 | Bot API 长轮询（无需入站端口）；owner 由用户 id 映射 | M2 ✓ |
+| `wechat` | connector（对话平台） | L1 | 官方 iLink 通道，扫码登录、长轮询（无需入站端口）；基于官方客户端 | 2026-11-10 |
 | `filewatch` | source | L3 | 监视 `/data/inbox` 等目录 | M2 ✓ |
 | `rss` | source | L4 | 定时抓取，按条目去重 | M3 ✓ |
 | `imap` | source | L2 | IDLE/轮询；邮件到达事件 + `mail_fetch` 工具 | M3 ✓ |
@@ -98,6 +99,16 @@ Approvals: the owner replies "/approve <id>" or "/deny <id>"; those replies arri
 **rss**：配置 `feeds: [{ url, name?, intervalMin?, level? }]`、`intervalMin`（默认 30）、`level`（4 = `piggyback`，默认；3 = `debounce`）、`firstRunItems`（默认 3）、`maxItemsPerPoll`（默认 10）、`timeoutSec`。解析 RSS 2.0、Atom、RSS 1.0（RDF）；用 `ETag` / `Last-Modified` 做条件请求。每个新条目一个 `rss.item` 事件（标题、链接、发布时间、去掉 HTML 的摘要前 400 字符），`dedupeKey` 由订阅名与条目 id 派生，按发布时间从旧到新推送；某个订阅第一次读取时只报最新 `firstRunItems` 条，其余记为已读。已读集合（每个订阅最多 1000 个）在事件入库后才写入 kv，崩溃重启只会重报、不会丢。工具 `rss_feeds`（每个订阅的状态与最近错误）、`rss_items`（最近条目）。
 
 **imap**（秘密 `IMAP_PASSWORD`）：配置 `host`、`port`（993）、`secure`（true；false 时服务器提供 STARTTLS 才升级）、`user`、`mailbox`（`INBOX`）、`mode`（`idle` 默认，或 `poll` + `pollSec`）、`level`（默认 2）、`bulkLevel`（默认 4）、`important`（地址或 `@域名`，始终用 `level`）、`snippetChars`（500）、`rejectUnauthorized`。邮箱以只读方式打开（EXAMINE），不会把邮件标为已读。第一次连接只记录邮箱当前的 UID 位置；之后每封新邮件一个 `mail.received` 事件（发件人、主题、日期、收件人、正文开头、附件清单；`senderKey: mail:<地址>`，`dedupeKey: msg:<uidvalidity>:<uid>`）；邮件列表与自动邮件（`List-*`、`Precedence: bulk|list|junk`、`Auto-Submitted`）用 `bulkLevel`。位置在事件入库后才前移；`UIDVALIDITY` 变了就从当前末尾重新开始。连接断开后按 5 s 到 5 min 的退避重连，并补报期间到达的邮件；邮件服务器不可达不影响插件的健康检查（插件自己重连，不会被宿主当作崩溃重启）。工具 `mail_fetch {uid}`（完整正文，默认截断到 20000 字符）、`mail_search {from?, subject?, since?, unseen?}`。发件地址不能证明身份，邮件事件不会成为 L1。
+
+### 6.3 微信
+
+**wechat**（决策见 [ADR-0016](../20-decisions/ADR-0016-wechat-and-plugin-sign-in.md)；秘密 `WECHAT_BOT_TOKEN` 和主人身份由扫码登录写入）：
+- 协议由腾讯的 `@tencent-weixin/openclaw-weixin` 实现。启动时 `notifystart`，长轮询 `getupdates`，事件入库后才把 `get_updates_buf` 写入 kv，崩溃重启只会重读；停止时 `notifystop`。网络或服务错误先等 2 s，连续 3 次后等 30 s。
+- 主人私聊 → `chat.message`，L1 `flush`；消息正好是停止词 → L1 `interrupt`；`/approve aN`、`/deny aN`、`/mode` 与 Telegram 相同，不产生消息事件。非主人的私聊和带 `group_id` 的消息 → `wechat.message`，L4 `store`，不唤醒模型。`dedupeKey` 是 `msg:<message_id>`。
+- 内容：图片解密后存 blob（只取主人的），失败时退回文字占位；语音用微信的转写文字，没有转写时占位；文件和视频只有占位；引用的内容拼进正文。
+- 对话平台：`chat_send` 的 `wechat`，发给主人，超过 4000 字符自动分段，`reply_to` 忽略，文本经官方的 Markdown 过滤。**机器人不能先开口**：发送要带主人最新一条消息的 `context_token`。没有 token、`ret=-2`（回复窗口关闭）时都返回失败回执，模型应改走其他平台。社区实测称窗口约 24 小时、每条入站后最多约 10 条回复，没有官方说明，代码不依赖这些数字。
+- 会话过期（`errcode -14`）：收发暂停 1 小时后重试，健康检查报告原因，推一条 L2 的 `wechat.session_expired`（每次过期只推一次）。
+- 配置：`apiBase`、`cdnBase`（均 `x-hot: false`，测试用）、`stopWords`。
 
 ## 7. 编写一个最小事件源（TypeScript）
 

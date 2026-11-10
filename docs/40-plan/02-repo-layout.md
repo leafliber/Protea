@@ -58,6 +58,7 @@ Protea/
 │   ├── webchat/                 进程内对话平台：网页对话窗口与 protea chat、审批通知
 │   ├── cron/                    进程内来源：日程与 sleep_until
 │   ├── telegram/                进程外连接器（protea.plugin.json + src/ + test/，含模拟 Bot API）
+│   ├── wechat/                  进程外连接器，基于官方 @tencent-weixin/openclaw-weixin（shims/ 是 openclaw 的本地替身，test/ 含模拟 iLink）
 │   ├── webhook/                 进程外来源：/hooks/<name>
 │   ├── filewatch/               进程外来源：监视 /data/inbox
 │   ├── rss/                     进程外来源：RSS / Atom 订阅
