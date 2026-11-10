@@ -149,7 +149,7 @@ export function makeHostHarness(opts: { settings?: Record<string, PluginSettings
   const host = new PluginHost({
     store,
     bus,
-    gateway: new EventGateway({ store, owner, log: silentLogger(), clock: systemClock }),
+    gateway: new EventGateway({ store, owner, log: silentLogger(), clock: systemClock, timezone: 'UTC' }),
     owner,
     kv: new KvRepo(db),
     tools,

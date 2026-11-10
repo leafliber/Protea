@@ -31,7 +31,7 @@ import { sleep } from '../util/abort.js';
 import { errorMessage } from '../util/errors.js';
 import { globToRegExp } from '../util/glob.js';
 import { newId } from '../util/ids.js';
-import type { Clock } from '../util/time.js';
+import { isoInZone, type Clock } from '../util/time.js';
 
 export interface ForkRequest {
   goal: string;
@@ -104,6 +104,8 @@ export interface ForkManagerOptions {
   dispatcher: ToolDispatcher;
   log: Logger;
   clock: Clock;
+  /** Zone of the start time a fork is told (forks get no events and no status snapshot). */
+  timezone: string;
   settings: ForkSchedulerSettings;
   backoffMs: readonly number[];
   effortFor: (role: ModelRole) => Effort;
@@ -668,7 +670,7 @@ export class ForkManager {
 
   private firstMessage(cp: Checkpoint): string {
     return [
-      `<fork id="${cp.id}" level="${cp.level}" max_rounds="${cp.maxTurns}">`,
+      `<fork id="${cp.id}" level="${cp.level}" max_rounds="${cp.maxTurns}" now="${isoInZone(this.o.clock.now(), this.o.timezone)}">`,
       `Goal:\n${cp.goal}`,
       ...(cp.context ? [`Context from the main session:\n${cp.context}`] : []),
       '</fork>',

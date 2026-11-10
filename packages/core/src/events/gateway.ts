@@ -1,6 +1,6 @@
 import type { EventEnvelope, EventInput, Level, Trigger } from '@protea/protocol';
 import type { Logger } from '../observability/logger.js';
-import type { Clock } from '../util/time.js';
+import { stampInZone, type Clock } from '../util/time.js';
 import { gateEvent, type GatedEvent, type SourceCaps } from './gate.js';
 import type { OwnerRegistry } from './owner.js';
 import type { EventStore } from './store.js';
@@ -29,6 +29,8 @@ export interface EventGatewayOptions {
   owner: OwnerRegistry;
   log: Logger;
   clock: Clock;
+  /** Every stored `ts` is written in this zone, whatever offset the source used. */
+  timezone: string;
 }
 
 /**
@@ -53,6 +55,8 @@ export class EventGateway {
       this.o.log.warn({ source: caps.source, errors: gated.errors }, 'event rejected');
       return { ok: false, warnings: [], errors: gated.errors };
     }
+    // One notation for every source, so the model never has to convert between offsets.
+    gated.event.ts = stampInZone(gated.event.ts, this.o.timezone);
     // Budget enforcement changes the delivery mode of new events (not a downgrade notice per event).
     const admission = this.admission?.(gated.event) ?? null;
     if (admission) gated.event.effTrigger = admission.trigger;

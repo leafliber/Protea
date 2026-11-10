@@ -1,7 +1,7 @@
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import { Bus, EventStore, migrate, openDatabase, systemClock, type GatedEvent, type SettledData } from '../src/index.js';
+import { Bus, EventGateway, EventStore, OwnerRegistry, migrate, openDatabase, silentLogger, systemClock, type GatedEvent, type SettledData } from '../src/index.js';
 import { tmpDir } from './helpers.js';
 
 function setup() {
@@ -98,5 +98,19 @@ describe('migrations', () => {
     expect(migrate(db).applied).toEqual([]);
     db.prepare("INSERT INTO schema_version VALUES (99, 'future', 'now')").run();
     expect(() => migrate(db)).toThrow(/newer than this build/);
+  });
+});
+
+describe('EventGateway', () => {
+  it('stores every timestamp in the daemon time zone, whatever offset the source used', () => {
+    const { store } = setup();
+    const clock = { now: () => Date.UTC(2026, 10, 3, 1, 2, 3, 456) };
+    const gateway = new EventGateway({ store, owner: new OwnerRegistry([]), log: silentLogger(), clock, timezone: 'Asia/Shanghai' });
+    const push = (ts: string) => gateway.push({ source: 'x', maxLevel: 2 }, { type: 'x.y', ts, level: 2, trigger: 'flush', text: 'hello' }).cursor as number;
+    const utc = push('2026-11-03T01:02:03.456Z');
+    const local = push('2026-11-03T09:02:03+08:00');
+    const elsewhere = push('2026-11-02T20:02:03-05:00');
+    const internal = gateway.pushInternal({ type: 'core.note', level: 4, trigger: 'store', text: 'hello' }).cursor as number;
+    for (const cursor of [utc, local, elsewhere, internal]) expect(store.get(cursor)?.ts).toBe('2026-11-03T09:02:03+08:00');
   });
 });

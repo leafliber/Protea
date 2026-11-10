@@ -78,6 +78,8 @@ describe('forks', () => {
       expect(transcript.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'user', 'assistant']);
       const first = transcript[0]?.content[0];
       expect(first && isTextBlock(first) ? first.text : '').toContain(`<fork id="${id}" level="3"`);
+      // A fork sees no events and no status snapshot, so its first message carries the time.
+      expect(first && isTextBlock(first) ? first.text : '').toMatch(/ now="\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00">/);
       // Usage is attributed to the fork and its level.
       const usage = h.db.prepare('SELECT role, session_id AS s, level FROM usage WHERE role = ?').all('fork') as Array<{ s: string; level: number }>;
       expect(usage).toHaveLength(3);

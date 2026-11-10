@@ -75,6 +75,12 @@ export function parseDateTime(input: string, timeZone: string): number | null {
   return t;
 }
 
+/** The same instant written in `timeZone` (see isoInZone); a string that is not a date-time is returned unchanged. */
+export function stampInZone(ts: string, timeZone: string): string {
+  const t = parseDateTime(ts, timeZone);
+  return t === null ? ts : isoInZone(t, timeZone);
+}
+
 export function defaultTimeZone(): string {
   return process.env['TZ'] || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 }

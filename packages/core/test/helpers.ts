@@ -98,7 +98,7 @@ export function makeHarness(opts: HarnessOptions = {}) {
     { plugin: 'test', senderKey: 'test:owner' },
   ]);
   const tools = new ToolRegistry();
-  const gateway = new EventGateway({ store, owner, log, clock: systemClock });
+  const gateway = new EventGateway({ store, owner, log, clock: systemClock, timezone: 'UTC' });
   const plugins = new PluginHost({ store, bus, gateway, owner, kv, tools, log, clock: systemClock, dataDir: dir, timezone: 'UTC' });
   const provider = opts.provider ?? new ScriptedProvider(opts.steps ?? [() => textReply('ok')]);
   const pushInternal = (input: InternalEventInput): void => {
@@ -118,6 +118,7 @@ export function makeHarness(opts: HarnessOptions = {}) {
     dispatcher,
     log,
     clock: systemClock,
+    timezone: 'UTC',
     settings: { ...defaults.scheduler.forks, ...opts.forks },
     backoffMs: opts.backoffMs ?? [5, 5],
     effortFor: () => 'high',
