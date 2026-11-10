@@ -2,6 +2,7 @@ import type {
   ApprovalInfo,
   BatchEndReason,
   BatchReason,
+  ChatDraftUpdate,
   EventEnvelope,
   ForkInfo,
   HandoffKind,
@@ -35,8 +36,10 @@ export interface BusTopics {
   'batch.started': { batchId: string; level: Level; reason: BatchReason; cursors: number[] };
   'batch.extended': { batchId: string; cursors: number[]; level: Level };
   'batch.ended': { batchId: string; endReason: BatchEndReason; rounds: number };
-  /** `id`: the stored row (outputs table); `batchId`: the batch whose tool call sent it. */
-  'plugin.output': { plugin: string; channel?: string; text: string; at: string; id?: number; batchId?: string };
+  /** `id`: the stored row (outputs table); `batchId` and `callId`: the tool call that sent it. */
+  'plugin.output': { plugin: string; channel?: string; text: string; at: string; id?: number; batchId?: string; callId?: string };
+  /** A chat reply as the model writes it (the chat window); never stored, not external output. */
+  'chat.draft': ChatDraftUpdate;
   'usage.recorded': UsageRecord;
   /** A model request is about to be sent (the latency metric measures up to here). */
   'model.request': ModelRequestTrace;

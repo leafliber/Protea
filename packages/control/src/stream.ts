@@ -3,12 +3,12 @@ import type { Bus, BusTopic, BusTopics } from '@protea/core';
 
 const base = (file: string): string => file.split('/').pop() ?? file;
 
-type Projector<K extends BusTopic> = (data: BusTopics[K], extended: boolean, trace: boolean) => WsServerMessage | null;
+type Projector<K extends BusTopic> = (data: BusTopics[K], extended: boolean, trace: boolean, drafts: boolean) => WsServerMessage | null;
 
 /**
  * How each bus topic appears on `/api/stream` (SSE) and `/ws`. It has an entry for every
  * topic, so a new bus topic does not compile until it is decided here; null keeps a record
- * off the stream. The WebSocket-only topics (`promoted`, `persona`, `usage`, the fragments of the run stream) need `extended`; `trace` adds whole replies and tool calls to the SSE stream.
+ * off the stream. The WebSocket-only topics (`promoted`, `persona`, `usage`, the fragments of the run stream) need `extended`; `trace` adds whole replies and tool calls to the SSE stream, `drafts` the replies being written.
  */
 const PROJECTORS: { [K in BusTopic]: Projector<K> } = {
   'event.stored': (data) => ({ topic: 'event', data }),
@@ -19,6 +19,7 @@ const PROJECTORS: { [K in BusTopic]: Projector<K> } = {
   'batch.extended': (data) => ({ topic: 'batch.extended', data }),
   'batch.ended': (data) => ({ topic: 'batch.ended', data }),
   'plugin.output': (data) => ({ topic: 'output', data }),
+  'chat.draft': (data, extended, _trace, drafts) => (extended || drafts ? { topic: 'chat.draft', data } : null),
   'scheduler.action': (data) => ({ topic: 'scheduler', data }),
   'fork.changed': (data) => ({ topic: 'fork', data }),
   'plugin.changed': (data) => ({ topic: 'plugin', data }),
@@ -60,13 +61,14 @@ const PROJECTORS: { [K in BusTopic]: Projector<K> } = {
  * a stored event therefore goes out before the batch that a listener (the scheduler) starts
  * for it and before its settlement, i.e. in causal order.
  */
-export function subscribeStream(bus: Bus, push: (m: WsServerMessage) => void, opts: { extended?: boolean; trace?: boolean } = {}): () => void {
+export function subscribeStream(bus: Bus, push: (m: WsServerMessage) => void, opts: { extended?: boolean; trace?: boolean; drafts?: boolean } = {}): () => void {
   const extended = opts.extended === true;
   const trace = opts.trace === true;
+  const drafts = opts.drafts === true;
   return bus.tap((topic, raw) => {
     // The tap carries the record untyped; the topic picks the projector written for its type.
-    const project = PROJECTORS[topic] as (data: never, extended: boolean, trace: boolean) => WsServerMessage | null;
-    const m = project(raw as never, extended, trace);
+    const project = PROJECTORS[topic] as (data: never, extended: boolean, trace: boolean, drafts: boolean) => WsServerMessage | null;
+    const m = project(raw as never, extended, trace, drafts);
     if (m) push(m);
   });
 }

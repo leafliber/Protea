@@ -12,7 +12,7 @@ export class BusTrail {
   constructor(bus: Bus, readonly size = 200) {
     this.off = bus.tap((topic, data) => {
       // Streaming fragments would push everything else out of the trail.
-      if (topic === 'model.delta') return;
+      if (topic === 'model.delta' || topic === 'chat.draft') return;
       let text: string;
       try {
         text = JSON.stringify(data) ?? 'undefined';

@@ -127,7 +127,12 @@ describe('AnthropicProvider.generate against a local Messages API', () => {
 
   it('streams a message and maps content, usage and cost', async () => {
     const p = new AnthropicProvider(settings({ baseUrl }), 'test-key');
-    const res = await p.generate(request, { signal: new AbortController().signal });
+    const inputs: Array<{ id: string; name: string; json: string }> = [];
+    const res = await p.generate(request, { signal: new AbortController().signal, onToolInput: (d) => inputs.push(d) });
+    expect(inputs).toEqual([
+      { id: 'toolu_1', name: 'chat_send', json: '{"text":"你' },
+      { id: 'toolu_1', name: 'chat_send', json: '好"}' },
+    ]);
     expect(res.stopReason).toBe('tool_use');
     expect(res.content[0]).toMatchObject({ type: 'thinking', signature: 'sig123' });
     expect(res.content[1]).toMatchObject({ type: 'tool_use', id: 'toolu_1', name: 'chat_send', input: { text: '你好' } });

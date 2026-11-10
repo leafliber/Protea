@@ -128,7 +128,12 @@ describe('OpenAiChatProvider', () => {
     );
     const deltas: string[] = [];
     const p = new OpenAiChatProvider(profile('openai-chat', { pricing: { 'm-main-2026': { input: 1, output: 2, cacheRead: 0.1 } } }), 'sk-test', 'local');
-    const r = await p.generate(request, { signal: AbortSignal.timeout(5000), onText: (d) => deltas.push(d) });
+    const inputs: Array<{ id: string; name: string; json: string }> = [];
+    const r = await p.generate(request, { signal: AbortSignal.timeout(5000), onText: (d) => deltas.push(d), onToolInput: (d) => inputs.push(d) });
+    expect(inputs).toEqual([
+      { id: 'call_a', name: 'chat_send', json: '{"te' },
+      { id: 'call_a', name: 'chat_send', json: 'xt":"hi"}' },
+    ]);
     expect(deltas.join('')).toBe('Hello');
     expect(r.content).toEqual([
       { type: 'text', text: 'Hello' },
@@ -235,6 +240,26 @@ describe('OpenAiResponsesProvider', () => {
     expect(s.path).toBe('/v1/responses');
     expect(s.body).toMatchObject({ model: 'm-main', stream: true, store: false, instructions: 'You are Protea.\n\nRuntime notes.', max_output_tokens: 8192, reasoning: { effort: 'high' } });
     expect(s.body['tools']).toEqual([{ type: 'function', name: 'chat_send', description: 'send', parameters: request.tools[0]?.inputSchema, strict: false }]);
+  });
+
+  it('streams function call arguments with the id of the final call', async () => {
+    answers.push(
+      sse([
+        { type: 'response.output_item.added', output_index: 0, item: { type: 'reasoning' } },
+        { type: 'response.output_item.added', output_index: 1, item: { type: 'function_call', id: 'fc_item', call_id: 'call_9', name: 'chat_send' } },
+        { type: 'response.function_call_arguments.delta', output_index: 1, delta: '{"text"' },
+        { type: 'response.function_call_arguments.delta', output_index: 1, delta: ':"hi"}' },
+        { type: 'response.function_call_arguments.delta', output_index: 7, delta: 'unknown item' },
+        { type: 'response.completed', response: { status: 'completed', model: 'm-main', output: [{ type: 'function_call', call_id: 'call_9', name: 'chat_send', arguments: '{"text":"hi"}' }], usage: { input_tokens: 1, output_tokens: 1 } } },
+      ]),
+    );
+    const inputs: Array<{ id: string; name: string; json: string }> = [];
+    const r = await new OpenAiResponsesProvider(profile('openai-responses'), 'k', 'oa').generate(request, { signal: AbortSignal.timeout(5000), onToolInput: (d) => inputs.push(d) });
+    expect(inputs).toEqual([
+      { id: 'call_9', name: 'chat_send', json: '{"text"' },
+      { id: 'call_9', name: 'chat_send', json: ':"hi"}' },
+    ]);
+    expect(r.content).toEqual([{ type: 'tool_use', id: 'call_9', name: 'chat_send', input: { text: 'hi' } }]);
   });
 
   it('maps an incomplete response and a failed one', async () => {

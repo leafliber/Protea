@@ -75,7 +75,8 @@ WebSocket 客户端发 `{ subscribe: [...], since?, logFilter? }`，每条订阅
 | `events` | `event`、`settled`、`promoted` |
 | `phase` | `phase`、`batch.started`、`batch.extended`、`batch.ended` |
 | `scheduler` | `scheduler`（抢占、打断、老化、风暴冷却、Fork 让渡/恢复、暂停/恢复、清空） |
-| `output` | `output`（`chat_send` 发出的消息与插件输出；带存储的 `id` 与 `batchId`） |
+| `output` | `output`（`chat_send` 发出的消息与插件输出；带存储的 `id`、`batchId` 与 `callId`） |
+| `chat` | `chat.draft`（正在写的聊天回复；只有对话窗口订阅） |
 | `changes` | `fork`、`plugin`、`approval`、`mcp`、`skills`、`handoff`、`persona` |
 | `usage` | `usage`（每次模型调用） |
 | `logs` | `log`（按 `logFilter` 过滤） |

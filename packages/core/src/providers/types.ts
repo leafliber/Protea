@@ -31,12 +31,21 @@ export interface ProviderUsage {
   cacheWriteTokens: number;
 }
 
+/** A fragment of a tool call's JSON input as it streams. `name` is what has arrived of the name so far. */
+export interface ToolInputDelta {
+  id: string;
+  name: string;
+  json: string;
+}
+
 export interface GenerateOptions {
   signal: AbortSignal;
   /** Reply text as it streams. */
   onText?: (delta: string) => void;
   /** Reasoning text as it streams, where the provider shows it. */
   onThinking?: (delta: string) => void;
+  /** Tool call input as it streams, where the provider streams it. `id` matches the tool_use block of the response. */
+  onToolInput?: (delta: ToolInputDelta) => void;
 }
 
 export interface ProviderResponse {

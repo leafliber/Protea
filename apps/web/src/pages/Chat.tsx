@@ -6,7 +6,8 @@ import { Rich } from '../components/Rich';
 import { UserMenu } from '../components/UserMenu';
 import { IconAlert, IconArrowDown, IconCheck, IconConsole, IconCopy, IconRetry, IconSend } from '../components/icons';
 import { cx } from '../components/ui';
-import { live, useLive, useLiveState, useReloadOn } from '../live';
+import { applyDraft, removeBatchDrafts, removeDraft, type ChatDraft } from '../chat-drafts';
+import { live, useChatDrafts, useLive, useLiveState, useReloadOn } from '../live';
 import { consoleHref, useSession } from '../session';
 
 const PAGE = 50;
@@ -176,6 +177,7 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
   const [atBottom, setAtBottom] = useState(true);
   const [unseen, setUnseen] = useState(false);
   const [draft, setDraft] = useState('');
+  const [drafts, setDrafts] = useState<ChatDraft[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const prepend = useRef<number | null>(null);
@@ -206,6 +208,7 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
     // A dropped WebSocket misses replies: fetch the newest page again when it is back.
     let was = live.state;
     return live.onState((s) => {
+      if (s !== 'open') setDrafts([]);
       if (s === 'open' && was !== 'open') void loadLatest(false);
       was = s;
     });
@@ -223,7 +226,8 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
     get<{ batches: ChatBatch[] }>(`/api/chat/batches${qs({ ids: id })}`).then((r) => addBatches(r.batches), () => undefined);
   };
 
-  useLive(['event', 'settled', 'batch.started', 'batch.extended', 'batch.ended', 'output', 'phase'], (m) => {
+  useChatDrafts();
+  useLive(['event', 'settled', 'batch.started', 'batch.extended', 'batch.ended', 'output', 'phase', 'chat.draft'], (m) => {
     switch (m.topic) {
       case 'event': {
         const e = m.data;
@@ -245,6 +249,10 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
       case 'output': {
         const o = m.data;
         if (o.plugin !== PLATFORM) return;
+        if (o.callId !== undefined) {
+          const sent = o.callId;
+          setDrafts((old) => removeDraft(old, sent));
+        }
         const key = o.id !== undefined ? `o${o.id}` : `o${Date.parse(o.at)}.${Math.random().toString(36).slice(2, 6)}`;
         setItems((old) =>
           merge(old, [{ key, kind: o.channel === 'chat' ? 'reply' : 'notice', platform: PLATFORM, at: o.at, text: o.text, ...(o.channel ? { channel: o.channel } : {}), ...(o.batchId ? { batchId: o.batchId } : {}) }]),
@@ -261,7 +269,11 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
         setPhase({ phase: m.data.phase, ...(m.data.batchId ? { batchId: m.data.batchId } : {}), ...(m.data.round !== undefined ? { round: m.data.round } : {}) });
         break;
       case 'batch.ended':
+        setDrafts((old) => removeBatchDrafts(old, m.data.batchId));
         refreshBatch(m.data.batchId);
+        break;
+      case 'chat.draft':
+        if (m.data.platform === PLATFORM) setDrafts((old) => applyDraft(old, m.data));
         break;
     }
   });
@@ -299,7 +311,7 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
       setUnseen(true);
     }
     lastKey.current = newest;
-  }, [items, active, phase.phase, loaded]);
+  }, [items, drafts, active, phase.phase, loaded]);
 
   const toBottom = () => {
     const el = scrollRef.current;
@@ -478,7 +490,24 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
             </div>
           )}
           {rows}
-          {active && (
+          {drafts.map((d) => (
+            <div key={d.callId} className="cm cm-in cm-first cm-last" aria-hidden="true">
+              <div className="cm-avatar">
+                <img src="./favicon.svg" alt="" width="26" height="26" />
+              </div>
+              <div className="cm-main">
+                <div className="cm-body">
+                  <Rich text={d.text} />
+                </div>
+                <div className="typing">
+                  <span />
+                  <span />
+                  <span />
+                </div>
+              </div>
+            </div>
+          ))}
+          {active && drafts.length === 0 && (
             <div className="cm cm-in cm-first cm-last cm-typing">
               <div className="cm-avatar">
                 <img src="./favicon.svg" alt="" width="26" height="26" />

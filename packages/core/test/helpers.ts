@@ -63,6 +63,7 @@ export const FAST_LEVELS: Record<Level, LevelSettings> = {
 };
 
 export interface HarnessOptions {
+  showsChatDrafts?: (platform: string) => boolean;
   dir?: string;
   steps?: ScriptStep[];
   provider?: Provider;
@@ -181,6 +182,7 @@ export function makeHarness(opts: HarnessOptions = {}) {
     status: () => ({ now: '2026-11-03T00:00:00Z', phase: main.phase, pending: store.pendingCounts() }),
     pushInternal,
     ...(opts.outputTap ? { outputTap: opts.outputTap } : {}),
+    ...(opts.showsChatDrafts ? { showsChatDrafts: opts.showsChatDrafts } : {}),
   });
   const scheduler = new Scheduler({
     store,

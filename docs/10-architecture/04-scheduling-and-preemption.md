@@ -65,7 +65,7 @@ tryDeliver(trigger, level):
 | N = C，T=`interrupt` | **interrupt** | **interrupt** | **interrupt** |
 | N > C，任意 | wait | wait | wait |
 
-- "外部输出"指经由出口工具（如 `chat_send`）或流式输出分接（`outputTap`）已经到达外部世界的内容。只在内部流式缓冲里的 token 不算，控制台运行流看到的增量（`model.delta`）也不算。实现上以"本次模型调用的 `outputTap` 是否已收到文本"判断（`MainSession` 的 `outputTap` 选项）；`phase=model` 列只看当前这次调用。
+- "外部输出"指经由出口工具（如 `chat_send`）或流式输出分接（`outputTap`）已经到达外部世界的内容。只在内部流式缓冲里的 token 不算，控制台运行流看到的增量（`model.delta`）也不算，聊天窗口里的回复草稿（`chat.draft`）同样不算：调用被取消时草稿会撤回。实现上以"本次模型调用的 `outputTap` 是否已收到文本"判断（`MainSession` 的 `outputTap` 选项）；`phase=model` 列只看当前这次调用。
 - `phase=backoff`（重试前的退避等待）按"`phase=model`、无外部输出"处理：`preempt` 取消等待并立即用合并后的事件重发。`idle`、`delivering`、`handoff` 阶段一律 wait（空闲时事件本来就会立即开批）。
 - **`preempt` 的实现**：取消当前模型调用（不写入转录），追加 `model_call_cancelled` 标记和 L4 store 的 `session.preempted` 事件，在同一批内把到期事件追加为新的 user 消息（批等级随之提升），然后重发请求。批不结束。
 - **`interrupt` 的实现**：取消模型调用和 `interruptible` 工具，等待其余工具跑完；所有工具回执照常写入转录，追加 `turn_cancelled` 标记，批以 `interrupted` 结束（`resumable: false`）。打断事件连同 L4 piggyback 的 `session.turn_cancelled` 通知（`turn cancelled: … interrupted by L1 event #18240 …`）组成下一批。被取消回合的事件**保留在上下文**（它们已被模型看到），模型因此知道自己被打断过（P3）。

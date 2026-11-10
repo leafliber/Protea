@@ -8,6 +8,7 @@ import {
   isTrigger,
   type ApprovalGrantInfo,
   type ApprovalInfo,
+  type ChatDraftUpdate,
   type ContentBlock,
   type EventEnvelope,
   type ForkInfo,
@@ -19,6 +20,7 @@ import {
   type PushEventResponse,
   type StatusResponse,
 } from '@protea/protocol';
+import { ChatPrinter } from './chat-printer.js';
 import { api, defaultDataDir, resolveClient, stream, type ClientOptions } from './client.js';
 import { backupCommand, diagCommand, dropPrivileges, healthcheckCommand, migrateCommand, replayCommand, restoreCommand } from './admin.js';
 import { devPlugin } from './dev-plugin.js';
@@ -320,10 +322,15 @@ async function chat(textParts: string[]): Promise<number> {
   const o = client();
   const timeoutMs = (intFlag('timeout', values.timeout) ?? 300) * 1000;
   const ac = new AbortController();
-  const it = stream(o, '/api/stream', ac.signal);
+  // Only a terminal gets replies as they are written; a pipe gets each finished reply on its own.
+  const it = stream(o, process.stdout.isTTY ? '/api/stream?drafts=1' : '/api/stream', ac.signal);
+  const printer = new ChatPrinter((s) => process.stdout.write(s), (s) => console.error(dim(s)));
   await it.next(); // the "hello" message: we are subscribed before sending
   const res = await api<PushEventResponse>(o, 'POST', '/api/chat/messages', { text, ...(values.interrupt ? { trigger: 'interrupt' } : {}) });
-  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  const timer = setTimeout(() => {
+    ac.abort();
+    printer.close();
+  }, timeoutMs);
   let mine: string | null = null;
   let replied = false;
   try {
@@ -331,10 +338,13 @@ async function chat(textParts: string[]): Promise<number> {
       const data = JSON.parse(m.data || '{}') as Record<string, unknown>;
       if ((m.event === 'batch.started' || m.event === 'batch.extended') && (data['cursors'] as number[]).includes(res.cursor)) {
         mine = String(data['batchId']);
+      } else if (m.event === 'chat.draft' && data['platform'] === 'webchat' && data['batchId'] === mine) {
+        printer.draft(data as unknown as ChatDraftUpdate);
       } else if (m.event === 'output' && data['plugin'] === 'webchat' && data['channel'] === 'chat' && data['batchId'] === mine) {
         replied = true;
-        console.log(String(data['text']));
+        printer.final(String(data['text']), typeof data['callId'] === 'string' ? data['callId'] : undefined);
       } else if (m.event === 'batch.ended' && data['batchId'] === mine) {
+        printer.close();
         const reason = String(data['endReason']);
         if (['end_turn', 'ends_turn'].includes(reason)) {
           if (!replied) console.error(dim('(read, no reply)'));

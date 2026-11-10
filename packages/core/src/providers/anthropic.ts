@@ -231,6 +231,19 @@ export class AnthropicProvider implements Provider {
       const stream = this.client.beta.messages.stream(params, { signal: opts.signal });
       if (opts.onText) stream.on('text', opts.onText);
       if (opts.onThinking) stream.on('thinking', opts.onThinking);
+      const { onToolInput } = opts;
+      if (onToolInput) {
+        const calls = new Map<number, { id: string; name: string }>();
+        stream.on('streamEvent', (ev) => {
+          if (ev.type === 'content_block_start') {
+            if (ev.content_block.type === 'tool_use') calls.set(ev.index, { id: ev.content_block.id, name: ev.content_block.name });
+            else calls.delete(ev.index);
+          } else if (ev.type === 'content_block_delta' && ev.delta.type === 'input_json_delta' && ev.delta.partial_json) {
+            const call = calls.get(ev.index);
+            if (call) onToolInput({ ...call, json: ev.delta.partial_json });
+          }
+        });
+      }
       message = await stream.finalMessage();
     } catch (err) {
       throw classifyAnthropicError(err, opts.signal);

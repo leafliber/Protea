@@ -73,6 +73,17 @@
 
 历史：`GET /api/batches/:id/trace` 从转录（按批号，跨交接时跟到上一个文件并去掉复制的尾部）、`outputs` 和事件拼出步骤，不新增存储。转录文件被清理后这一批就没有步骤了。
 
+### 回复草稿（流式）
+
+主人看到的回复是 `chat_send` 的参数，不是模型正文，所以对话窗口读的不是 `model.delta`，而是 `chat_send` 的 `text` 增量：
+
+- Provider 用 `onToolInput` 交出工具参数的 JSON 片段（Anthropic 的 `input_json_delta`、OpenAI Chat 的 `tool_calls`、Responses 的 `function_call_arguments.delta`）。
+- `ChatDraftStream`（`packages/core/src/chat/draft.ts`）从未写完的 JSON 里取出 `platform` 和 `text`，约 50 ms 合并一次，发总线记录 `chat.draft`。`platform` 写完之前文字先压着。只有声明了 `drafts` 的平台才发，目前是 `webchat`；Telegram 仍整条发送。只有主会话有草稿，Fork 发的消息整条显示。
+- 结束：发送成功时，带同一 `callId` 的 `output` 替换草稿。模型调用被取消或重试、`chat_send` 被拒绝或失败、批结束时，`state: discarded` 撤回草稿。成功之后也会收到一条 `discarded`，客户端找不到这个草稿，直接忽略。
+- 订阅：WebSocket 分组 `chat`，或 `/api/stream?drafts=1`。`protea chat` 只有标准输出是终端时才要草稿，接管道时仍是整条回复。
+- 每个片段带 `offset`。中途打开页面或重连时，对不上的片段被忽略，等完整回复到达。
+- 草稿不落库，不进崩溃报告的总线记录，也不算外部输出，模型调用仍可被抢占；被抢占时草稿从窗口消失，模型带着新事件重新回答。
+
 ## 6. 升级
 
 - 启动时在 `kv`（`core` / `chat.split`）记下分界游标，分界之前的 `console` 对话继续算作 `webchat`。事件日志不改写，不需要数据库迁移，旧镜像仍能打开数据库。
