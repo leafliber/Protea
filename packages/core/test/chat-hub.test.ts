@@ -47,9 +47,10 @@ describe('ChatHub and chat_send', () => {
     const sent: Array<[string, ChatSendParams]> = [];
     platform('webchat', (r) => (sent.push(['webchat', r]), { ok: true }));
     platform('telegram', (r) => (sent.push(['telegram', r]), { ok: true, messageIds: ['41', '42'] }));
-    const announced: Array<{ plugin: string; channel?: string; id?: number; batchId?: string }> = [];
+    const announced: Array<{ plugin: string; channel?: string; id?: number; batchId?: string; callId?: string }> = [];
     bus.on('plugin.output', (o) => announced.push(o));
     const r = await call({ platform: 'telegram', text: 'hello', reply_to: '40' });
+    expect(announced[0]?.callId).toBe('u1');
     expect(r.is_error).toBeUndefined();
     expect(r.content).toBe('sent to telegram as message 41, 42 (5 characters)');
     expect(sent).toEqual([['telegram', { text: 'hello', replyTo: '40', sessionId: 'main', batchId: 'b1' }]]);

@@ -269,12 +269,15 @@ export class OpenAiChatProvider extends OpenAiStyleProvider {
             const index = tc.index ?? (tc.id || byIndex.size === 0 ? byIndex.size : byIndex.size - 1);
             let cur = byIndex.get(index);
             if (!cur) {
-              cur = { id: tc.id ?? '', name: '', args: '' };
+              cur = { id: tc.id || callId(), name: '', args: '' };
               byIndex.set(index, cur);
             }
             if (tc.id) cur.id = tc.id;
             if (tc.function?.name) cur.name += tc.function.name;
-            if (tc.function?.arguments) cur.args += tc.function.arguments;
+            if (tc.function?.arguments) {
+              cur.args += tc.function.arguments;
+              opts.onToolInput?.({ id: cur.id, name: cur.name, json: tc.function.arguments });
+            }
           }
           if (choice.finish_reason) finish = choice.finish_reason;
         }
@@ -354,8 +357,9 @@ export class OpenAiResponsesProvider extends OpenAiStyleProvider {
     if (!(res.headers.get('content-type') ?? '').includes('text/event-stream')) {
       final = (await res.json()) as ResponsesResult;
     } else {
+      const fnCalls = new Map<number, { id: string; name: string }>();
       for await (const m of sseMessages(res, opts.signal)) {
-        let ev: { type?: string; delta?: string; response?: ResponsesResult; message?: string; code?: string };
+        let ev: { type?: string; delta?: string; response?: ResponsesResult; message?: string; code?: string; output_index?: number; item?: { type?: string; call_id?: string; name?: string } };
         try {
           ev = JSON.parse(m.data) as typeof ev;
         } catch {
@@ -364,6 +368,11 @@ export class OpenAiResponsesProvider extends OpenAiStyleProvider {
         const type = ev.type ?? m.event;
         if (type === 'response.output_text.delta' && ev.delta) opts.onText?.(ev.delta);
         else if (type === 'response.reasoning_summary_text.delta' && ev.delta) opts.onThinking?.(ev.delta);
+        else if (type === 'response.output_item.added' && ev.item?.type === 'function_call' && ev.output_index !== undefined && ev.item.call_id) fnCalls.set(ev.output_index, { id: ev.item.call_id, name: ev.item.name ?? '' });
+        else if (type === 'response.function_call_arguments.delta' && ev.delta) {
+          const call = ev.output_index !== undefined ? fnCalls.get(ev.output_index) : undefined;
+          if (call) opts.onToolInput?.({ ...call, json: ev.delta });
+        }
         else if (type === 'response.completed' || type === 'response.incomplete') final = ev.response ?? null;
         else if (type === 'response.failed') {
           const e = ev.response?.error;

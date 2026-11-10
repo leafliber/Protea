@@ -40,7 +40,7 @@ export interface InprocPlugin {
   stop(): Promise<void> | void;
   tools?(): ToolSpec<never>[];
   /** Makes the plugin a chat platform: `chat_send` reaches the owner through `send`. */
-  chat?: ChatPlatformDecl & { send(req: ChatSendParams): Promise<ChatSendResult> | ChatSendResult };
+  chat?: ChatPlatformDecl & { drafts?: boolean; send(req: ChatSendParams): Promise<ChatSendResult> | ChatSendResult };
   envPromptVars?(): Record<string, unknown> | null;
   onEventsSettled?(events: Array<{ cursor: number }>, outcome: TerminalOutcome): void;
   /** Deliver an approval request to the owner through this channel. */

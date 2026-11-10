@@ -25,6 +25,7 @@ export class WebchatPlugin implements InprocPlugin {
 
   readonly chat = {
     ...PLATFORM,
+    drafts: true,
     send: (): ChatSendResult => (this.ctx ? { ok: true } : { ok: false, error: 'the web chat is not running' }),
   };
 

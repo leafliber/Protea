@@ -192,13 +192,13 @@
 
 ## 实时流
 
-**SSE（M0 起）** `GET /api/stream?since=<cursor>&trace=1`。`trace=1` 时另外推 `model.response` 与 `tool.call`（`protea events tail` 用）。连接后先发 `hello {runId}`；带 `since` 时先按游标补发之后的事件，再转为实时。事件名：`event`（id 为游标）、`settled`、`phase`、`batch.started`、`batch.extended`（M1 起带 `level`）、`batch.ended`、`output`（`chat_send` 发出的消息与插件输出；2026-11-05 起带存储的 `id` 与发出它的 `batchId`，与 `/api/chat` 的条目对应）、`scheduler`（M1：`preempt` / `interrupt` / `aged` / `storm_cooldown` / `fork_yield` / `fork_resume`；M5：`paused` / `resumed` / `discarded`）、`fork`（M1：`ForkInfo` 变化）、`plugin`（M2：`PluginStatus` 变化）、`approval`（M2：`ApprovalInfo` 变化）、`mcp`（M3：`McpServerStatus` 变化）、`skills`（M3：目录变化，`{ names }`）、`handoff`（M4：`{ from, to, notes, dropped, kept }`）、`ping`（15 s 保活）。载荷形态见 `@protea/protocol` 的 `StreamMessage` 与 `SchedulerAction`。
+**SSE（M0 起）** `GET /api/stream?since=<cursor>&trace=1&drafts=1`。`trace=1` 时另外推 `model.response` 与 `tool.call`（`protea events tail` 用）；`drafts=1` 时另外推 `chat.draft`（正在写的聊天回复，终端里的 `protea chat` 用）。连接后先发 `hello {runId}`；带 `since` 时先按游标补发之后的事件，再转为实时。事件名：`event`（id 为游标）、`settled`、`phase`、`batch.started`、`batch.extended`（M1 起带 `level`）、`batch.ended`、`output`（`chat_send` 发出的消息与插件输出；2026-11-05 起带存储的 `id` 与发出它的 `batchId`，与 `/api/chat` 的条目对应）、`scheduler`（M1：`preempt` / `interrupt` / `aged` / `storm_cooldown` / `fork_yield` / `fork_resume`；M5：`paused` / `resumed` / `discarded`）、`fork`（M1：`ForkInfo` 变化）、`plugin`（M2：`PluginStatus` 变化）、`approval`（M2：`ApprovalInfo` 变化）、`mcp`（M3：`McpServerStatus` 变化）、`skills`（M3：目录变化，`{ names }`）、`handoff`（M4：`{ from, to, notes, dropped, kept }`）、`ping`（15 s 保活）。载荷形态见 `@protea/protocol` 的 `StreamMessage` 与 `SchedulerAction`。
 
 **WebSocket（M5）** `GET /ws`（升级）。鉴权同 HTTP：`Authorization: Bearer` 或会话 cookie；用 cookie 时 `Origin` 的主机必须等于 `Host`，否则 403；没有凭据 401。
 
 - 连接后服务端先发 `{ topic: 'hello', data: { runId, role } }`。
 - 客户端发 `WsClientMessage`：`{ subscribe: WsTopic[], since?: cursor, logFilter?: { level?, component?, plugin?, q? } }`；每条替换之前的订阅，服务端回 `{ topic: 'subscribed', data: { topics } }`；未知分组回 `{ topic: 'error', data: { message } }`。
-- 分组 `WS_TOPICS`：`events`（`event`、`settled`、`promoted`）、`phase`（`phase`、`batch.*`）、`scheduler`、`output`、`changes`（`fork`、`plugin`、`approval`、`permission`、`mcp`、`skills`、`handoff`、`persona`）、`usage`（`UsageInfo`）、`logs`（`log`，`LogRecord`）。 `trace`（`model.request`、`model.delta`、`model.response`、`tool.call`，运行流；载荷见 `@protea/protocol` 的 `TraceMessage`）。
+- 分组 `WS_TOPICS`：`events`（`event`、`settled`、`promoted`）、`phase`（`phase`、`batch.*`）、`scheduler`、`output`、`chat`（`chat.draft`，只有对话窗口订阅；载荷见 `@protea/protocol` 的 `ChatDraftUpdate`）、`changes`（`fork`、`plugin`、`approval`、`permission`、`mcp`、`skills`、`handoff`、`persona`）、`usage`（`UsageInfo`）、`logs`（`log`，`LogRecord`）。 `trace`（`model.request`、`model.delta`、`model.response`、`tool.call`，运行流；载荷见 `@protea/protocol` 的 `TraceMessage`）。
 - 带 `since` 且订阅了 `events` 时，先补发游标之后存储的全部事件，期间的实时消息暂存后放出；同一游标不会发两次。
 - 服务端每 30 s ping，一个周期内没有 pong 的连接被终止；未发出的数据超过 8 MB 时以 1013 关闭。
 

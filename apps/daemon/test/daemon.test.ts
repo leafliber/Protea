@@ -33,6 +33,45 @@ async function waitUntil(cond: () => boolean, timeoutMs = 10_000): Promise<void>
 const auth = (d: Daemon) => ({ authorization: `Bearer ${d.adminToken}`, 'content-type': 'application/json' });
 
 describe('daemon', () => {
+  it('streams a web chat reply to clients that ask for drafts, and the sent reply closes it', async () => {
+    const provider = new ScriptedProvider([
+      async (_r, _i, { onToolInput }) => {
+        onToolInput?.({ id: 'call_1', name: 'chat_send', json: '{"platform":"webchat","text":"你' });
+        await new Promise((r) => setTimeout(r, 120));
+        onToolInput?.({ id: 'call_1', name: 'chat_send', json: '好！"}' });
+        return reply([toolCall('chat_send', { platform: 'webchat', text: '你好！' }, 'call_1')]);
+      },
+      () => textReply('done'),
+    ]);
+    const d = await start(tmp(), provider);
+    const ac = new AbortController();
+    const client = { url: d.url, token: d.adminToken };
+    const withDrafts = stream(client, '/api/stream?drafts=1', ac.signal);
+    const plain = stream(client, '/api/stream', ac.signal);
+    expect((await withDrafts.next()).value?.event).toBe('hello');
+    expect((await plain.next()).value?.event).toBe('hello');
+    const res = await fetch(`${d.url}/api/chat/messages`, { method: 'POST', headers: auth(d), body: JSON.stringify({ text: '你好' }) });
+    expect(res.status).toBe(201);
+
+    const collect = async (it: typeof plain) => {
+      const seen: Array<[string, Record<string, unknown>]> = [];
+      for await (const m of it) {
+        if (m.event === 'chat.draft' || m.event === 'output') seen.push([m.event, JSON.parse(m.data) as Record<string, unknown>]);
+        if (m.event === 'batch.ended') break;
+      }
+      return seen;
+    };
+    const [live, whole] = await Promise.all([collect(withDrafts), collect(plain)]);
+    ac.abort();
+    expect(live.map(([e, x]) => (e === 'output' ? ['output', x['text'], x['callId']] : [x['state'], x['offset'], x['text']]))).toEqual([
+      ['writing', 0, '你'],
+      ['writing', 1, '好！'],
+      ['output', '你好！', 'call_1'],
+      ['discarded', undefined, undefined],
+    ]);
+    expect(whole.map(([e]) => e)).toEqual(['output']);
+  });
+
   it('answers a console message end to end over HTTP and SSE', async () => {
     const provider = new ScriptedProvider([() => reply([toolCall('chat_send', { platform: 'webchat', text: '你好！' })]), () => textReply('done')]);
     const d = await start(tmp(), provider);

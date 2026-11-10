@@ -72,7 +72,7 @@ OpenAI 风格协议的映射（`toChatMessages` / `toResponsesInput`）：
 
 | 方面 | 做法 |
 |---|---|
-| 流式 | 一律 `messages.stream()`；`finalMessage()` 取完整消息；工具输入开启 `eager_input_streaming: true` 并在执行前按 schema 校验 |
+| 流式 | 一律 `messages.stream()`；`finalMessage()` 取完整消息；工具输入开启 `eager_input_streaming: true` 并在执行前按 schema 校验；工具输入的增量经 `onToolInput` 交给会话，用于聊天回复草稿（[17-chat-and-console.md](17-chat-and-console.md) §5） |
 | 思考 | `thinking: { type: 'adaptive' }`；`output_config.effort` 按角色/等级设置；`display: 'omitted'`（默认），控制台调试模式切 `summarized` |
 | 历史回传 | assistant 消息的 `content` **原样**追加（含 thinking 块）；绝不编辑既有回合（preserved thinking）。前缀变化后旧 thinking 块按截止标记不再发送，并带 `thinking.block_binding.prefix_mismatch_behavior: drop_block`（beta `thinking-binding-controls-2026-08-01`，`thinkingMismatch` 可改为 `error` 或关闭）兜底（M4，[05-sessions-and-agent-loop.md](05-sessions-and-agent-loop.md) §8.1） |
 | 提示缓存 | 断点见 [06-context-assembly.md](06-context-assembly.md) §7；监控 `usage.cache_read_input_tokens` |

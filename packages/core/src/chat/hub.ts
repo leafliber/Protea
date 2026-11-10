@@ -16,6 +16,8 @@ export const CHAT_CHANNEL = 'chat';
 /** A running platform, as a plugin hands it to the hub. */
 export interface ChatPlatform extends ChatPlatformDecl {
   id: string;
+  /** Its client shows replies as they are written (`chat.draft`). */
+  drafts?: boolean;
   send(req: ChatSendParams): Promise<ChatSendResult> | ChatSendResult;
 }
 
@@ -72,6 +74,10 @@ export class ChatHub {
       }));
   }
 
+  showsDrafts(id: string): boolean {
+    return this.platforms.get(id)?.drafts === true;
+  }
+
   /** Where the owner last wrote, when that platform is running. */
   get lastPlatform(): string | undefined {
     return this.last !== null && this.platforms.has(this.last) ? this.last : undefined;
@@ -119,7 +125,7 @@ export class ChatHub {
       return { text: `${id} could not send the message: ${errorMessage(err)}`, failed: true };
     }
     if (!result.ok) return { text: result.error ?? `${id} could not send the message`, failed: true };
-    this.record(id, text, { sessionId: call.sessionId, batchId: call.batchId });
+    this.record(id, text, { sessionId: call.sessionId, batchId: call.batchId }, call.callId);
     const ids = result.messageIds ?? [];
     return { text: `sent to ${id}${ids.length > 0 ? ` as message ${ids.join(', ')}` : ''} (${text.length} characters)` };
   }
@@ -140,7 +146,7 @@ export class ChatHub {
     }
   }
 
-  private record(plugin: string, text: string, call: Partial<Pick<ToolContext, 'sessionId' | 'batchId'>>): void {
+  private record(plugin: string, text: string, call: Partial<Pick<ToolContext, 'sessionId' | 'batchId'>>, callId?: string): void {
     const at = new Date(this.o.clock.now()).toISOString();
     let id: number | undefined;
     try {
@@ -148,6 +154,6 @@ export class ChatHub {
     } catch (err) {
       this.o.log.warn({ plugin, err: errorMessage(err) }, 'could not store a chat message');
     }
-    this.o.bus.emit('plugin.output', { plugin, channel: CHAT_CHANNEL, text, at, ...(call.batchId !== undefined ? { batchId: call.batchId } : {}), ...(id !== undefined ? { id } : {}) });
+    this.o.bus.emit('plugin.output', { plugin, channel: CHAT_CHANNEL, text, at, ...(call.batchId !== undefined ? { batchId: call.batchId } : {}), ...(callId !== undefined ? { callId } : {}), ...(id !== undefined ? { id } : {}) });
   }
 }

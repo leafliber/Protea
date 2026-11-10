@@ -399,6 +399,13 @@ export interface ModelDeltaTrace {
   text: string;
 }
 
+/**
+ * A `chat_send` reply while the model is still writing it. Provisional and never stored: the
+ * `output` with the same `callId` replaces it, `discarded` withdraws it. A fragment continues the
+ * text at `offset`; one that does not line up came after a gap and should be ignored.
+ */
+export type ChatDraftUpdate = { batchId: string; callId: string; platform: string } & ({ state: 'writing'; offset: number; text: string } | { state: 'discarded' });
+
 /** A finished model reply. Thinking carries its summary text only, never the signature. */
 export interface ModelResponseTrace {
   sessionId: string;
@@ -469,7 +476,9 @@ export type StreamMessage =
   | { topic: 'batch.started'; data: BatchStartedData }
   | { topic: 'batch.extended'; data: { batchId: string; cursors: number[]; level: Level } }
   | { topic: 'batch.ended'; data: { batchId: string; endReason: BatchEndReason; rounds: number } }
-  | { topic: 'output'; data: { plugin: string; channel?: string; text: string; at: string; id?: number; batchId?: string } }
+  | { topic: 'output'; data: { plugin: string; channel?: string; text: string; at: string; id?: number; batchId?: string; callId?: string } }
+  /** Only on `/ws` (group `chat`) and on `/api/stream?drafts=1`. */
+  | { topic: 'chat.draft'; data: ChatDraftUpdate }
   | { topic: 'scheduler'; data: SchedulerAction }
   | { topic: 'fork'; data: ForkInfo }
   | { topic: 'mcp'; data: McpServerStatus }
@@ -522,6 +531,8 @@ export const WS_TOPICS = {
   phase: ['phase', 'batch.started', 'batch.extended', 'batch.ended'],
   scheduler: ['scheduler'],
   output: ['output'],
+  /** Replies as they are written: only the chat window subscribes. */
+  chat: ['chat.draft'],
   changes: ['fork', 'plugin', 'approval', 'permission', 'mcp', 'skills', 'handoff', 'persona'],
   usage: ['usage'],
   logs: ['log'],

@@ -671,6 +671,7 @@ export function createControlApp(d: ControlDeps): Hono {
   app.get('/api/stream', (c) => {
     const since = intParam(c, 'since');
     const trace = c.req.query('trace') === '1';
+    const drafts = c.req.query('drafts') === '1';
     return streamSSE(c, async (stream) => {
       const queue: StreamMessage[] = [];
       let wake: (() => void) | null = null;
@@ -678,7 +679,7 @@ export function createControlApp(d: ControlDeps): Hono {
         queue.push(m);
         wake?.();
       };
-      const unsub = subscribeStream(d.bus, (m) => push(m as StreamMessage), { trace });
+      const unsub = subscribeStream(d.bus, (m) => push(m as StreamMessage), { trace, drafts });
       stream.onAbort(() => {
         unsub();
         wake?.();

@@ -18,8 +18,8 @@ class Live {
   private wanted = false;
   /** Highest event cursor seen, so a reconnect replays what was missed. */
   private lastCursor: number | null = null;
-  /** Pages using the heavy `trace` topics; they are only subscribed while one is open. */
-  private traceUsers = 0;
+  /** Pages using the topics that are only subscribed while one is open (`trace` is heavy, `chat` is for the chat window). */
+  private readonly optional = { trace: 0, chat: 0 };
   runId: string | null = null;
 
   start(): void {
@@ -44,14 +44,14 @@ class Live {
   }
 
   private topics(): WsTopic[] {
-    return ['events', 'phase', 'scheduler', 'output', 'changes', 'usage', 'logs', ...(this.traceUsers > 0 ? (['trace'] as const) : [])];
+    return ['events', 'phase', 'scheduler', 'output', 'changes', 'usage', 'logs', ...(this.optional.trace > 0 ? (['trace'] as const) : []), ...(this.optional.chat > 0 ? (['chat'] as const) : [])];
   }
 
-  /** While the returned function has not been called, the connection also carries the run stream. */
-  useTrace(): () => void {
-    if (++this.traceUsers === 1) this.resubscribe();
+  /** While the returned function has not been called, the connection also carries this group. */
+  useOptional(group: 'trace' | 'chat'): () => void {
+    if (++this.optional[group] === 1) this.resubscribe();
     return () => {
-      if (--this.traceUsers === 0) this.resubscribe();
+      if (--this.optional[group] === 0) this.resubscribe();
     };
   }
 
@@ -125,7 +125,12 @@ export function useLive(topics: string | string[], fn: Handler): void {
 
 /** Keep the run stream (model output, tool calls) coming while this component is mounted. */
 export function useTraceStream(): void {
-  useEffect(() => live.useTrace(), []);
+  useEffect(() => live.useOptional('trace'), []);
+}
+
+/** Keep the replies being written coming while this component is mounted. */
+export function useChatDrafts(): void {
+  useEffect(() => live.useOptional('chat'), []);
 }
 
 export function useLiveState(): LiveState {

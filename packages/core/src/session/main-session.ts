@@ -23,7 +23,8 @@ import { MEMORY_ROOT } from '../memory/store.js';
 import type { EventStore } from '../events/store.js';
 import type { Logger } from '../observability/logger.js';
 import { estimateRequestTokens } from '../providers/tokens.js';
-import { ProviderError, type Provider, type ProviderRequest, type ProviderResponse } from '../providers/types.js';
+import { ChatDraftStream } from '../chat/draft.js';
+import { ProviderError, type Provider, type ProviderRequest, type ProviderResponse, type ToolInputDelta } from '../providers/types.js';
 import type { RunningTurn } from '../scheduler/preemption.js';
 import type { ToolDispatcher } from '../tools/dispatcher.js';
 import { isAbortError, sleep } from '../util/abort.js';
@@ -97,6 +98,11 @@ export interface MainSessionOptions {
    * output: it reads the `model.delta` bus records, which never affect preemption.
    */
   outputTap?: (delta: string, ctx: { batchId: string }) => void;
+  /**
+   * Whether a chat platform shows replies as they are written (`chat.draft`). A draft is a
+   * preview that a cancelled call withdraws, so like the run stream it is not external output.
+   */
+  showsChatDrafts?: (platform: string) => boolean;
 }
 
 interface Running {
@@ -108,6 +114,8 @@ interface Running {
   /** Preempt: cancels only the current model call, which is then re-issued with the new events. */
   call: AbortController | null;
   externalOutput: boolean;
+  /** Replies of the latest model call that were not sent yet. */
+  drafts: ChatDraftStream | null;
   cancel: CancelCause | null;
   done: Promise<void>;
   handoffs: number;
@@ -214,6 +222,7 @@ export class MainSession {
       turn: new AbortController(),
       call: null,
       externalOutput: false,
+      drafts: null,
       cancel: null,
       done: Promise.resolve(),
       handoffs: 0,
@@ -480,6 +489,7 @@ export class MainSession {
       if (!isAbortError(err)) throw err;
       endReason = 'aborted';
     } finally {
+      this.discardDrafts(cur);
       this.transcript.appendMark('batch_ended', { batch: batch.id, reason: endReason, rounds, resumable: endReason === 'aborted' });
       o.batches.end(batch.id, endReason, this.nowIso());
       o.bus.emit('batch.ended', { batchId: batch.id, endReason, rounds });
@@ -736,6 +746,9 @@ export class MainSession {
       cur.externalOutput = false;
       const signal = AbortSignal.any([hard, cur.turn.signal, call.signal]);
       const tap = o.outputTap;
+      this.discardDrafts(cur);
+      const drafts = o.showsChatDrafts ? new ChatDraftStream(batch.id, o.showsChatDrafts, (d) => o.bus.emit('chat.draft', d)) : null;
+      cur.drafts = drafts;
       o.bus.emit('model.request', {
         batchId: batch.id,
         sessionId: SESSION_ID,
@@ -757,8 +770,10 @@ export class MainSession {
             tap(delta, { batchId: batch.id });
           },
           onThinking: (delta: string) => deltas.push('thinking', delta),
+          ...(drafts ? { onToolInput: (delta: ToolInputDelta) => drafts.push(delta) } : {}),
         });
       } catch (err) {
+        this.discardDrafts(cur);
         if (hard.aborted) throw err;
         if (cur.cancel && signal.aborted) return 'cancelled';
         if (isAbortError(err)) throw err;
@@ -792,9 +807,16 @@ export class MainSession {
         return 'error';
       } finally {
         deltas.flush();
+        cur.drafts?.flush();
         cur.call = null;
       }
     }
+  }
+
+  /** Replies that were not sent (a cancelled call, a refused or failed `chat_send`) leave the chat window. */
+  private discardDrafts(cur: Running): void {
+    cur.drafts?.discard();
+    cur.drafts = null;
   }
 
   private recordUsage(batch: Batch, r: ProviderResponse): void {

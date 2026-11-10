@@ -791,6 +791,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       ...(chat.lastPlatform ? { lastChat: chat.lastPlatform } : {}),
     }),
     pushInternal,
+    showsChatDrafts: (platform) => chat.showsDrafts(platform),
     board,
     handoff: new Handoff({
       provider,
