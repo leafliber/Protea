@@ -1,0 +1,19 @@
+{
+  "id": "qq",
+  "kind": "connector",
+  "api": 1,
+  "version": "0.1.0",
+  "displayName": "QQ",
+  "description": "Talk to the owner through an official QQ bot: scanning a QR code creates the bot and signs in (WebSocket gateway, no inbound port needed).",
+  "runtime": { "exec": "node", "args": ["dist/main.js"], "dev": { "args": ["src/main.ts"] } },
+  "level": 1,
+  "triggers": ["debounce", "flush", "preempt", "interrupt", "piggyback", "store"],
+  "tools": ["qq_group_reply"],
+  "sideEffectTools": ["qq_group_reply"],
+  "optionalSecrets": ["QQ_APP_SECRET"],
+  "login": { "method": "qr" },
+  "configSchema": "./config.schema.json",
+  "envPrompt": "./ENV_PROMPT.md",
+  "chat": { "displayName": "QQ", "markdown": "none", "maxChars": 5000 },
+  "healthcheck": { "intervalMs": 30000, "timeoutMs": 5000 }
+}

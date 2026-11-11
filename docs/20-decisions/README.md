@@ -20,6 +20,7 @@
 | [ADR-0014](ADR-0014-images-as-blob-references.md) | 图片以 blob 引用进入转录，发请求时才解析 | Accepted |
 | [ADR-0015](ADR-0015-permission-modes-and-auto-review.md) | 权限模式（ask / auto / bypass / locked）与 auto 判断模型 | Accepted |
 | [ADR-0016](ADR-0016-wechat-and-plugin-sign-in.md) | 微信连接器基于官方包，插件登录成为通用能力 | Accepted |
+| [ADR-0017](ADR-0017-qq-connector-and-qr-bot-creation.md) | QQ 连接器基于官方 SDK，扫码创建机器人在插件内实现 | Accepted |
 
 新增 ADR：复制 `ADR-0000-template.md`（见下），编号递增，提交 PR 时在此表登记。
 

@@ -110,6 +110,9 @@ export const STARTER_CONFIG_YAML = `# Protea configuration. Every key is optiona
 #   wechat:                   # enable it, then scan the QR code (console or "protea plugins login wechat")
 #     enabled: true
 #     config: {}
+#   qq:                       # enable it, then scan the QR code: that creates the QQ bot (or "protea plugins login qq")
+#     enabled: true
+#     config: { groups: false }   # true: deliver group messages that mention the bot; answering in the group (qq_group_reply) asks first
 
 # permissions:
 #   tools: { tg_send_chat: ask }    # allow | ask | deny; globs like "mcp__*" work too; an ask written here always reaches you

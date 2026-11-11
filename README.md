@@ -167,6 +167,24 @@ PROTEA_DATA_DIR=.dev-data pnpm protea plugins login wechat
 
 有两点要知道：iLink 是非公开接口，建议用能承担风险的微信号；机器人不能先开口，主人一段时间没发消息后助理就发不出去了，要紧的提醒请放在其他平台。
 
+## 接入 QQ
+
+走 QQ 开放平台的官方机器人，扫码即创建机器人并连接，不需要入站端口，也不用先去 q.qq.com 注册。
+
+```bash
+PROTEA_DATA_DIR=.dev-data pnpm protea plugins enable qq
+```
+
+```bash
+PROTEA_DATA_DIR=.dev-data pnpm protea plugins login qq
+```
+
+也可以在控制台的 插件 → qq → 登录 里扫码。用手机 QQ 扫码并确认后，QQ 会新建一个机器人，AppSecret 存进秘密库，扫码的人自动成为这个平台的主人。已经有机器人的话，也可以手动接入：配置 `plugins.qq.config.appId`，再用 `protea secrets set QQ_APP_SECRET` 存入 AppSecret。
+
+群聊默认不投递。配置 `groups: true` 后，群里 @机器人的消息会交给助理，助理可以回到群里；回群默认要你批准，想免批准就设 `permissions.tools: { qq_group_reply: allow }`。
+
+和微信一样，QQ 机器人主要是回复消息，不能指望主动开口：主人一段时间没发消息后可能就发不出去了，要紧的提醒请放在其他平台。
+
 ## 接入 MCP 服务器
 
 运行中添加，下一回合模型就能调用；`--` 之后是启动命令：

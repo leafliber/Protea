@@ -8,6 +8,7 @@ import type { EventInput, SchedulerAction } from '@protea/protocol';
 import { CronPlugin } from '@protea/plugin-cron';
 import { createFilewatchPlugin } from '../../../plugins/filewatch/src/plugin.js';
 import { createImapPlugin } from '../../../plugins/imap/src/plugin.js';
+import { createQqPlugin } from '../../../plugins/qq/src/plugin.js';
 import { createRssPlugin } from '../../../plugins/rss/src/plugin.js';
 import { createShellPlugin } from '../../../plugins/shell/src/plugin.js';
 import { createTelegramPlugin } from '../../../plugins/telegram/src/plugin.js';
@@ -131,6 +132,8 @@ describe('M6 default policy review', () => {
       ['filewatch', createFilewatchPlugin().tools as never],
       ['imap', createImapPlugin().tools as never],
       ['rss', createRssPlugin().tools as never],
+      // All of its tools: the group one is offered only with groups on.
+      ['qq', (createQqPlugin().tools as (host: unknown) => unknown)({ config: { groups: true } }) as never],
       ['shell', createShellPlugin().tools as never],
       ['telegram', createTelegramPlugin().tools as never],
       ['webhook', (createWebhookPlugin().tools ?? []) as never],
@@ -146,7 +149,7 @@ describe('M6 default policy review', () => {
         if (!OWNER_FACING.has(t.name)) expect(manifest.sideEffectTools ?? [], `${t.name} must ask by default`).toContain(t.name);
       }
     }
-    expect(reviewed.sort()).toEqual(['sh_job_start', 'sh_job_stop', 'sh_reset', 'sh_run', 'tg_react', 'tg_send_chat']);
+    expect(reviewed.sort()).toEqual(['qq_group_reply', 'sh_job_start', 'sh_job_stop', 'sh_reset', 'sh_run', 'tg_react', 'tg_send_chat']);
     for (const p of [new CronPlugin()]) {
       for (const t of p.tools()) if (t.flags?.sideEffect) expect(OWNER_FACING.has(t.name) || ((p as { sideEffectTools?: readonly string[] }).sideEffectTools ?? []).includes(t.name), t.name).toBe(true);
     }

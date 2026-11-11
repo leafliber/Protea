@@ -76,6 +76,7 @@ Approvals: the owner replies "/approve <id>" or "/deny <id>"; those replies arri
 | `webhook` | source | L2 | HTTP 入站（`/hooks/<name>`），签名校验（GitHub/通用 HMAC/token） | M2 ✓ |
 | `telegram` | connector（对话平台） | L1 | Bot API 长轮询（无需入站端口）；owner 由用户 id 映射 | M2 ✓ |
 | `wechat` | connector（对话平台） | L1 | 官方 iLink 通道，扫码登录、长轮询（无需入站端口）；基于官方客户端 | 2026-11-10 |
+| `qq` | connector（对话平台） | L1 | 官方 QQ 机器人，扫码即创建并登录；WebSocket 网关（无需入站端口）；基于官方 SDK；群消息可选 | 2026-11-11 |
 | `filewatch` | source | L3 | 监视 `/data/inbox` 等目录 | M2 ✓ |
 | `rss` | source | L4 | 定时抓取，按条目去重 | M3 ✓ |
 | `imap` | source | L2 | IDLE/轮询；邮件到达事件 + `mail_fetch` 工具 | M3 ✓ |
@@ -109,6 +110,18 @@ Approvals: the owner replies "/approve <id>" or "/deny <id>"; those replies arri
 - 对话平台：`chat_send` 的 `wechat`，发给主人，超过 4000 字符自动分段，`reply_to` 忽略，文本经官方的 Markdown 过滤。**机器人不能先开口**：发送要带主人最新一条消息的 `context_token`。没有 token、`ret=-2`（回复窗口关闭）时都返回失败回执，模型应改走其他平台。社区实测称窗口约 24 小时、每条入站后最多约 10 条回复，没有官方说明，代码不依赖这些数字。
 - 会话过期（`errcode -14`）：收发暂停 1 小时后重试，健康检查报告原因，推一条 L2 的 `wechat.session_expired`（每次过期只推一次）。
 - 配置：`apiBase`、`cdnBase`（均 `x-hot: false`，测试用）、`stopWords`。
+
+### 6.4 QQ
+
+**qq**（决策见 [ADR-0017](../20-decisions/ADR-0017-qq-connector-and-qr-bot-creation.md)；秘密 `QQ_APP_SECRET` 和主人身份由扫码登录写入，也可以手动配置 `appId` 加秘密接入已有机器人）：
+- 协议由腾讯的 `@tencent-connect/qqbot-nodejs` 实现：取 access token 并自动刷新，连 WebSocket 网关（心跳、断线重连）。网关会话存 kv，重启后 RESUME，平台补发期间的消息。连接失败从 5 s 退避到 5 min。
+- 扫码：插件生成密钥、创建绑定任务，把 `connect.html` 链接作为二维码交给控制台。主人用手机 QQ 扫码确认后，平台建好机器人；插件用密钥解开 AppSecret，调用 `login/complete`。二维码过期自动换新，最多 3 张；8 分钟没完成算超时。
+- 主人私聊 → `chat.message`，L1 `flush`；消息正好是停止词 → L1 `interrupt`；`/approve aN`、`/deny aN`、`/mode` 与微信相同，不产生消息事件。非主人私聊 → `qq.message`，L4 `store`。群消息：`groups` 关（默认）时 L4 `store`；开时 @机器人的群消息 → `qq.message`，L2 `flush`，其余 L4 `store`。频道消息 L4 `store`。`dedupeKey` 是 `msg:<id>`；消息按到达顺序逐条处理。
+- 内容：主人的图片下载后存 blob，失败时附一行说明；别人的图片只有 `[image]` 占位；语音用 QQ 的转写；文件和视频只有占位；引用的内容拼进正文；表情转成文字。
+- 对话平台：`chat_send` 的 `qq`，纯文本（`markdown: none`），超过 5000 字符自动分段，`reply_to` 忽略。回复带主人最新一条消息的 msg_id（被动回复）；被拒后改发不带 msg_id 的消息，再被拒就返回失败回执，模型应改走其他平台。还没收到过主人的消息时直接返回"不能先开口"。
+- 工具 `qq_group_reply {message_id, text}`（只在 `groups` 开时提供，默认需要审批）：在群里回复一条投递过的 @消息。
+- 网关拒绝（不可恢复的关闭码，如 4914 机器人下线或仅沙箱可用、4915 被封禁）：不再重连，健康检查报告原因，推一条 L2 的 `qq.connection_refused`，同一次拒绝只推一次。
+- 配置：`appId`、`groups`（均 `x-hot: false`）、`stopWords`；`apiBase`、`tokenBase`、`bindBase`（`x-hot: false`，测试用）。
 
 ## 7. 编写一个最小事件源（TypeScript）
 

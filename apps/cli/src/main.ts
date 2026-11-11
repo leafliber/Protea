@@ -89,7 +89,7 @@ Usage:
   protea plugins enable|disable|reload|restart <id>
   protea plugins config <id> <json>             replace a plugin's configuration (validated, saved)
   protea plugins uninstall <id> [--keep-data]   remove a disabled data-volume plugin
-  protea plugins login <id>                     sign in to a plugin (shows a QR code; e.g. wechat)
+  protea plugins login <id>                     sign in to a plugin (shows a QR code; e.g. wechat, qq)
   protea plugins logout <id>                    forget that sign-in and the owner it named
   protea mcp [ls]                               list MCP servers
   protea mcp add <id> [--env K=V]… [--trust T] -- <command> [args…]
