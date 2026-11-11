@@ -85,8 +85,8 @@ runPlugin(
           ...(req.choices ? { choices: req.choices } : {}),
           ...(req.widget ? { widget: req.widget } : {}),
         });
-        // Newer choices replace older ones; a message without choices closes them.
-        open = req.choices && req.callId ? { callId: req.callId, labels: req.choices.options.map((o) => o.label) } : null;
+        // Newer choices replace older ones; a message without choices leaves them open (only the owner's next message closes them).
+        if (req.choices && req.callId) open = { callId: req.callId, labels: req.choices.options.map((o) => o.label) };
         return { ok: true, messageIds: [id] };
       },
       // A real platform edits or deletes the preview message here; this one appends what happened.

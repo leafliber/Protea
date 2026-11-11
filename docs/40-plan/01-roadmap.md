@@ -349,9 +349,10 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 - 小组件：模型写的 HTML 只在不透明源的沙箱外壳里运行（`/widget-frame.html`），主页面的 CSP 只写明 `frame-src 'self'`；`chat.widgets` 是总开关。
 - 进程外平台：`chat/draft` 通知（能力位 `chatDrafts`）、`chat/send` 的新字段、`meta.answer`；TS 与 Python SDK、一致性检查、`FakeHost`；示例连接器 `examples/plugins/ts-chat`。
 - 存储：迁移 9（`outputs.meta`、表 `widgets`）。只读账号可以读对话里出现过的图片。
-- 测试 +26，共 546 个通过；`scripts/widget-escape-probe.mjs` 在 Chrome 157 里 25 项全部通过。
+- QQ 连接器接入图片、选项（按钮，退回编号列表）与草稿（QQ 私聊流式消息）；不声明小组件。
+- 测试共 590 个通过；`scripts/widget-escape-probe.mjs` 在 Chrome 157 里 25 项全部通过。
 
-未验证：真实模型是否会恰当地使用表格、图、选项和小组件；Firefox 与 Safari 里的沙箱行为；Telegram 与微信没有接入新能力（T16）。已知缺口：WebRTC 不受 CSP 约束（[14-security-and-permissions.md](../10-architecture/14-security-and-permissions.md) §8.1）。
+未验证：真实模型是否会恰当地使用表格、图、选项和小组件；Firefox 与 Safari 里的沙箱行为；Telegram 与微信没有接入新能力；QQ 的按钮权限、流式消息与额度没有用真实账号验证（T15、T16）。已知缺口：WebRTC 不受 CSP 约束（[14-security-and-permissions.md](../10-architecture/14-security-and-permissions.md) §8.1）。
 
 ### 权限模式与 auto 判断模型（2026-11-10）
 

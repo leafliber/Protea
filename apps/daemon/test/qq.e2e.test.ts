@@ -139,7 +139,7 @@ describe('QQ: scan to create the bot and sign in, then talk to the owner', () =>
     // The owner writes; the assistant answers through chat_send, as a reply to that message.
     const hello = qq.c2c({ from: SCANNER, text: 'hello from qq' });
     await waitUntil(() => qq.sent.length > 0, 'the reply');
-    expect(qq.sent[0]).toEqual({ scope: 'c2c', target: SCANNER, content: 'hi owner', msgId: hello });
+    expect(qq.sent[0]).toEqual({ scope: 'c2c', target: SCANNER, content: 'hi owner', msgId: hello, msgType: 0 });
     const stored = d.store.query({ type: 'chat.message', source: 'qq' });
     expect(stored).toHaveLength(1);
     expect(stored[0]).toMatchObject({ senderRole: 'owner', level: 1 });
@@ -155,7 +155,7 @@ describe('QQ: scan to create the bot and sign in, then talk to the owner', () =>
     const approval = /^Approval (\S+) requested/.exec(asked?.content ?? '')?.[1] as string;
     qq.c2c({ from: SCANNER, text: `/approve ${approval}` });
     await waitUntil(() => qq.sent.some((s) => s.scope === 'group'), 'the group answer');
-    expect(qq.sent.find((s) => s.scope === 'group')).toEqual({ scope: 'group', target: 'GROUP1', content: 'hi group', msgId: groupMessage });
+    expect(qq.sent.find((s) => s.scope === 'group')).toEqual({ scope: 'group', target: 'GROUP1', content: 'hi group', msgId: groupMessage, msgType: 0 });
 
     // Someone else's private message is stored and wakes nobody.
     const sentBefore = qq.sent.length;

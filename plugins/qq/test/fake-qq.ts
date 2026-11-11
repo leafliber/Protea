@@ -15,6 +15,10 @@ export interface SentMessage {
   target: string;
   content: string;
   msgId: string | undefined;
+  msgType: number;
+  /** The upload a media message refers to. */
+  fileInfo?: string;
+  keyboard?: { content: { rows: Array<{ buttons: Array<{ id: string; render_data: { label: string }; action: { data: string } }> }> } };
 }
 
 /** One answer of poll_bind_result: a status, or a finished bind whose secret the fake seals to the task's key. */
@@ -45,6 +49,16 @@ export class FakeQq {
   readonly sendResults: Array<{ status: number; body: Record<string, unknown> }> = [];
   /** What the picture host serves, by path. */
   readonly images = new Map<string, Buffer>();
+  /** Pictures uploaded for messages: who for, and the bytes. */
+  readonly uploads: Array<{ target: string; fileType: number; data: Buffer; fileInfo: string }> = [];
+  /** Frames of C2C stream messages, in order. */
+  readonly streamFrames: Array<Record<string, unknown>> = [];
+  /** Answers of the stream endpoint, consumed in order; then success. */
+  readonly streamResults: Array<{ status: number; body: Record<string, unknown> }> = [];
+  /** Answers of the message endpoint for messages with buttons, consumed in order; then success. */
+  readonly keyboardResults: Array<{ status: number; body: Record<string, unknown> }> = [];
+  /** Acknowledged button presses. */
+  readonly acks: Array<{ id: string; code: number }> = [];
   /** IDENTIFY and RESUME frames, in order. */
   readonly handshakes: Array<{ op: number; d: Record<string, unknown> }> = [];
   /** Answer IDENTIFY and RESUME by closing with this code, as QQ does for a bot it will not serve. */
@@ -108,6 +122,21 @@ export class FakeQq {
       timestamp: new Date().toISOString(),
       group_id: m.group,
       group_openid: m.group,
+    });
+    return id;
+  }
+
+  /** Someone presses a button under a message. Returns the interaction id. */
+  press(m: { from: string; data: string; messageId?: string; group?: string }): string {
+    const id = `int-${this.nextId++}`;
+    this.dispatch('INTERACTION_CREATE', {
+      id,
+      type: 11,
+      chat_type: m.group ? 1 : 2,
+      timestamp: new Date().toISOString(),
+      version: 1,
+      ...(m.group ? { group_openid: m.group, group_member_openid: m.from } : { user_openid: m.from }),
+      data: { type: 11, resolved: { button_data: m.data, button_id: 'b', ...(m.messageId ? { message_id: m.messageId } : {}) } },
     });
     return id;
   }
@@ -181,15 +210,37 @@ export class FakeQq {
     }
     if (!String(req.headers['authorization'] ?? '').startsWith('QQBot access-')) return json(401, { code: 11244, message: 'token not exist or expire' });
     if (path === '/gateway') return json(200, { url: `${this.url.replace('http', 'ws')}/ws` });
+    const files = /^\/v2\/(users|groups)\/([^/]+)\/files$/.exec(path);
+    if (files && req.method === 'POST') {
+      const fileInfo = `fi-${this.uploads.length + 1}`;
+      this.uploads.push({ target: decodeURIComponent(files[2] as string), fileType: Number(body['file_type']), data: Buffer.from(String(body['file_data'] ?? ''), 'base64'), fileInfo });
+      return json(200, { file_uuid: `fu-${this.uploads.length}`, file_info: fileInfo, ttl: 3600 });
+    }
+    const stream = /^\/v2\/users\/([^/]+)\/stream_messages$/.exec(path);
+    if (stream && req.method === 'POST') {
+      const result = this.streamResults.shift();
+      if (result && result.status !== 200) return json(result.status, result.body);
+      this.streamFrames.push(body);
+      const id = typeof body['stream_msg_id'] === 'string' ? body['stream_msg_id'] : `stm-${this.streamFrames.filter((f) => f['index'] === 0).length}`;
+      return json(200, { id, timestamp: Math.floor(Date.now() / 1000) });
+    }
+    const press = /^\/interactions\/([^/]+)$/.exec(path);
+    if (press && req.method === 'PUT') {
+      this.acks.push({ id: decodeURIComponent(press[1] as string), code: Number(body['code']) });
+      return json(200, {});
+    }
     const m = /^\/v2\/(users|groups)\/([^/]+)\/messages$/.exec(path);
     if (m && req.method === 'POST') {
-      const result = this.sendResults.shift();
+      const result = body['keyboard'] ? (this.keyboardResults.shift() ?? this.sendResults.shift()) : this.sendResults.shift();
       if (result && result.status !== 200) return json(result.status, result.body);
       this.sent.push({
         scope: m[1] === 'users' ? 'c2c' : 'group',
         target: decodeURIComponent(m[2] as string),
         content: String(body['content'] ?? ''),
         msgId: typeof body['msg_id'] === 'string' ? body['msg_id'] : undefined,
+        msgType: Number(body['msg_type'] ?? 0),
+        ...(body['media'] ? { fileInfo: String((body['media'] as { file_info: string }).file_info) } : {}),
+        ...(body['keyboard'] ? { keyboard: body['keyboard'] as NonNullable<SentMessage['keyboard']> } : {}),
       });
       return json(200, { id: `out-${this.sent.length}`, timestamp: Math.floor(Date.now() / 1000) });
     }

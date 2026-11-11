@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { FakeHost } from '@protea/plugin-sdk/testing';
 import type { ChatSendResult, PluginLoginStatus } from '@protea/protocol';
 import { decryptSecret } from '../src/login.js';
-import { SECRET, createQqPlugin } from '../src/plugin.js';
+import { SECRET, answerOf, createQqPlugin } from '../src/plugin.js';
 import { FakeQq, sealSecret, type BindStep } from './fake-qq.js';
 
 const OWNER = 'E4F5A1B2C3D4OWNER';
@@ -314,6 +314,7 @@ describe('qq connector', () => {
     const { host } = await setup({ secret: null });
     expect(host.capabilities.login).toBe(true);
     expect(host.capabilities.chat).toBe(true);
+    expect(host.capabilities.chatDrafts).toBe(true);
     expect(host.capabilities.approvals).toBe(true);
   });
 });
@@ -332,7 +333,7 @@ describe('qq groups', () => {
     expect(host.events[0]?.text).toBe(`Message from member MEMBER1 in QQ group GROUP1 (msg ${id}), mentioning the bot:\n机器人，今天几号？`);
     expect((await host.tools()).map((t) => t.name)).toEqual(['qq_group_reply']);
     expect(await host.callTool('qq_group_reply', { message_id: id, text: '11 月 11 日' })).toMatchObject({ text: `answered message ${id} in QQ group GROUP1` });
-    expect(qq.sent).toEqual([{ scope: 'group', target: 'GROUP1', content: '11 月 11 日', msgId: id }]);
+    expect(qq.sent).toEqual([{ scope: 'group', target: 'GROUP1', content: '11 月 11 日', msgId: id, msgType: 0 }]);
   });
 
   it('answers only group messages it delivered, and reports refusals', async () => {
@@ -463,5 +464,160 @@ describe('qq set up by hand', () => {
     expect(host.kv.has('signIn')).toBe(false);
     expect(host.kv.has('ownerOpenid')).toBe(false);
     expect((await chatSend(host, 'hi')).error).toMatch(/cannot start a conversation/);
+  });
+});
+
+const choices = { options: [{ label: '周五下午', detail: '15:00' }, { label: '下周一' }] };
+
+describe('qq rich replies', () => {
+  it('sends pictures after the text, as replies to the owner', async () => {
+    const { qq, host, first } = await talking();
+    const handle = `blob:${'a'.repeat(64)}`;
+    host.blobs.set(handle, { data: PNG, mime: 'image/png' });
+    const r = await host.chatSend({ text: 'here', images: [{ handle, mime: 'image/png' }] });
+    expect(r).toMatchObject({ ok: true, messageIds: ['out-1', 'out-2'] });
+    expect(qq.uploads).toMatchObject([{ target: OWNER, fileType: 1 }]);
+    expect(qq.uploads[0]?.data.equals(PNG)).toBe(true);
+    expect(qq.sent.map((s) => [s.msgType, s.content, s.fileInfo, s.msgId])).toEqual([
+      [0, 'here', undefined, first],
+      [7, '', 'fi-1', first],
+    ]);
+  });
+
+  it('offers one choice as buttons, and a press from the owner answers it', async () => {
+    const { qq, host } = await talking();
+    const r = await host.chatSend({ text: 'When?', callId: 'call_q', choices });
+    expect(r).toMatchObject({ ok: true, messageIds: ['out-1'] });
+    expect(qq.sent).toHaveLength(1);
+    expect(qq.sent[0]?.content).toBe('When?');
+    expect(qq.sent[0]?.keyboard?.content.rows.flatMap((row) => row.buttons.map((b) => [b.render_data.label, b.action.data]))).toEqual([
+      ['周五下午', 'choice:0'],
+      ['下周一', 'choice:1'],
+    ]);
+    // Someone else, or a group, cannot answer for the owner.
+    qq.press({ from: 'STRANGER', data: 'choice:0', messageId: 'out-1' });
+    qq.press({ from: OWNER, group: 'GROUP1', data: 'choice:0', messageId: 'out-1' });
+    const mine = qq.press({ from: OWNER, data: 'choice:1', messageId: 'out-1' });
+    await waitFor(() => qq.acks.length === 3 && host.events.length === 2);
+    expect(qq.acks.map((a) => a.code)).toEqual([4, 4, 0]);
+    expect(host.events[1]).toMatchObject({ type: 'chat.message', level: 1, senderKey: `qq:${OWNER}`, text: expect.stringContaining('下周一'), meta: { answer: { to: 'call_q', labels: ['下周一'] }, interaction: mine } });
+    // Answered: a second press goes nowhere.
+    qq.press({ from: OWNER, data: 'choice:0', messageId: 'out-1' });
+    await waitFor(() => qq.acks.length === 4);
+    expect(qq.acks[3]?.code).toBe(1);
+    expect(host.events).toHaveLength(2);
+    expect(host.kv.has('choices')).toBe(false);
+  });
+
+  it('falls back to a numbered list when QQ will not show buttons, and takes a number as the answer', async () => {
+    const { qq, host, first } = await talking();
+    qq.keyboardResults.push({ status: 400, body: { code: 304023, message: 'no permission for keyboard' } });
+    const r = await host.chatSend({ text: 'When?', callId: 'call_q', choices });
+    expect(r).toMatchObject({ ok: true });
+    expect(qq.sent).toEqual([{ scope: 'c2c', target: OWNER, content: 'When?\n\n回复编号选择：\n1. 周五下午（15:00）\n2. 下周一', msgId: first, msgType: 0 }]);
+    expect(host.kv.get('choices')).toEqual({ callId: 'call_q', labels: ['周五下午', '下周一'], multiple: false });
+    const id = qq.c2c({ from: OWNER, text: ' 2 ' });
+    await waitFor(() => host.events.length === 2);
+    expect(host.events[1]).toMatchObject({ type: 'chat.message', correlation: id, text: expect.stringContaining('下周一'), meta: { answer: { to: 'call_q', labels: ['下周一'] } } });
+    // A button of an older message does not answer the newest options.
+    await host.chatSend({ text: 'And?', callId: 'call_q2', choices });
+    qq.press({ from: OWNER, data: 'choice:0', messageId: 'out-0' });
+    await waitFor(() => qq.acks.length === 1);
+    expect(qq.acks[0]?.code).toBe(1);
+    qq.c2c({ from: OWNER, text: 'skip' });
+    await waitFor(() => host.events.length === 3);
+    // The options are closed: another number is an ordinary message.
+    qq.c2c({ from: OWNER, text: '1' });
+    await waitFor(() => host.events.length === 4);
+    expect(host.events[3]?.meta).not.toHaveProperty('answer');
+  });
+
+  it('asks for numbers when several may be chosen, and anything else closes the options', async () => {
+    const { qq, host } = await talking();
+    await host.chatSend({ text: 'Which?', callId: 'call_m', choices: { options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }], multiple: true } });
+    expect(qq.sent[0]?.keyboard).toBeUndefined();
+    expect(qq.sent[0]?.content).toContain('可以选多个，回复编号，用空格隔开：\n1. A\n2. B\n3. C');
+    qq.c2c({ from: OWNER, text: '3，1' });
+    await waitFor(() => host.events.length === 2);
+    expect(host.events[1]?.meta).toMatchObject({ answer: { to: 'call_m', labels: ['A', 'C'] } });
+    await host.chatSend({ text: 'Again?', callId: 'call_n', choices: { options: [{ label: 'A' }, { label: 'B' }], multiple: true } });
+    qq.c2c({ from: OWNER, text: 'never mind' });
+    await waitFor(() => host.events.length === 3);
+    expect(host.events[2]?.meta).not.toHaveProperty('answer');
+    expect(host.kv.has('choices')).toBe(false);
+  });
+
+  it('reads an answer only from numbers or a label', () => {
+    const open = { labels: ['周五下午', '下周一'], multiple: false };
+    expect(answerOf('1', open)).toEqual(['周五下午']);
+    expect(answerOf('下周一', open)).toEqual(['下周一']);
+    expect(answerOf('1 2', open)).toBeNull();
+    expect(answerOf('3', open)).toBeNull();
+    expect(answerOf('1 and', open)).toBeNull();
+    expect(answerOf('2 1 2', { ...open, multiple: true })).toEqual(['周五下午', '下周一']);
+  });
+
+  it('shows the reply while it is written, and the sent reply finishes that same message', async () => {
+    const { qq, host, first } = await talking();
+    host.chatDraft({ callId: 'call_s', batchId: 'b1', state: 'writing', text: 'Hel' });
+    await waitFor(() => qq.streamFrames.length === 1);
+    host.chatDraft({ callId: 'call_s', batchId: 'b1', state: 'writing', text: 'Hello wor' });
+    const r = await host.chatSend({ text: 'Hello world', callId: 'call_s' });
+    expect(r).toMatchObject({ ok: true, messageIds: ['stm-1'] });
+    const frames = qq.streamFrames.map((f) => [f['index'], f['input_state'], f['content_raw'], f['msg_id']]);
+    expect(frames[0]).toEqual([0, 1, 'Hel', first]);
+    expect(frames.at(-1)).toEqual([frames.length - 1, 10, 'Hello world', first]);
+    // Nothing was sent as a separate message.
+    expect(qq.sent).toEqual([]);
+  });
+
+  it('rewrites a preview whose reply is withdrawn', async () => {
+    const { qq, host } = await talking();
+    host.chatDraft({ callId: 'call_x', batchId: 'b1', state: 'writing', text: 'Let me' });
+    await waitFor(() => qq.streamFrames.length === 1);
+    host.chatDraft({ callId: 'call_x', batchId: 'b1', state: 'discarded' });
+    await waitFor(() => qq.streamFrames.some((f) => f['input_state'] === 10));
+    expect(qq.streamFrames.at(-1)).toMatchObject({ input_state: 10, content_raw: '（这条回复没有写完，已撤回）' });
+  });
+
+  it('sends the reply whole when QQ will not stream', async () => {
+    const { qq, host, first } = await talking();
+    qq.streamResults.push({ status: 400, body: { code: 304050, message: 'stream not allowed' } });
+    host.chatDraft({ callId: 'call_f', batchId: 'b1', state: 'writing', text: 'Hi' });
+    host.chatDraft({ callId: 'call_f', batchId: 'b1', state: 'writing', text: 'Hi there' });
+    expect(await host.chatSend({ text: 'Hi there!', callId: 'call_f' })).toMatchObject({ ok: true, messageIds: ['out-1'] });
+    expect(qq.streamFrames).toEqual([]);
+    expect(qq.sent).toMatchObject([{ content: 'Hi there!', msgId: first }]);
+  });
+
+  it('keeps open options across a restart, but previews only after a new message', async () => {
+    const first = await talking();
+    await first.host.chatSend({ text: 'When?', callId: 'call_r', choices });
+    await first.stop();
+    const second = await setup({ existing: { qq: first.qq, base: first.base }, kv: new Map(first.host.kv) });
+    await waitFor(() => first.qq.handshakes.length === 2);
+    // The window to stream may have passed while it was down: no preview, the reply comes whole.
+    second.host.chatDraft({ callId: 'call_late', batchId: 'b2', state: 'writing', text: 'Back' });
+    expect(await second.host.chatSend({ text: 'Back.', callId: 'call_late' })).toMatchObject({ ok: true });
+    expect(first.qq.streamFrames).toEqual([]);
+    // The buttons sent before the restart still answer.
+    first.qq.press({ from: OWNER, data: 'choice:0', messageId: 'out-1' });
+    await waitFor(() => second.host.events.length === 1);
+    expect(second.host.events[0]?.meta).toMatchObject({ answer: { to: 'call_r', labels: ['周五下午'] } });
+  });
+
+  it('streams the text, then sends pictures and options after it', async () => {
+    const { qq, host } = await talking();
+    const handle = `blob:${'b'.repeat(64)}`;
+    host.blobs.set(handle, { data: PNG, mime: 'image/png' });
+    host.chatDraft({ callId: 'call_all', batchId: 'b1', state: 'writing', text: 'Look', pending: ['images'] });
+    await waitFor(() => qq.streamFrames.length === 1);
+    const r = await host.chatSend({ text: 'Look at this.', callId: 'call_all', images: [{ handle, mime: 'image/png' }], choices });
+    expect(r).toMatchObject({ ok: true, messageIds: ['stm-1', 'out-1', 'out-2'] });
+    expect(qq.streamFrames.at(-1)).toMatchObject({ input_state: 10, content_raw: 'Look at this.' });
+    expect(qq.sent.map((s) => [s.msgType, s.content, !!s.keyboard])).toEqual([
+      [7, '', false],
+      [0, '请选择：', true],
+    ]);
   });
 });
