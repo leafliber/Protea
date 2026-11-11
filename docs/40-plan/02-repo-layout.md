@@ -10,7 +10,7 @@ Protea/
 ├── pnpm-workspace.yaml          packages/*、plugins/*、apps/*、examples/plugins/*；allowBuilds（better-sqlite3、esbuild）
 ├── Dockerfile                   镜像（M6）：builder → slim → full（默认）→ browser
 ├── .dockerignore
-├── .github/workflows/ci.yml     CI（M6）：类型检查、测试、构建、pnpm audit；构建 full/slim/browser 镜像、容器冒烟测试、Trivy 扫描
+├── .github/workflows/ci.yml     CI（M6）：每次推送与 PR 做类型检查、测试、构建、pnpm audit；发布（release）或手动运行时才构建 full/slim/browser 镜像、容器冒烟测试、Trivy 扫描
 ├── SECURITY.md                  漏洞报告渠道与响应时限（M6）
 ├── scripts/
 │   ├── bundle-plugin.mjs        把进程外插件打包成单文件 dist/main.js（esbuild）

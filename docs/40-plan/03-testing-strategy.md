@@ -12,7 +12,7 @@
 | 模型协议 | Vitest + 本地假 HTTP 服务器（`openai.test.ts`、`anthropic.test.ts`） | 各协议的请求形态、流式拼接、用量与缓存、停止原因、重试与错误分类、模型列表 | 每次提交 |
 | 端到端 | 真实守护进程 + 桩 Provider（可切真网）+ 模拟连接器 | 路线图中的验收场景 | PR 合并前 |
 | 回放回归 | `protea replay`（M6）+ 录制的 `provider.jsonl` | 人格/提示/调度变更的行为回归 | PR 合并前（离线；评测集尚未建立） |
-| 容器冒烟 | `scripts/container-smoke.sh`（M6） | 非 root、健康检查、插件资源上限、回复、stop/start 不丢事件、容器内备份、迁移 | CI 每次推送（full 与 slim） |
+| 容器冒烟 | `scripts/container-smoke.sh`（M6） | 非 root、健康检查、插件资源上限、回复、stop/start 不丢事件、容器内备份、迁移 | CI：发布（release）或手动运行时（full、slim、browser） |
 | 真网冒烟 | 真实 Anthropic API；至少一个 OpenAI 兼容供应商 | 模型 ID、beta 头、流式、工具搜索；第三方的工具调用与用量字段 | 每周 + 发布前 |
 | 实际测试 | 真实 API key、网络、账号与长时间使用（[06-real-world-testing.md](06-real-world-testing.md)） | 各里程碑需要真实条件的验收项 | 在实际使用中做，结果附诊断包 |
 | 长稳/压测 | `scripts/soak.mjs`（M6，无依赖）+ echo Provider | 内存、存储增长、延迟 | 每个里程碑末跑加速短程；长时间运行留给实际使用观察 |
@@ -40,6 +40,6 @@
 ## 6. 覆盖率与门禁
 
 - `packages/core` 行覆盖 ≥ 85%，分支 ≥ 75%；调度器与转录修复 100% 分支。
-- CI 阻断：lint、typecheck、单元/组件/协议测试、Docker 构建、镜像扫描高危。M6 的 `.github/workflows/ci.yml` 已有 typecheck、构建、全部测试、`pnpm audit --prod --audit-level high`、两种镜像的构建与容器冒烟测试、Trivy（HIGH/CRITICAL、有修复的）；lint 与覆盖率门槛尚未加入。
+- CI 阻断：lint、typecheck、单元/组件/协议测试、Docker 构建、镜像扫描高危。M6 的 `.github/workflows/ci.yml` 已有 typecheck、构建、全部测试、`pnpm audit --prod --audit-level high`、两种镜像的构建与容器冒烟测试、Trivy（HIGH/CRITICAL、有修复的）；lint 与覆盖率门槛尚未加入。2026-11-11 起镜像相关的检查只在发布（release）或手动运行时跑，推送和 PR 只跑类型检查、构建、测试与依赖审计；改了 `Dockerfile`、`docker/` 或 `scripts/*smoke*` 的 PR 合并前应手动运行一次（Actions → ci → Run workflow）。
 - 镜像扫描会因基础镜像的新漏洞而与代码无关地变红（2026-11-08 的 zlib1g）：`Dockerfile` 在 slim 与 full 两个阶段都先 `apt-get upgrade`；Debian 没有修复的由 `ignore-unfixed` 放过，有修复但镜像里还没有的，重建镜像即可。
 - 守护进程配置写法变更后，测试里的环境变量不会报错而是被忽略并记一条警告（2026-11-08 的 crash 测试）：改配置键时全文搜索 `PROTEA_` 变量；时序类测试要断言前置条件（例如"kill 时回复尚未写入"）而不是只看结果。
