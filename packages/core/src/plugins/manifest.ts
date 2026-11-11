@@ -9,6 +9,7 @@ import {
   PLUGIN_KINDS,
   PLUGIN_LOGIN_METHODS,
   TRIGGERS,
+  CHAT_DRAFT_MIN_INTERVAL_MS,
   type Level,
   type PluginManifest,
   type Trigger,
@@ -162,6 +163,13 @@ export function loadManifest(dir: string, origin: LoadedManifest['origin']): Loa
       if (c['displayName'] !== undefined && typeof c['displayName'] !== 'string') errors.push('chat.displayName must be a string');
       if (c['markdown'] !== undefined && !(CHAT_MARKDOWN as readonly unknown[]).includes(c['markdown'])) errors.push(`chat.markdown must be one of ${CHAT_MARKDOWN.join(', ')}`);
       if (c['maxChars'] !== undefined && (!Number.isInteger(c['maxChars']) || (c['maxChars'] as number) < 1)) errors.push('chat.maxChars must be a positive integer');
+      for (const k of ['images', 'choices', 'widgets']) if (c[k] !== undefined && typeof c[k] !== 'boolean') errors.push(`chat.${k} must be true or false`);
+      const drafts = c['drafts'];
+      if (drafts !== undefined) {
+        const every = (drafts as Record<string, unknown> | null)?.['minIntervalMs'];
+        if (typeof drafts !== 'object' || drafts === null || Array.isArray(drafts)) errors.push('chat.drafts must be an object (it may be empty)');
+        else if (every !== undefined && (!Number.isInteger(every) || (every as number) < CHAT_DRAFT_MIN_INTERVAL_MS)) errors.push(`chat.drafts.minIntervalMs must be an integer of at least ${CHAT_DRAFT_MIN_INTERVAL_MS}`);
+      }
     }
   }
   for (const field of ['secrets', 'optionalSecrets']) {

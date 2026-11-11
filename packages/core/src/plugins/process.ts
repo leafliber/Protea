@@ -5,6 +5,7 @@ import {
   RpcPeer,
   lineSplitter,
   type ApprovalRequestParams,
+  type ChatDraftParams,
   type ChatSendParams,
   type ChatSendResult,
   type HealthResult,
@@ -196,6 +197,10 @@ export class ProcessPlugin {
     return this.peer.request<ChatSendResult>(HOST_TO_PLUGIN.chatSend, p, { timeoutMs: 60_000 }).finally(() => {
       this.inflight--;
     });
+  }
+
+  chatDraft(p: ChatDraftParams): void {
+    this.peer.notify(HOST_TO_PLUGIN.chatDraft, p);
   }
 
   http(p: HttpRequestParams): Promise<HttpResponse> {

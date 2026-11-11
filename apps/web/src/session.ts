@@ -29,7 +29,7 @@ export function useStatus(): { status: StatusResponse | undefined; reload: () =>
   return { status, reload };
 }
 
-export type RouteMode = 'chat' | 'console';
+export type RouteMode = 'chat' | 'console' | 'widget';
 
 /**
  * The URL hash: `#/` (or `#/chat`) is the conversation; `#/console/<page>?…` a console page.
@@ -40,6 +40,8 @@ export function parseRoute(hash: string): { mode: RouteMode; page: string; param
   const [path = '', query] = h.split('?');
   const params = new URLSearchParams(query ?? '');
   if (path === '' || path === 'chat') return { mode: 'chat', page: 'chat', params };
+  // `#/widget/<id>`: one inline widget on a page of its own.
+  if (path.startsWith('widget/')) return { mode: 'widget', page: decodeURIComponent(path.slice(7)), params };
   const page = path === 'console' ? 'overview' : path.startsWith('console/') ? path.slice(8) || 'overview' : path;
   return { mode: 'console', page, params };
 }

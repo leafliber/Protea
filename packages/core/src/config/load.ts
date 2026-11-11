@@ -134,6 +134,9 @@ function validate(cfg: ProteaConfig, warnings: string[]): void {
   if (!(vision.maxImageKb > 0)) throw new Error('vision.maxImageKb must be positive');
   if (!Number.isInteger(vision.maxImagesPerMessage) || vision.maxImagesPerMessage < 0) throw new Error('vision.maxImagesPerMessage must be a non-negative integer');
   if (!(vision.blobRetentionDays >= 0)) throw new Error('vision.blobRetentionDays must not be negative');
+  const chat = cfg.chat;
+  if (typeof chat.widgets !== 'boolean') throw new Error('chat.widgets must be true or false');
+  if (!(Number.isInteger(chat.widgetMaxKb) && chat.widgetMaxKb >= 1 && chat.widgetMaxKb <= 1024)) throw new Error('chat.widgetMaxKb must be an integer from 1 to 1024');
   const ph = cfg.pluginHost;
   if (!Array.isArray(ph.restartBackoffMs) || ph.restartBackoffMs.length === 0 || !ph.restartBackoffMs.every((n) => n >= 0)) {
     throw new Error('pluginHost.restartBackoffMs must be a non-empty list of delays');

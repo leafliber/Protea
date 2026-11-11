@@ -37,6 +37,17 @@ describe('plugin protocol conformance', () => {
     expect(r.checks.map((c) => c.name)).toContain('the manifest block "chat" and the "chat" capability go together');
   });
 
+  it('the example chat platform passes, with a draft and choices sent through it', async () => {
+    const r = await checkConformance(path.join(REPO, 'examples/plugins/ts-chat'), { dev, pythonPath });
+    const failed = r.checks.filter((c) => !c.ok);
+    expect(failed, JSON.stringify(failed, null, 2)).toEqual([]);
+    const names = r.checks.map((c) => c.name);
+    expect(names).toContain('"chat.drafts" in the manifest and the "chatDrafts" capability go together');
+    expect(names).toContain('the chat probe sends a draft only to a platform that declares drafts');
+    expect(names).toContain('the chat probe offers choices only to a platform that declares choices');
+    expect(names).toContain('chat/send delivers a message');
+  });
+
   it('reports what is wrong with a broken plugin', async () => {
     const r = await checkConformance(path.join(REPO, 'packages/core/test/fixtures/broken-plugin'), { dev, pythonPath });
     expect(r.ok).toBe(false);

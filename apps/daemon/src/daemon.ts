@@ -88,6 +88,7 @@ import {
   ImageResolvingProvider,
   browserPreset,
   viewImageTool,
+  WidgetStore,
   kvNamespace,
   listBackups,
   loadConfig,
@@ -395,7 +396,24 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       log.error({ key: keyPath.join('.'), err: errorMessage(err) }, 'could not write config.yaml');
     }
   };
-  const chat = new ChatHub({ tools, bus, outputs, log: log.child({ component: 'chat' }), clock });
+  const widgets = new WidgetStore(db);
+  const chat = new ChatHub({
+    tools,
+    bus,
+    outputs,
+    log: log.child({ component: 'chat' }),
+    clock,
+    blobs,
+    workspace: path.join(dataDir, 'workspace'),
+    widgets,
+    limits: () => ({
+      maxImages: config.vision.maxImagesPerMessage,
+      maxImageBytes: config.vision.maxImageKb * 1024,
+      widgets: config.chat.widgets,
+      widgetMaxBytes: config.chat.widgetMaxKb * 1024,
+    }),
+    publicUrl: () => config.control.publicUrl,
+  });
   const plugins = new PluginHost({
     blobs,
     chat,
@@ -959,7 +977,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   };
 
   // Hot configuration (docs/30-specs/04-config-reference.md §4).
-  const HOT_SECTIONS = new Set(['owner', 'permissions', 'plugins', 'mcp', 'skills', 'context', 'budget', 'providers']);
+  const HOT_SECTIONS = new Set(['owner', 'permissions', 'plugins', 'mcp', 'skills', 'context', 'budget', 'providers', 'chat']);
   const reloadConfig = async (): Promise<void> => {
     let next: ProteaConfig;
     try {
@@ -993,6 +1011,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       router?.refresh();
       log.info({ default: next.providers.default, roles: next.providers.roles, profiles: Object.keys(next.providers.profiles) }, 'model providers changed; they apply from the next request');
     }
+    if (JSON.stringify(prev.chat) !== JSON.stringify(next.chat)) chat.refresh('chat settings changed');
     const cold = (Object.keys(next) as Array<keyof ProteaConfig>).filter(
       (k) => !HOT_SECTIONS.has(k) && JSON.stringify(prev[k]) !== JSON.stringify(next[k]),
     );
@@ -1287,8 +1306,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         ...(req.trigger !== undefined ? { trigger: req.trigger } : {}),
         ...(req.tags !== undefined ? { tags: req.tags } : {}),
       }),
-    pushChat: (req, senderKey) => webchatPlugin.receive(req.text, { senderKey, ...(req.trigger ? { trigger: req.trigger } : {}), ...(req.images ? { blobs: req.images } : {}) }),
+    pushChat: (req, senderKey) => webchatPlugin.receive(req.text, { senderKey, ...(req.trigger ? { trigger: req.trigger } : {}), ...(req.images ? { blobs: req.images } : {}), ...(req.answer ? { answer: req.answer } : {}) }),
     blobs,
+    widgets,
     browserPreset: (o) =>
       browserPreset({
         dataDir,

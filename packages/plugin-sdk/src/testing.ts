@@ -9,6 +9,7 @@ import {
   type PermissionModeParams,
   type BlobGetParams,
   type BlobPutParams,
+  type ChatDraftParams,
   type ChatSendParams,
   type ChatSendResult,
   type EventInput,
@@ -186,6 +187,11 @@ export class FakeHost {
   /** What `chat_send` would ask of this platform. */
   chatSend(req: ChatSendParams): Promise<ChatSendResult> {
     return this.host.request<ChatSendResult>(HOST_TO_PLUGIN.chatSend, req);
+  }
+
+  /** A reply as it is written, the way the host passes it to a platform that takes drafts. */
+  chatDraft(d: ChatDraftParams): void {
+    this.host.notify(HOST_TO_PLUGIN.chatDraft, d);
   }
 
   /** Drive the plugin's sign-in the way the console does. */

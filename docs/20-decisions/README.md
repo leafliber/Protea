@@ -21,6 +21,7 @@
 | [ADR-0015](ADR-0015-permission-modes-and-auto-review.md) | 权限模式（ask / auto / bypass / locked）与 auto 判断模型 | Accepted |
 | [ADR-0016](ADR-0016-wechat-and-plugin-sign-in.md) | 微信连接器基于官方包，插件登录成为通用能力 | Accepted |
 | [ADR-0017](ADR-0017-qq-connector-and-qr-bot-creation.md) | QQ 连接器基于官方 SDK，扫码创建机器人在插件内实现 | Accepted |
+| [ADR-0018](ADR-0018-rich-chat-content-and-widget-sandbox.md) | 对话内容走 Markdown，附件、选项与小组件是平台声明的能力；小组件在不透明源的沙箱里运行（修订 ADR-0014 的 blob 读取权限） | Accepted |
 
 新增 ADR：复制 `ADR-0000-template.md`（见下），编号递增，提交 PR 时在此表登记。
 

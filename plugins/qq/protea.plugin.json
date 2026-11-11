@@ -14,6 +14,6 @@
   "login": { "method": "qr" },
   "configSchema": "./config.schema.json",
   "envPrompt": "./ENV_PROMPT.md",
-  "chat": { "displayName": "QQ", "markdown": "none", "maxChars": 5000 },
+  "chat": { "displayName": "QQ", "markdown": "none", "maxChars": 5000, "images": true, "choices": true, "drafts": { "minIntervalMs": 500 } },
   "healthcheck": { "intervalMs": 30000, "timeoutMs": 5000 }
 }

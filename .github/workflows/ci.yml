@@ -1,12 +1,15 @@
 # CI (docs/40-plan/01-roadmap.md M6): checks, tests and a dependency audit on every push and
-# pull request; the image (full and slim) is built, smoke-tested in a container and scanned.
-# Nothing is published: pushing to a registry is a separate, manual step.
+# pull request. The images (full, slim, browser) are built, smoke-tested in a container and
+# scanned only for a release, or when the workflow is started by hand (Actions → ci → Run
+# workflow). Nothing is published: pushing to a registry is a separate, manual step.
 name: ci
 
 on:
   push:
     branches: [main, "feat/**"]
   pull_request:
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -35,6 +38,7 @@ jobs:
       - run: pnpm audit --prod --audit-level high
 
   image:
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:

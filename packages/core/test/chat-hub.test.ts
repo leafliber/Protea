@@ -53,7 +53,7 @@ describe('ChatHub and chat_send', () => {
     expect(announced[0]?.callId).toBe('u1');
     expect(r.is_error).toBeUndefined();
     expect(r.content).toBe('sent to telegram as message 41, 42 (5 characters)');
-    expect(sent).toEqual([['telegram', { text: 'hello', replyTo: '40', sessionId: 'main', batchId: 'b1' }]]);
+    expect(sent).toEqual([['telegram', { text: 'hello', replyTo: '40', sessionId: 'main', batchId: 'b1', callId: 'u1' }]]);
     expect(announced).toMatchObject([{ plugin: 'telegram', channel: 'chat', batchId: 'b1', id: 1 }]);
     expect(outputs.chat({ platform: 'telegram' }).items).toMatchObject([{ kind: 'reply', text: 'hello', platform: 'telegram', channel: 'chat' }]);
     expect(outputs.chat({ platform: 'webchat' }).items).toEqual([]);

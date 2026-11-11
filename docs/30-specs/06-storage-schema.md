@@ -213,7 +213,20 @@ CREATE TABLE approval_grants (
 
 转录里的图片块是 `{ "type": "image", "source": { "type": "blob", "handle": "blob:…", "media_type": "image/png" } }`，可以出现在消息内容或 `tool_result` 的内容数组里；转录中没有图片的字节（[ADR-0014](../20-decisions/ADR-0014-images-as-blob-references.md)）。
 
-### 1.9 后续迁移（计划）
+### 1.9 迁移 9：`chat-rich-content`（2026-11-11）
+
+```sql
+ALTER TABLE outputs ADD COLUMN meta TEXT;               -- 回复带的东西（JSON）：{ callId?, images?, choices?, widget?: { id, title } }；旧行为 NULL
+CREATE TABLE widgets (                                  -- chat_send 发出的内联小组件；id 是 title 加 code 的摘要，同样的只存一份
+  id TEXT PRIMARY KEY, title TEXT NOT NULL,
+  code TEXT NOT NULL,                                   -- 模型写的 HTML 或 SVG 片段；只经 GET /api/widgets/:id 以 JSON 返回
+  session_id TEXT, batch_id TEXT, created_at TEXT NOT NULL
+);
+```
+
+选项的答案不单独存：它是 `chat.message` 事件的 `meta.answer`（`{ to, labels }`）。`widgets` 和 `outputs` 一样不自动清理，备份带上，诊断包不导出。迁移之后旧镜像不能再打开这个数据库，回退要用升级前的备份。
+
+### 1.10 后续迁移（计划）
 
 | 表 | 用途 | 里程碑 |
 |---|---|---|

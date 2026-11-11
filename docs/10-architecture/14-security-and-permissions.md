@@ -125,10 +125,27 @@ M2 实现细节：
 - 会话 cookie（HttpOnly、SameSite=Strict，值为随机串，数据库只存哈希）；cookie 发起的写请求必须带 `x-protea-csrf: 1`，WS 用 cookie 时校验 `Origin`；同一地址 1 分钟内失败的登录、设置码与改密码尝试合计 10 次后拒绝（429）。
 - 供应商的 API Key 是秘密（默认 `PROVIDER_<ID>_API_KEY`）：控制台只能写入、看到“已设置”与来源，读不回值；“测试连接”可以带一个尚未保存的 Key，它只在那一次请求的内存里使用。供应商地址可以是任意 http(s) URL（本机模型服务），设置它是管理员操作。
 - 每个写请求记审计 `control_write`（方法、路径、主体、状态码；不记请求体，秘密值不进审计）。
-- 控制台只在 TLS 或回环下显示秘密管理页；明文 HTTP 的非本机访问持续显示风险提示。页面带严格的 CSP（只允许同源脚本与连接）、`X-Frame-Options: DENY`。
+- 控制台只在 TLS 或回环下显示秘密管理页；明文 HTTP 的非本机访问持续显示风险提示。页面带严格的 CSP（只允许同源脚本、连接与框架）、`X-Frame-Options: DENY`。唯一可以被嵌入的页面是小组件的沙箱外壳（§8.1）。
 - 配置 API 返回的生效配置里，出现的秘密值替换为 `[REDACTED:<NAME>]`；秘密 API 只写与列名。人格钩子是进程内代码，不开放 API 编辑。
 - 从 Git / tarball 安装插件与 Skills 是管理员操作（等同于在守护进程里运行代码）：只接受 `https/ssh/git/file` 的 Git 地址与 `http(s)` 的 tarball（≤ 50 MB），拒绝越界的子目录与指向来源之外的符号链接，不复制 `.git`。
 - Webhook 必须签名或带独立 token；无签名的 `/hooks/<name>` 默认禁用（`webhook` 插件只有在 `verify: none` 且显式 `allowUnsigned: true` 时才服务该路径）。`/hooks/*` 不需要管理员令牌，校验由插件完成；请求体上限 1 MB。
+
+### 8.1 小组件的沙箱（[ADR-0018](../20-decisions/ADR-0018-rich-chat-content-and-widget-sandbox.md)）
+
+`chat_send` 的 `widget` 是模型写的 HTML，可能受外部内容影响。它是系统里唯一会运行的模型写的脚本，只在这里运行：
+
+- **外壳** `/widget-frame.html` 是随控制台发布的静态文件，不含数据、不需要登录。它的响应头是 `content-security-policy: sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; …; connect-src 'none'; form-action 'none'; frame-ancestors 'self'`，另有 `x-dns-prefetch-control: off` 和全部关闭的 `permissions-policy`。对话窗口用 `<iframe sandbox="allow-scripts">` 嵌入它。
+- **两层沙箱**（iframe 属性与响应头）都没有 `allow-same-origin`，外壳里的文档是不透明源：读不到 cookie 和存储，向本站发请求算跨站，不带 `SameSite=Strict` 的会话 cookie。直接在地址栏打开外壳也一样。
+- **可信页面取代码，沙箱运行代码**：对话窗口用自己的登录态从 `GET /api/widgets/:id` 取到代码（JSON 里的一个字符串），等外壳发来 `ready` 后经 `postMessage` 交给它一次。没有任何地址把小组件的代码当网页返回。
+- **桥**：外壳只能发回五种消息。`size` 被限制在 40–640px；`prompt` 只在主人刚点过、焦点在这个小组件里时接受，截到 2000 字符，**填进输入框而不发送**；`error` 按文字显示。页面只认自己创建的那个 iframe 的 `event.source`。
+- **主页面的 CSP 不放开**，只写明了 `frame-src 'self'`。它同时拦住 iframe 把自己导航到站外；页面发现 iframe 第二次触发 `load` 就卸载它。
+- **卡死**：小组件进入视口才加载，同时最多 4 个，5 秒没渲染完就卸载；加载前在 `localStorage` 留标记，刷新后发现标记还在就不再自动加载这一个。
+
+禁止（要改先写 ADR）：给外壳的 `sandbox` 增加 `allow-same-origin`、`allow-forms`、`allow-popups`、`allow-top-navigation`、`allow-modals`、`allow-downloads`；给外壳的 CSP 增加任何网络来源；新增把 `widgets.code` 以 `text/html` 返回的地址。
+
+已知的缺口：**浏览器不把 WebRTC 纳入 CSP**，小组件如果拿到 `RTCPeerConnection`，可以向任意主机发 UDP 数据报。外壳在运行小组件之前把这些构造函数从自己的窗口上拿掉，并在嵌套框架（新文档里又会有它们）插入时立刻移除，实测能挡住直接使用和 `srcdoc` 子框架；HTML 解析器生成的封闭影子树里的框架外壳看不到，没有验证过。这两项是加固，不是边界。小组件里只有模型自己写进去的数据，所以这条通道的代价是：被注入的模型可以绕过 `ask` 策略，在主人打开对话页面时把它写进小组件的内容发出去。不能接受时用 `chat.widgets: false` 关掉小组件。
+
+检查：`node scripts/widget-escape-probe.mjs --url <daemon> --token <管理员令牌> --chrome <浏览器>` 在真实浏览器里加载外壳，交给它一段尝试各种出路的代码，并在本机另起一个 HTTP 端口和一个 UDP 端口看有没有东西到达。
 
 ## 9. 安全检查清单（发布前）
 

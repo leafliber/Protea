@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import {
   DEFAULT_STOP_WORDS,
   approvalCommand,
+  chatAnswer,
   definePlugin,
   isModeCommand,
   isStopWord,
@@ -11,8 +12,19 @@ import {
   type PluginDefinition,
   type PluginTool,
 } from '@protea/plugin-sdk';
-import { CHAT_MESSAGE_EVENT, type ChatSendResult, type EventInput } from '@protea/protocol';
-import { ApiError, GatewayError, GatewayErrorCode, QQBot, contentSanitizer, type QQBotInboundMessage, type ReplyTarget } from '@tencent-connect/qqbot-nodejs';
+import { CHAT_MESSAGE_EVENT, type ChatChoices, type ChatDraftParams, type ChatSendParams, type ChatSendResult, type EventInput } from '@protea/protocol';
+import {
+  ApiError,
+  GatewayError,
+  GatewayErrorCode,
+  QQBot,
+  contentSanitizer,
+  type InlineKeyboard,
+  type InteractionEvent,
+  type QQBotInboundMessage,
+  type ReplyTarget,
+  type StreamSession,
+} from '@tencent-connect/qqbot-nodejs';
 import { QrBind } from './login.js';
 
 export interface QqConfig {
@@ -39,7 +51,15 @@ const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_GROUP_MESSAGES = 500;
 const DEFAULT_BIND_BASE = 'https://q.qq.com';
 /** Everything that belongs to one bot and one owner; forgotten on sign-out and on a new sign-in. */
-const STATE_KEYS = ['signIn', 'ownerOpenid', 'lastMsgId', 'session', 'refusedAt'];
+const STATE_KEYS = ['signIn', 'ownerOpenid', 'lastMsgId', 'session', 'refusedAt', 'choices'];
+/** QQ streams a reply only within 5 minutes of the owner's message; stay inside that. */
+const STREAM_WINDOW_MS = 4.5 * 60_000;
+/** What a preview becomes when its reply is withdrawn: a stream message can be rewritten, not deleted. */
+const WITHDRAWN = '（这条回复没有写完，已撤回）';
+/** QQ answers a button press within 5 s; these are its codes. */
+const ACK_OK = 0;
+const ACK_FAILED = 1;
+const ACK_NO_PERMISSION = 4;
 
 const NOT_SIGNED_IN = 'QQ is not signed in: the operator has to scan the QR code (console: Plugins, qq, Sign-in; or "protea plugins login qq").';
 const NO_APP_ID = 'QQ_APP_SECRET is set but the AppID is unknown: sign in with the QR code, or set plugins.qq.config.appId to the bot the secret belongs to.';
@@ -49,6 +69,26 @@ interface SignIn {
   appId: string;
   /** Which secret this AppID came with: a secret replaced by hand falls back to config.appId. */
   secretSha256: string;
+}
+
+/** The newest options sent to the owner: the only ones that can still be answered. */
+interface OpenChoices {
+  callId: string;
+  labels: string[];
+  multiple: boolean;
+  /** The message that carries the buttons, when there are buttons. */
+  messageId?: string;
+}
+
+/** A reply that QQ shows while it is written (a C2C stream message). */
+interface Preview {
+  session: StreamSession;
+  /** Something may be on the owner's screen. */
+  shown: boolean;
+  /** QQ refused a frame: nothing more goes through this stream. */
+  broken: boolean;
+  /** Frames go one after another. */
+  work: Promise<void>;
 }
 
 interface PersistedSession {
@@ -101,6 +141,38 @@ function textOf(m: QQBotInboundMessage, imagesDelivered: boolean): string {
   return lines.join('\n') || '[unsupported message]';
 }
 
+/** Buttons for single-choice options, two to a row. */
+function keyboardOf(c: ChatChoices): InlineKeyboard {
+  const buttons = c.options.map((o, i) => ({
+    id: `c${i}`,
+    render_data: { label: o.label, visited_label: o.label, style: i === 0 ? 1 : 0 },
+    action: { type: 1, permission: { type: 2 }, data: `choice:${i}`, click_limit: 1 },
+  }));
+  const rows: InlineKeyboard['content']['rows'] = [];
+  for (let i = 0; i < buttons.length; i += 2) rows.push({ buttons: buttons.slice(i, i + 2) });
+  return { content: { rows } };
+}
+
+/** The options as text, for when there are no buttons: the owner answers with numbers. */
+function numbered(c: ChatChoices): string {
+  const lines = c.options.map((o, i) => `${i + 1}. ${o.label}${o.detail ? `（${o.detail}）` : ''}`);
+  return `${c.multiple ? '可以选多个，回复编号，用空格隔开：' : '回复编号选择：'}\n${lines.join('\n')}`;
+}
+
+/** What the owner chose, when their message is nothing but option numbers or labels; null otherwise. */
+export function answerOf(text: string, open: { labels: string[]; multiple: boolean }): string[] | null {
+  const t = text.trim();
+  if (t === '') return null;
+  const exact = open.labels.find((l) => l === t);
+  if (exact) return [exact];
+  const parts = t.split(/[\s,，、;；]+/).filter(Boolean);
+  if (!parts.every((p) => /^\d{1,2}$/.test(p))) return null;
+  const picked = [...new Set(parts.map((p) => Number(p) - 1))];
+  if (picked.some((i) => i < 0 || i >= open.labels.length)) return null;
+  if (!open.multiple && picked.length !== 1) return null;
+  return picked.sort((a, b) => a - b).map((i) => open.labels[i] as string);
+}
+
 /**
  * The QQ connector, built on Tencent's official @tencent-connect/qqbot-nodejs client: connects to
  * the QQ bot gateway over WebSocket, turns the owner's private messages into `chat.message` events
@@ -126,6 +198,10 @@ export function createQqPlugin(opts: QqPluginOptions = {}): PluginDefinition<QqC
   /** Messages are handled one after another, in the order they arrived. */
   let queue: Promise<void> = Promise.resolve();
   let login: QrBind | null = null;
+  /** When the owner's newest message arrived (ms): streaming is allowed only shortly after it. */
+  let lastMsgAt = 0;
+  let openChoices: OpenChoices | null = null;
+  const previews = new Map<string, Preview>();
   const groupMessages = new Map<string, string>();
   const retryMs = opts.retryMs ?? 5000;
 
@@ -169,6 +245,8 @@ export function createQqPlugin(opts: QqPluginOptions = {}): PluginDefinition<QqC
   }
 
   async function disconnect(): Promise<void> {
+    for (const p of previews.values()) p.session.cancel();
+    previews.clear();
     stop.abort();
     bot?.stop();
     await loop;
@@ -237,6 +315,7 @@ export function createQqPlugin(opts: QqPluginOptions = {}): PluginDefinition<QqC
 
     // The newest message is what lets the bot answer; keep it before anything can fail.
     lastMsgId = id;
+    lastMsgAt = Date.now();
     passiveRefused = null;
     await host.kv.set('lastMsgId', id);
     if (ownerOpenid !== sender) {
@@ -247,6 +326,14 @@ export function createQqPlugin(opts: QqPluginOptions = {}): PluginDefinition<QqC
     const answer = await approvalCommand(host, senderKey, command);
     if (answer !== null) return tell(host, answer);
     if (isModeCommand(command)) return tell(host, await modeCommand(host, senderKey, command));
+    // Whatever the owner writes closes the options; numbers or a label answer them.
+    const asked = openChoices;
+    if (asked) await closeChoices(host);
+    const picked = asked && !m.attachments?.length ? answerOf(command, asked) : null;
+    if (asked && picked) {
+      await host.events.push({ ...base, meta: { ...base.meta, ...chatAnswer(asked.callId, picked) }, type: CHAT_MESSAGE_EVENT, level: 1, trigger: 'flush', text: `Message from owner in private chat (msg ${id}), choosing from the options:\n${picked.join('、')}` });
+      return;
+    }
     const isStop = isStopWord(command, host.config.stopWords ?? DEFAULT_STOP_WORDS);
     const { blobs, failed } = await ownerImages(host, m);
     await host.events.push({
@@ -259,19 +346,24 @@ export function createQqPlugin(opts: QqPluginOptions = {}): PluginDefinition<QqC
     });
   }
 
-  /** One part to the owner: a reply to their newest message while QQ takes it, else a message of its own. */
-  async function sendToOwner(b: QQBot, owner: string, text: string): Promise<string> {
+  /** Send to the owner as a reply to their newest message while QQ takes it, else as a message of its own. */
+  async function passive<T>(owner: string, send: (target: ReplyTarget) => Promise<T>): Promise<T> {
     const target: ReplyTarget = { scope: 'c2c', targetId: owner };
     const replyTo = lastMsgId;
     if (replyTo && passiveRefused !== replyTo) {
       try {
-        return (await b.sendText({ ...target, msgId: replyTo }, text)).id;
+        return await send({ ...target, msgId: replyTo });
       } catch (err) {
         if (!refused(err)) throw err; // it may have arrived; do not send it twice
         passiveRefused = replyTo;
       }
     }
-    return (await b.sendText(target, text)).id;
+    return send(target);
+  }
+
+  /** One part to the owner. */
+  async function sendToOwner(b: QQBot, owner: string, text: string): Promise<string> {
+    return (await passive(owner, (t) => b.sendText(t, text))).id;
   }
 
   function explainSendFailure(err: unknown, sent: number, total: number): string {
@@ -296,6 +388,157 @@ export function createQqPlugin(opts: QqPluginOptions = {}): PluginDefinition<QqC
       }
     }
     return { ok: true, messageIds: ids };
+  }
+
+  async function closeChoices(host: Host<QqConfig>): Promise<void> {
+    openChoices = null;
+    await host.kv.delete('choices');
+  }
+
+  /** Whether a reply may be shown while it is written: QQ streams only a reply to a recent private message. */
+  function canPreview(): boolean {
+    return bot !== null && !gatewayRefusal && ownerOpenid !== null && lastMsgId !== null && passiveRefused !== lastMsgId && Date.now() - lastMsgAt < STREAM_WINDOW_MS;
+  }
+
+  function draft(host: Host<QqConfig>, d: ChatDraftParams): void {
+    let p = previews.get(d.callId);
+    if (d.state === 'discarded') {
+      if (!p) return;
+      previews.delete(d.callId);
+      const gone = p;
+      // A stream message cannot be deleted: rewrite it, and close it.
+      gone.work = gone.work.then(async () => {
+        if (!gone.shown || gone.broken) return gone.session.cancel();
+        try {
+          await gone.session.update(WITHDRAWN);
+          await gone.session.complete();
+        } catch (err) {
+          host.log.warn('could not withdraw a QQ preview', { err: detailOf(err) });
+        }
+      });
+      return;
+    }
+    if (!p) {
+      if (!canPreview() || !bot || !ownerOpenid || !lastMsgId) return;
+      p = { session: bot.openStream({ target: { scope: 'c2c', targetId: ownerOpenid, msgId: lastMsgId }, throttleMs: 500 }), shown: false, broken: false, work: Promise.resolve() };
+      previews.set(d.callId, p);
+    }
+    const live = p;
+    const text = d.text.slice(0, CHUNK);
+    if (live.broken || text.trim() === '') return;
+    live.work = live.work.then(async () => {
+      if (live.broken) return;
+      try {
+        live.shown = true;
+        await live.session.update(text);
+      } catch (err) {
+        // QQ would not stream this (no permission, window closed): the reply comes whole instead.
+        live.broken = true;
+        live.session.cancel();
+        host.log.warn('QQ refused a streamed preview; the reply will be sent whole', { err: detailOf(err) });
+      }
+    });
+  }
+
+  /** The options after the text: buttons for one choice when QQ takes them, a numbered list otherwise. */
+  async function sendChoices(b: QQBot, owner: string, c: ChatChoices, lead: string | null): Promise<{ id: string; buttons: boolean }> {
+    if (!c.multiple) {
+      // One try only: a refusal here may be about the buttons, not the reply, so it must not count against replying.
+      const replyTo = lastMsgId && passiveRefused !== lastMsgId ? lastMsgId : undefined;
+      try {
+        const id = (await b.sendTextWithKeyboard({ scope: 'c2c', targetId: owner, ...(replyTo ? { msgId: replyTo } : {}) }, lead ?? '请选择：', keyboardOf(c))).id;
+        return { id, buttons: true };
+      } catch (err) {
+        if (!refused(err)) throw err;
+        // Buttons need a permission many bots do not have: the list works everywhere.
+      }
+    }
+    const id = await sendToOwner(b, owner, lead ? `${lead}\n\n${numbered(c)}` : numbered(c));
+    return { id, buttons: false };
+  }
+
+  /** A `chat_send`: the text (finishing its preview when there is one), then the pictures, then the options. */
+  async function reply(host: Host<QqConfig>, req: ChatSendParams): Promise<ChatSendResult> {
+    const p = req.callId ? previews.get(req.callId) : undefined;
+    if (req.callId) previews.delete(req.callId);
+    if (p) await p.work;
+    if (!req.images?.length && !req.choices) {
+      if (!p || !p.shown || p.broken) {
+        p?.session.cancel();
+        return deliver(req.text);
+      }
+    }
+    if (!secret) return { ok: false, error: NOT_SIGNED_IN };
+    if (!bot) return { ok: false, error: lastError ?? NOT_SIGNED_IN };
+    if (gatewayRefusal) return { ok: false, error: `${gatewayRefusal} Reach the owner on another platform.` };
+    if (!ownerOpenid) return { ok: false, error: NO_CONVERSATION };
+    const b = bot;
+    const owner = ownerOpenid;
+    const parts = splitMessage(req.text, CHUNK);
+    const total = parts.length + (req.images?.length ?? 0) + (req.choices ? 1 : 0);
+    const ids: string[] = [];
+    try {
+      let i = 0;
+      if (p && p.shown && !p.broken) {
+        try {
+          await p.session.update(parts[0] as string);
+          const done = await p.session.complete();
+          ids.push(done?.id ?? `stream:${req.callId}`);
+          i = 1;
+        } catch (err) {
+          // The preview may stay as it was: the reply still goes out whole.
+          host.log.warn('could not finish a QQ preview; sending the reply as a message', { err: detailOf(err) });
+        }
+      } else p?.session.cancel();
+      // With options and no pictures, the last part of the text carries them.
+      const carry = req.choices && !req.images?.length && i < parts.length ? (parts.pop() as string) : null;
+      for (; i < parts.length; i++) ids.push(await sendToOwner(b, owner, parts[i] as string));
+      for (const img of req.images ?? []) {
+        const { data } = await host.blobs.get(img.handle);
+        const sent = await passive(owner, (t) => b.sendImage(t, { buffer: data }));
+        ids.push(sent.message?.id ?? sent.upload.file_uuid);
+      }
+      if (req.choices) {
+        const r = await sendChoices(b, owner, req.choices, carry);
+        ids.push(r.id);
+        openChoices = { callId: req.callId ?? r.id, labels: req.choices.options.map((o) => o.label), multiple: req.choices.multiple === true, ...(r.buttons ? { messageId: r.id } : {}) };
+        await host.kv.set('choices', openChoices);
+      }
+    } catch (err) {
+      return { ok: false, error: explainSendFailure(err, ids.length, total) };
+    }
+    return { ok: true, messageIds: ids };
+  }
+
+  /** A button pressed under options: from the owner and on the newest options, it answers them. */
+  async function pressed(host: Host<QqConfig>, b: QQBot, e: InteractionEvent): Promise<void> {
+    const ack = (code: number): Promise<void> => b.acknowledgeInteraction(e.id, code).catch((err: unknown) => host.log.warn('could not acknowledge a QQ button', { err: detailOf(err) }));
+    const data = e.data?.resolved?.button_data ?? '';
+    const m = /^choice:(\d+)$/.exec(data);
+    if (!m) return ack(ACK_FAILED);
+    const user = e.user_openid ?? e.group_member_openid;
+    if (e.group_openid || !user || (await host.owner.resolve(`qq:${user}`)) !== 'owner') return ack(ACK_NO_PERMISSION);
+    const asked = openChoices;
+    const index = Number(m[1]);
+    const label = asked?.labels[index];
+    const message = e.data.resolved.message_id;
+    // Only the buttons of the newest options: a numbered list has none, and an older message's buttons are stale.
+    if (!asked?.messageId || label === undefined || (message && message !== asked.messageId)) {
+      host.log.info('dropped a press on options that are no longer open', { index });
+      return ack(ACK_FAILED);
+    }
+    await ack(ACK_OK);
+    await closeChoices(host);
+    await host.events.push({
+      ts: isoOf(e.timestamp),
+      senderKey: `qq:${user}`,
+      dedupeKey: `press:${e.id}`,
+      meta: { kind: 'c2c', openid: user, interaction: e.id, ...chatAnswer(asked.callId, [label]) },
+      type: CHAT_MESSAGE_EVENT,
+      level: 1,
+      trigger: 'flush',
+      text: `Message from owner in private chat (pressed a button), choosing from the options:\n${label}`,
+    });
   }
 
   /** Short notices to the owner (answers to commands). A closed window only costs the notice. */
@@ -369,6 +612,9 @@ export function createQqPlugin(opts: QqPluginOptions = {}): PluginDefinition<QqC
       appId = null;
       ownerOpenid = null;
       lastMsgId = null;
+      lastMsgAt = 0;
+      openChoices = null;
+      previews.clear();
       session = null;
       const sdkLog = (msg: string): void => host.log.warn(msg);
       secret = host.secret(SECRET) ?? null;
@@ -392,6 +638,7 @@ export function createQqPlugin(opts: QqPluginOptions = {}): PluginDefinition<QqC
       }
       ownerOpenid = (await host.kv.get<string>('ownerOpenid')) ?? null;
       lastMsgId = (await host.kv.get<string>('lastMsgId')) ?? null;
+      openChoices = (await host.kv.get<OpenChoices>('choices')) ?? null;
       session = (await host.kv.get<PersistedSession>('session')) ?? null;
       const b = new QQBot({
         appId,
@@ -429,6 +676,10 @@ export function createQqPlugin(opts: QqPluginOptions = {}): PluginDefinition<QqC
         queue = queue.then(() => handle(host, m)).catch((err: unknown) => host.log.error('could not handle a QQ message', { messageId: m.messageId, err: errorText(err) }));
         return queue;
       });
+      b.on('interaction', (_ctx, e) => {
+        queue = queue.then(() => pressed(host, b, e)).catch((err: unknown) => host.log.error('could not handle a QQ button press', { err: errorText(err) }));
+        return queue;
+      });
       bot = b;
       loop = run(host, b);
     },
@@ -436,7 +687,8 @@ export function createQqPlugin(opts: QqPluginOptions = {}): PluginDefinition<QqC
       await disconnect();
     },
     chat: {
-      send: (_host, req) => deliver(req.text),
+      send: (host, req) => reply(host, req),
+      draft: (host, d) => draft(host, d),
     },
     tools: (host) => (host.config.groups === true ? [groupReply] : []),
     envPromptVars: (host) => ({ signedIn: bot !== null, groups: host.config.groups === true, groupsStored: host.config.groups !== true }),

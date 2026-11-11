@@ -9,6 +9,7 @@ import {
   type ApprovalGrantInfo,
   type ApprovalInfo,
   type ChatDraftUpdate,
+  type ChatReplyParts,
   type ContentBlock,
   type EventEnvelope,
   type ForkInfo,
@@ -345,7 +346,7 @@ async function chat(textParts: string[]): Promise<number> {
         printer.draft(data as unknown as ChatDraftUpdate);
       } else if (m.event === 'output' && data['plugin'] === 'webchat' && data['channel'] === 'chat' && data['batchId'] === mine) {
         replied = true;
-        printer.final(String(data['text']), typeof data['callId'] === 'string' ? data['callId'] : undefined);
+        printer.final(String(data['text']), typeof data['callId'] === 'string' ? data['callId'] : undefined, data as ChatReplyParts);
       } else if (m.event === 'batch.ended' && data['batchId'] === mine) {
         printer.close();
         const reason = String(data['endReason']);

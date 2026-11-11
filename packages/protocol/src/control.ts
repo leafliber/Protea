@@ -1,7 +1,7 @@
 /** Control API request/response shapes (docs/30-specs/05-control-api.md). */
 import type { EventEnvelope, EventState, Level, TerminalOutcome, Trigger } from './events.js';
 import type { PluginLoginStatus, PluginState } from './plugin.js';
-import type { ChatMarkdown } from './plugin.js';
+import type { ChatAnswer, ChatChoices, ChatMarkdown, ChatPending } from './plugin.js';
 import type { BatchEndReason, BatchReason, CancelKind, ContentBlock, Effort, ForkState, ModelRole, RunPhase, TranscriptMessage } from './session.js';
 
 /** M5: who a control API request acts as. `readonly` may only read (and never memory, persona or secrets). */
@@ -27,6 +27,8 @@ export interface ChatMessageRequest {
   text: string;
   /** Images stored with POST /api/blobs. */
   images?: BlobImageRef[];
+  /** The message answers the choices of a reply. */
+  answer?: ChatAnswer;
   /** `interrupt` stops what is running and handles this first. */
   trigger?: 'flush' | 'interrupt';
 }
@@ -37,13 +39,33 @@ export interface ChatPlatformInfo {
   displayName: string;
   markdown: ChatMarkdown;
   maxChars?: number;
+  images: boolean;
+  choices: boolean;
+  widgets: boolean;
+  drafts: boolean;
+}
+
+/** What a reply carries besides its text (the `meta` column of `outputs`). */
+export interface ChatReplyParts {
+  /** The `chat_send` call that sent it. */
+  callId?: string;
+  images?: BlobImageRef[];
+  choices?: ChatChoices;
+  widget?: { id: string; title: string };
+}
+
+/** GET /api/widgets/:id. The code is model-written and only ever runs inside the sandbox frame. */
+export interface WidgetResponse {
+  id: string;
+  title: string;
+  code: string;
 }
 
 /**
  * One line of a conversation (GET /api/chat): the owner's message (a `chat.message` event),
  * an assistant reply (`chat_send`) or a notice (approval requests).
  */
-export interface ChatItem {
+export interface ChatItem extends ChatReplyParts {
   /** `e<cursor>` for a message, `o<id>` for a reply or notice. */
   key: string;
   kind: 'owner' | 'reply' | 'notice';
@@ -56,8 +78,8 @@ export interface ChatItem {
   state?: EventState;
   /** owner: who sent it (`console:<user>`, `api:admin`). */
   sender?: string;
-  /** owner: the images sent with it. */
-  images?: BlobImageRef[];
+  /** owner: it answers the choices of a reply. */
+  answer?: ChatAnswer;
   /** reply / notice: the output channel (`chat`, `approvals`; `console` on replies from before the split). */
   channel?: string;
   batchId?: string;
@@ -411,7 +433,7 @@ export interface ModelDeltaTrace {
  * `output` with the same `callId` replaces it, `discarded` withdraws it. A fragment continues the
  * text at `offset`; one that does not line up came after a gap and should be ignored.
  */
-export type ChatDraftUpdate = { batchId: string; callId: string; platform: string } & ({ state: 'writing'; offset: number; text: string } | { state: 'discarded' });
+export type ChatDraftUpdate = { batchId: string; callId: string; platform: string } & ({ state: 'writing'; offset: number; text: string; pending?: ChatPending[] } | { state: 'discarded' });
 
 /** A finished model reply. Thinking carries its summary text only, never the signature. */
 export interface ModelResponseTrace {
@@ -483,7 +505,7 @@ export type StreamMessage =
   | { topic: 'batch.started'; data: BatchStartedData }
   | { topic: 'batch.extended'; data: { batchId: string; cursors: number[]; level: Level } }
   | { topic: 'batch.ended'; data: { batchId: string; endReason: BatchEndReason; rounds: number } }
-  | { topic: 'output'; data: { plugin: string; channel?: string; text: string; at: string; id?: number; batchId?: string; callId?: string } }
+  | { topic: 'output'; data: { plugin: string; channel?: string; text: string; at: string; id?: number; batchId?: string } & ChatReplyParts }
   /** Only on `/ws` (group `chat`) and on `/api/stream?drafts=1`. */
   | { topic: 'chat.draft'; data: ChatDraftUpdate }
   | { topic: 'scheduler'; data: SchedulerAction }

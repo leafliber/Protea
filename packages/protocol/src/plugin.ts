@@ -53,12 +53,50 @@ export interface PluginManifest {
 export const CHAT_MARKDOWN = ['none', 'basic', 'full'] as const;
 export type ChatMarkdown = (typeof CHAT_MARKDOWN)[number];
 
+/** Options the owner can tap instead of typing (docs/10-architecture/17-chat-and-console.md). */
+export interface ChatChoices {
+  options: Array<{ label: string; detail?: string }>;
+  /** Several options can be chosen at once. */
+  multiple?: boolean;
+}
+
+/** A stored inline widget, as a platform is told about it. */
+export interface ChatWidgetRef {
+  id: string;
+  title: string;
+  /** Its page in the web console; present when `control.publicUrl` is set. */
+  url?: string;
+}
+
+/** `meta.answer` of a `chat.message`: the owner chose among the options of the message `to`. */
+export interface ChatAnswer {
+  /** The `callId` of the `chat_send` that offered the options. */
+  to: string;
+  labels: string[];
+}
+
+/** Structured parts of a reply that are still being written while its text streams. */
+export const CHAT_PENDING = ['images', 'choices', 'widget'] as const;
+export type ChatPending = (typeof CHAT_PENDING)[number];
+
+/** How often a platform takes draft updates when it does not say (ms), and the least it may ask for. */
+export const CHAT_DRAFT_INTERVAL_MS = 1000;
+export const CHAT_DRAFT_MIN_INTERVAL_MS = 250;
+
 /** A connector that is a chat platform: `chat_send` can reach the owner through it (docs/30-specs/02-plugin-manifest.md). */
 export interface ChatPlatformDecl {
   displayName?: string;
   markdown?: ChatMarkdown;
   /** Longest single message the platform shows; longer text is the plugin's to split. */
   maxChars?: number;
+  /** It can send images (`chat/send` carries `images`). */
+  images?: boolean;
+  /** It shows tappable options and pushes the answer back as a `chat.message` with `meta.answer`. */
+  choices?: boolean;
+  /** It shows inline widgets, or a way to open one. */
+  widgets?: boolean;
+  /** It shows a reply while it is written (`chat/draft`) and can withdraw what it showed. */
+  drafts?: { minIntervalMs?: number };
 }
 
 /** How an operator signs in to a plugin (docs/30-specs/02-plugin-manifest.md). */
@@ -137,6 +175,8 @@ export interface PluginCapabilities {
   approvals?: boolean;
   /** Can send the owner a chat message (`chat/send`). */
   chat?: boolean;
+  /** Takes `chat/draft` notifications (with `chat.drafts` in the manifest). */
+  chatDrafts?: boolean;
   /** Webhook names served under `/hooks/<name>` (`http/request`). */
   hooks?: string[];
   /** Answers `login/*`: an operator can sign in to it from the console. */
@@ -215,7 +255,22 @@ export interface ChatSendParams {
   replyTo?: string;
   sessionId?: string;
   batchId?: string;
+  /** Id of this message: its drafts carried it, and an answer to its choices names it. */
+  callId?: string;
+  /** Only for a platform that declares `images`. */
+  images?: Array<{ handle: string; mime: string }>;
+  /** Only for a platform that declares `choices`. */
+  choices?: ChatChoices;
+  /** Only for a platform that declares `widgets`. */
+  widget?: ChatWidgetRef;
 }
+
+/**
+ * `chat/draft` (notification): a reply while the model is still writing it. `text` is all of it so
+ * far. Either a `chat/send` with the same `callId` follows and replaces the preview, or `discarded`
+ * withdraws it. Never stored and never external output.
+ */
+export type ChatDraftParams = { callId: string; batchId: string } & ({ state: 'writing'; text: string; pending?: ChatPending[] } | { state: 'discarded' });
 
 export interface ChatSendResult {
   ok: boolean;
@@ -316,6 +371,7 @@ export const HOST_TO_PLUGIN = {
   shutdownVerify: 'shutdown/verify',
   approvalsRequest: 'approvals/request',
   chatSend: 'chat/send',
+  chatDraft: 'chat/draft',
   httpRequest: 'http/request',
   loginStart: 'login/start',
   loginStatus: 'login/status',

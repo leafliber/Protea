@@ -119,6 +119,11 @@ Approvals: the owner replies "/approve <id>" or "/deny <id>"; those replies arri
 - 主人私聊 → `chat.message`，L1 `flush`；消息正好是停止词 → L1 `interrupt`；`/approve aN`、`/deny aN`、`/mode` 与微信相同，不产生消息事件。非主人私聊 → `qq.message`，L4 `store`。群消息：`groups` 关（默认）时 L4 `store`；开时 @机器人的群消息 → `qq.message`，L2 `flush`，其余 L4 `store`。频道消息 L4 `store`。`dedupeKey` 是 `msg:<id>`；消息按到达顺序逐条处理。
 - 内容：主人的图片下载后存 blob，失败时附一行说明；别人的图片只有 `[image]` 占位；语音用 QQ 的转写；文件和视频只有占位；引用的内容拼进正文；表情转成文字。
 - 对话平台：`chat_send` 的 `qq`，纯文本（`markdown: none`），超过 5000 字符自动分段，`reply_to` 忽略。回复带主人最新一条消息的 msg_id（被动回复）；被拒后改发不带 msg_id 的消息，再被拒就返回失败回执，模型应改走其他平台。还没收到过主人的消息时直接返回"不能先开口"。
+- 回复带的东西（[17-chat-and-console.md](17-chat-and-console.md) §2–§3）：
+  - **图片**：文字之后逐张上传（`/v2/users/{openid}/files`）再发富媒体消息，同样先试被动回复。每张图算一条回复，占被动回复的额度。
+  - **选项**：单选发成内联按钮（回调型，`data` 是 `choice:<序号>`），主人按下后插件 5 秒内确认（`/interactions/{id}`），推一条带 `meta.answer` 的 `chat.message`；别人或群里按的确认为"无权限"，过期的确认为"失败"。没有选项文字的回复里，按钮跟在最后一段文字上。QQ 拒绝按钮时（很多机器人没有这项权限）只试这一次，不影响被动回复，改发编号列表；多选总是编号列表。主人回复编号（多选用空格或逗号隔开）或原样的标签就是回答；主人发别的消息，选项就失效。打开的选项存 kv（`choices`），重启后按钮仍然有效。
+  - **草稿**：用 QQ 的私聊流式消息（`stream_messages`，同一条消息原地改写），间隔 500 ms，只在主人最新一条消息 4.5 分钟内开始（QQ 要求 5 分钟内）；正式发送时把同一条流式消息写完，图片和选项接在后面。撤回草稿时把流式消息改成"（这条回复没有写完，已撤回）"并结束它（流式消息不能删除）。QQ 不让流式时，第一帧就失败，回复整条发送。流式写到一半失败时，已经显示的部分留在那里，回复另发一条，主人会看到两条。
+  - **小组件**：不声明。QQ 不能运行 HTML；把网页里小组件页面的链接发过去，又要在 q.qq.com 上把地址加进白名单，没有验证过。
 - 工具 `qq_group_reply {message_id, text}`（只在 `groups` 开时提供，默认需要审批）：在群里回复一条投递过的 @消息。
 - 网关拒绝（不可恢复的关闭码，如 4914 机器人下线或仅沙箱可用、4915 被封禁）：不再重连，健康检查报告原因，推一条 L2 的 `qq.connection_refused`，同一次拒绝只推一次。
 - 配置：`appId`、`groups`（均 `x-hot: false`）、`stopWords`；`apiBase`、`tokenBase`、`bindBase`（`x-hot: false`，测试用）。

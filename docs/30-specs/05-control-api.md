@@ -59,10 +59,11 @@
 |---|---|---|
 | GET | `/api/events?level=&source=&state=&type=&since=&until=&cursor=&limit=&order=` | `{ events, nextCursor }`。默认新的在前；`cursor` 取比它旧的一页，`nextCursor` 为 null 表示没有更多。`level` 是最大等级，`state` 可逗号分隔，`limit` ≤ 1000 |
 | GET | `/api/events/:cursor` | `{ event, delivery }`（信封 + 投递记录） |
-| GET | `/api/blobs/:handle` | 图片内容（仅管理员，`x-content-type-options: nosniff`）；不存在或已过期 404 |
+| GET | `/api/widgets/:id` | `WidgetResponse` `{ id, title, code }`：一个内联小组件的代码，供对话窗口交给沙箱外壳。只读账号可读。永远是 JSON，没有任何接口把它当网页返回；不存在 404 |
+| GET | `/api/blobs/:handle` | 图片内容（管理员；只读账号只能读对话里出现过的图片，其他 403；`x-content-type-options: nosniff`）；不存在或已过期 404 |
 | POST | `/api/blobs` | 存一张图片（仅管理员）：`{ dataBase64 }` → 201 `{ handle, mime, size }`；类型按内容判断，不是图片或超过 `vision.maxImageKb` 时 422 |
-| POST | `/api/chat/messages` | 主人在 `webchat` 里说话：`{ text, images?: [{ handle, mime }], trigger?: flush \| interrupt }`（有图片时 `text` 可为空；图片要先上传，否则 400）→ 同 `POST /api/events` 的回执 |
-| GET | `/api/chat?platform=&before=&limit=` | 一个对话的历史（`platform` 默认 `webchat`，`all` 为全部平台）：`ChatHistoryResponse` `{ items, batches, before }`。`items` 由旧到新，每条带 `platform`，是 `chat.message` 事件（`kind: owner`，带 `cursor`、`state`、`sender`）与 `chat_send` 发出的消息（`kind: reply`，审批提示为 `notice`）；分界之前的 `console` 对话算作 `webchat`；`batches` 是这些条目所在批的结局（`endReason`、`sources`、`replied`，`model_error` 时带 `error`）。`before` 取更早的一页（为 null 表示没有更多），`limit` ≤ 200，默认 50 |
+| POST | `/api/chat/messages` | 主人在 `webchat` 里说话：`{ text, images?: [{ handle, mime }], answer?: { to, labels }, trigger?: flush \| interrupt }`（`answer`：这条消息回答了回复 `to`（它的 `callId`）的选项，写进事件的 `meta.answer`）（有图片时 `text` 可为空；图片要先上传，否则 400）→ 同 `POST /api/events` 的回执 |
+| GET | `/api/chat?platform=&before=&limit=` | 一个对话的历史（`platform` 默认 `webchat`，`all` 为全部平台）：`ChatHistoryResponse` `{ items, batches, before }`。`items` 由旧到新，每条带 `platform`，是 `chat.message` 事件（`kind: owner`，带 `cursor`、`state`、`sender`）与 `chat_send` 发出的消息（`kind: reply`，审批提示为 `notice`；回复带 `callId`，以及发出时带的 `images`、`choices`、`widget: { id, title }`）；主人的消息回答了选项时带 `answer`；分界之前的 `console` 对话算作 `webchat`；`batches` 是这些条目所在批的结局（`endReason`、`sources`、`replied`，`model_error` 时带 `error`）。`before` 取更早的一页（为 null 表示没有更多），`limit` ≤ 200，默认 50 |
 | GET | `/api/chat/batches?ids=a,b` | `{ batches }`：这些批的结局（同上；至多 100 个，未知的省略）。控制台在 `batch.ended` 后用它刷新状态 |
 | POST | `/api/events` | 推送 `{ text, level?, trigger?, tags? }`（来源固定为 `console`，senderKey 为 `api:admin`、`console:<用户名>` 或 `console:admin`）→ 201 `PushEventResponse` |
 | POST | `/api/events/:cursor/promote` | `{ trigger }`（默认 `flush`，不接受 `store`）→ `{ event }`；只对 pending/archived 事件，否则 409 |
@@ -196,7 +197,7 @@
 
 ## 实时流
 
-**SSE（M0 起）** `GET /api/stream?since=<cursor>&trace=1&drafts=1`。`trace=1` 时另外推 `model.response` 与 `tool.call`（`protea events tail` 用）；`drafts=1` 时另外推 `chat.draft`（正在写的聊天回复，终端里的 `protea chat` 用）。连接后先发 `hello {runId}`；带 `since` 时先按游标补发之后的事件，再转为实时。事件名：`event`（id 为游标）、`settled`、`phase`、`batch.started`、`batch.extended`（M1 起带 `level`）、`batch.ended`、`output`（`chat_send` 发出的消息与插件输出；2026-11-05 起带存储的 `id` 与发出它的 `batchId`，与 `/api/chat` 的条目对应）、`scheduler`（M1：`preempt` / `interrupt` / `aged` / `storm_cooldown` / `fork_yield` / `fork_resume`；M5：`paused` / `resumed` / `discarded`）、`fork`（M1：`ForkInfo` 变化）、`plugin`（M2：`PluginStatus` 变化）、`approval`（M2：`ApprovalInfo` 变化）、`mcp`（M3：`McpServerStatus` 变化）、`skills`（M3：目录变化，`{ names }`）、`handoff`（M4：`{ from, to, notes, dropped, kept }`）、`ping`（15 s 保活）。载荷形态见 `@protea/protocol` 的 `StreamMessage` 与 `SchedulerAction`。
+**SSE（M0 起）** `GET /api/stream?since=<cursor>&trace=1&drafts=1`。`trace=1` 时另外推 `model.response` 与 `tool.call`（`protea events tail` 用）；`drafts=1` 时另外推 `chat.draft`（正在写的聊天回复，终端里的 `protea chat` 用）。连接后先发 `hello {runId}`；带 `since` 时先按游标补发之后的事件，再转为实时。事件名：`event`（id 为游标）、`settled`、`phase`、`batch.started`、`batch.extended`（M1 起带 `level`）、`batch.ended`、`output`（`chat_send` 发出的消息与插件输出；2026-11-05 起带存储的 `id` 与发出它的 `batchId`，与 `/api/chat` 的条目对应；2026-11-11 起带 `callId`、`images`、`choices`、`widget`）、`scheduler`（M1：`preempt` / `interrupt` / `aged` / `storm_cooldown` / `fork_yield` / `fork_resume`；M5：`paused` / `resumed` / `discarded`）、`fork`（M1：`ForkInfo` 变化）、`plugin`（M2：`PluginStatus` 变化）、`approval`（M2：`ApprovalInfo` 变化）、`mcp`（M3：`McpServerStatus` 变化）、`skills`（M3：目录变化，`{ names }`）、`handoff`（M4：`{ from, to, notes, dropped, kept }`）、`ping`（15 s 保活）。载荷形态见 `@protea/protocol` 的 `StreamMessage` 与 `SchedulerAction`。
 
 **WebSocket（M5）** `GET /ws`（升级）。鉴权同 HTTP：`Authorization: Bearer` 或会话 cookie；用 cookie 时 `Origin` 的主机必须等于 `Host`，否则 403；没有凭据 401。
 

@@ -158,6 +158,10 @@ vision:                                # 对话里的图片（ADR-0014）；模�
   maxImagesPerMessage: 4               # 一个工具回执或一个事件最多带几张
   blobRetentionDays: 30                # 保留期，过期后引用显示"图片已不再保存"；0 一直保留
 
+chat:                                  # 回复可以带什么（17-chat-and-console.md §2）；热更新
+  widgets: true                        # chat_send 可以带内联小组件（模型写的 HTML，在沙箱外壳里运行，14-security-and-permissions.md §8.1）
+  widgetMaxKb: 64                      # 小组件代码的上限（1–1024）
+
 mcp:                                   # MCP 服务器（docs/10-architecture/09-mcp-integration.md §2）；监督参数沿用 pluginHost
   servers:
     fetch: { command: uvx, args: [mcp-server-fetch] }
