@@ -1,6 +1,6 @@
 # 控制平面
 
-> 状态：Accepted（M6）· 更新：2026-11-10 · 规范：[../30-specs/05-control-api.md](../30-specs/05-control-api.md)
+> 状态：Accepted（M6）· 更新：2026-11-11 · 规范：[../30-specs/05-control-api.md](../30-specs/05-control-api.md)
 
 > **实现状态（M6）**：HTTP API 与鉴权在 `packages/control/src/`（`app.ts`、`ops.ts`、`auth.ts`），地址白名单在 `allow.ts`，WebSocket 在 `ws.ts`，SSE/WS 共用的总线投影在 `stream.ts`，控制台托管在 `static.ts`；Web 控制台是 `apps/web`；CLI 在 `apps/cli/src/`（`main.ts`、`ops.ts`，以及在数据目录上直接工作的 `admin.ts`：migrate、healthcheck、backup、restore、replay）。M6 新增预算放行、备份 API 与 `control.allowCidrs`。2026-11-05 新增账号、设置码与供应商档案：账号与会话存储在 `packages/core/src/auth/accounts.ts`，路由在 `auth.ts` 与 `providers.ts`，控制台的 `pages/Setup.tsx`、`pages/Providers.tsx`，CLI 的 `accounts.ts`（`setup`、`accounts`、`providers`）。同日新增对话（`pages/Chat.tsx`）：回复存进 `outputs` 表（`packages/core/src/events/outputs.ts`），历史由 `GET /api/chat` 提供。2026-11-06 起网页分成两部分：对话窗口（`#/`）是入口，控制台（`#/console/…`，外壳在 `apps/web/src/Console.tsx`）从对话窗口右上角进入。2026-11-10 起对话与控制台分离：对话走 `webchat` 平台与 `chat_send`，事件流页升级为运行流，见 [17-chat-and-console.md](17-chat-and-console.md)。未实现：`/mcp` 服务端（M7）。
 
@@ -106,7 +106,7 @@ WebSocket 客户端发 `{ subscribe: [...], since?, logFilter? }`，每条订阅
 | 运行流 | 实时 + 历史（按等级着色、分页）：用户输入、事件、模型请求的上下文摘要、思考、流式正文、工具调用与结果、发出的消息、批与调度动作，按类别筛选；点开看信封与投递记录，提升或撤回，或看一批的完整过程；顶部输入框是运维注入（`console` 来源） |
 | 会话 | 主会话转录（思考摘要开关）、上下文环、手动交接；上下文（下一次请求的系统段、工具与消息，仅管理员）；批与每轮用量；Fork 列表、转录、派生、暂停/恢复/取消 |
 | 模型 | 供应商档案卡片（协议、地址、模型、密钥状态、服务的角色、就绪）；添加/编辑（厂商预设、协议、地址、API Key、按角色的模型、获取模型列表、测试连接、高级设置）；设为默认；按角色选择供应商 |
-| 插件 | 卡片：状态、来源、工具数、重启次数、最近错误；安装（Git / tarball / 目录）/启用/禁用/重载/卸载；配置表单（由 JSON Schema 生成，标出 `x-hot: false`）与 JSON 编辑；日志；清单 |
+| 插件 | 按种类分页（全部 / 事件源 / 连接器 / 工具，带数量；所在分页记在链接里）；卡片：状态、来源、工具数、重启次数、最近错误；安装（Git / tarball / 目录）。点卡片在弹窗里看一个插件：启用/禁用/重载/卸载；登录（清单声明了 `login` 的插件）；配置表单（由 JSON Schema 生成，标出 `x-hot: false`）与 JSON 编辑，有未保存的修改时关闭前要确认；日志；清单 |
 | MCP | 服务器列表、工具、延迟、添加（本地命令或远程 URL，bearer / OAuth）、OAuth 授权 |
 | Skills | 列表、正文预览、诊断、安装、启停、删除 |
 | 审批 | 权限模式（当前模式、到期时间、判断统计、切换）；待处理与历史、时限授权、审计记录 |

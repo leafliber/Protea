@@ -1,5 +1,6 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { IconClose } from './icons';
 
 export function cx(...names: Array<string | false | null | undefined>): string {
   return names.filter(Boolean).join(' ');
@@ -121,7 +122,7 @@ export function Empty({ children }: { children: ReactNode }) {
   return <div className="empty">{children}</div>;
 }
 
-export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: Array<[T, string]>; value: T; onChange: (t: T) => void }) {
+export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: Array<[T, ReactNode]>; value: T; onChange: (t: T) => void }) {
   return (
     <div className="tabs" role="tablist">
       {tabs.map(([id, label]) => (
@@ -150,6 +151,43 @@ export function Drawer({ title, onClose, children }: { title: ReactNode; onClose
         </header>
         <div className="drawer-body">{children}</div>
       </aside>
+    </div>
+  );
+}
+
+/**
+ * A centred dialog over the page. Esc, a press on the backdrop and ✕ all call `onClose`, so the
+ * caller can refuse (unsaved changes). `actions` sit in the header, before ✕.
+ */
+export function Modal({ title, actions, onClose, children }: { title: ReactNode; actions?: ReactNode; onClose: () => void; children: ReactNode }) {
+  const close = useRef(onClose);
+  close.current = onClose;
+  const box = useRef<HTMLElement>(null);
+  const titleId = useId();
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close.current();
+    window.addEventListener('keydown', onKey);
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    box.current?.focus();
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = overflow;
+    };
+  }, []);
+  return (
+    // mousedown, not click: a text selection dragged out of a field must not close the dialog.
+    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <section className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} ref={box}>
+        <header className="modal-head">
+          <h2 id={titleId}>{title}</h2>
+          <button className="icon-btn modal-close" onClick={onClose} aria-label="关闭">
+            <IconClose size={18} />
+          </button>
+          {actions && <div className="modal-actions">{actions}</div>}
+        </header>
+        <div className="modal-body">{children}</div>
+      </section>
     </div>
   );
 }

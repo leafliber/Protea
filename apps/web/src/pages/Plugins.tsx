@@ -1,8 +1,8 @@
-import { useState, type FormEvent } from 'react';
+import { useState, type FormEvent, type ReactNode } from 'react';
 import type { LogRecord, PluginLoginView, PluginStatus } from '@protea/protocol';
 import { api, enc, post, qs, useAction, useApi } from '../api';
 import { SchemaForm } from '../components/SchemaForm';
-import { Badge, Button, PageActions, Card, Empty, ErrorText, KV, StateBadge, Tabs, oneLine } from '../components/ui';
+import { Badge, Button, PageActions, Card, Empty, ErrorText, KV, Modal, StateBadge, Tabs, cx, oneLine } from '../components/ui';
 import { useReloadOn } from '../live';
 import { go, useSession } from '../session';
 import { LogLines } from './Logs';
@@ -113,30 +113,53 @@ function LoginPanel({ id }: { id: string }) {
   );
 }
 
-function PluginDetail({ id, onChanged }: { id: string; onChanged: () => void }) {
+/** The kinds the plugin host runs, in tab order. Any other kind a manifest claims gets a tab of its own. */
+const KINDS: readonly string[] = ['source', 'connector', 'tool'];
+const KIND_LABEL: Record<string, string> = { source: '事件源', connector: '连接器', tool: '工具', unknown: '未识别' };
+const KIND_HINT: Record<string, string> = {
+  source: '事件源把外部发生的事（定时、邮件、订阅、文件变化、Webhook）作为事件推给助理。',
+  connector: '连接器是聊天平台：既推送事件，也把助理的回复发出去。',
+  tool: '工具插件只提供助理可以调用的工具，不推送事件。',
+};
+const kindLabel = (kind: string): string => KIND_LABEL[kind] ?? kind;
+
+type DetailTab = 'login' | 'config' | 'logs' | 'manifest';
+
+/** One plugin in a dialog of its own: actions, facts, then sign-in, config, logs and manifest. */
+function PluginModal({ id, onClose, onChanged }: { id: string; onClose: () => void; onChanged: () => void }) {
   const { canWrite } = useSession();
-  const [picked, setTab] = useState<'login' | 'config' | 'logs' | 'manifest' | null>(null);
+  const [picked, setTab] = useState<DetailTab | null>(null);
+  const [dirty, setDirty] = useState(false);
   const p = useApi<PluginStatus & { manifest: Record<string, unknown> | null }>(`/api/plugins/${enc(id)}`);
   const cfg = useApi<{ config: Record<string, unknown>; schema: Record<string, unknown> | null; coldKeys: string[] }>(`/api/plugins/${enc(id)}/config`);
-  const logs = useApi<{ logs: LogRecord[] }>(`/api/plugins/${enc(id)}/logs${qs({ limit: 300 })}`, { refreshMs: 5000 });
+  const logs = useApi<{ logs: LogRecord[] }>(picked === 'logs' ? `/api/plugins/${enc(id)}/logs${qs({ limit: 300 })}` : null, { refreshMs: 5000 });
   useReloadOn('plugin', () => {
     p.reload();
     cfg.reload();
   });
   const act = useAction();
   const action = (a: string) => void act.run(() => post(`/api/plugins/${enc(id)}/${a}`)).then(() => (p.reload(), onChanged()));
+  const close = () => {
+    if (!dirty || confirm('配置有还没保存的修改，关闭后会丢失。仍要关闭吗？')) onClose();
+  };
   const s = p.data;
-  if (!s) return <ErrorText error={p.error} />;
+  if (!s)
+    return (
+      <Modal title={id} onClose={onClose}>
+        {p.error ? <ErrorText error={p.error} /> : <div className="muted">加载中…</div>}
+      </Modal>
+    );
   const m = s.manifest ?? {};
   const hasLogin = m['login'] !== undefined;
   const tab = picked ?? (hasLogin ? 'login' : 'config');
   return (
-    <Card
+    <Modal
       title={
         <>
           {String(m['displayName'] ?? s.id)} <StateBadge state={s.state} />
         </>
       }
+      onClose={close}
       actions={
         canWrite && (
           <>
@@ -149,9 +172,9 @@ function PluginDetail({ id, onChanged }: { id: string; onChanged: () => void }) 
                 kind="danger"
                 onClick={() =>
                   confirm(`卸载 ${s.id}？（需先禁用；插件数据默认一并删除）`) &&
-                  void act.run(() => api('DELETE', `/api/plugins/${enc(id)}`)).then(() => {
+                  void act.run(() => api('DELETE', `/api/plugins/${enc(id)}`)).then((ok) => {
                     onChanged();
-                    go('plugins');
+                    if (ok) onClose();
                   })
                 }
               >
@@ -166,7 +189,7 @@ function PluginDetail({ id, onChanged }: { id: string; onChanged: () => void }) 
       {s.error && <div className="banner banner-bad">{s.error}</div>}
       <KV
         rows={[
-          ['类型', `${s.kind} · ${s.origin}${s.version ? ` · v${s.version}` : ''}`],
+          ['类型', `${kindLabel(s.kind)} · ${s.origin}${s.version ? ` · v${s.version}` : ''}`],
           ['说明', String(m['description'] ?? '—')],
           ['工具', s.tools.length ? s.tools.join(', ') : '—'],
           ['进程', s.pid ? `pid ${s.pid}${s.restarts ? ` · 重启 ${s.restarts} 次` : ''}` : '—'],
@@ -175,8 +198,8 @@ function PluginDetail({ id, onChanged }: { id: string; onChanged: () => void }) 
       />
       <Tabs
         tabs={[
-          ...(hasLogin ? ([['login', '登录']] as Array<['login', string]>) : []),
-          ['config', '配置'],
+          ...(hasLogin ? ([['login', '登录']] as Array<[DetailTab, string]>) : []),
+          ['config', dirty ? '配置 •' : '配置'],
           ['logs', '日志'],
           ['manifest', '清单'],
         ]}
@@ -184,13 +207,15 @@ function PluginDetail({ id, onChanged }: { id: string; onChanged: () => void }) 
         onChange={setTab}
       />
       {tab === 'login' && <LoginPanel id={id} />}
-      {tab === 'config' &&
-        (cfg.data ? (
+      {/* Stays mounted while another tab is shown, so edits survive a look at the logs. */}
+      <div hidden={tab !== 'config'}>
+        {cfg.data ? (
           <SchemaForm
             schema={cfg.data.schema}
             value={cfg.data.config}
             coldKeys={cfg.data.coldKeys}
             readOnly={!canWrite}
+            onDirtyChange={setDirty}
             onSave={async (config) => {
               await api('PATCH', `/api/plugins/${enc(id)}/config`, { config });
               cfg.reload();
@@ -199,10 +224,11 @@ function PluginDetail({ id, onChanged }: { id: string; onChanged: () => void }) 
           />
         ) : (
           <ErrorText error={cfg.error} />
-        ))}
-      {tab === 'logs' && <LogLines logs={logs.data?.logs ?? []} />}
+        )}
+      </div>
+      {tab === 'logs' && (logs.data ? <LogLines logs={logs.data.logs} /> : <ErrorText error={logs.error} />)}
       {tab === 'manifest' && <pre className="json">{JSON.stringify(m, null, 2)}</pre>}
-    </Card>
+    </Modal>
   );
 }
 
@@ -211,7 +237,15 @@ export function Plugins({ params }: { params: URLSearchParams }) {
   const list = useApi<{ plugins: PluginStatus[] }>('/api/plugins');
   useReloadOn('plugin', list.reload);
   const [showInstall, setShowInstall] = useState(false);
+  const plugins = list.data?.plugins ?? [];
+  const kinds = [...KINDS, ...[...new Set(plugins.map((p) => p.kind))].filter((k) => !KINDS.includes(k)).sort()];
+  const asked = params.get('kind');
+  const kind = asked !== null && kinds.includes(asked) ? asked : 'all';
+  const shown = kind === 'all' ? plugins : plugins.filter((p) => p.kind === kind);
   const selected = params.get('id');
+  /** This page on the tab `k`, with a plugin's dialog open when `id` is given. */
+  const open = (k: string, id?: string) => go('plugins', { ...(k !== 'all' ? { kind: k } : {}), ...(id !== undefined ? { id } : {}) });
+  const count = (k: string) => (k === 'all' ? plugins.length : plugins.filter((p) => p.kind === k).length);
   return (
     <div className="page">
       <PageActions>{canWrite && <Button kind="primary" onClick={() => setShowInstall((x) => !x)}>{showInstall ? '收起' : '安装插件'}</Button>}</PageActions>
@@ -227,17 +261,25 @@ export function Plugins({ params }: { params: URLSearchParams }) {
         </Card>
       )}
       <ErrorText error={list.error} />
+      <Tabs
+        tabs={['all', ...kinds].map((k): [string, ReactNode] => [
+          k,
+          <>
+            {k === 'all' ? '全部' : kindLabel(k)}
+            {list.data && <span className="tab-count">{count(k)}</span>}
+          </>,
+        ])}
+        value={kind}
+        onChange={(k) => open(k)}
+      />
       <div className="cards">
-        {list.data?.plugins.map((p) => (
-          <button key={p.id} className={`plugin-card ${selected === p.id ? 'selected' : ''}`} onClick={() => go('plugins', { id: p.id })}>
+        {shown.map((p) => (
+          <button key={p.id} className={cx('plugin-card', selected === p.id && 'selected')} onClick={() => open(kind, p.id)}>
             <div className="row">
               <strong className="grow">{p.id}</strong>
               <StateBadge state={p.enabled ? p.state : 'disabled'} />
             </div>
-            <div className="muted small">
-              {p.kind} · {p.origin}
-              {p.version ? ` · v${p.version}` : ''}
-            </div>
+            <div className="muted small">{[kind === 'all' ? kindLabel(p.kind) : null, p.origin, p.version ? `v${p.version}` : null].filter(Boolean).join(' · ')}</div>
             <div className="small">
               {p.tools.length} 个工具{p.restarts ? <Badge tone="warn">重启 {p.restarts}</Badge> : null}
             </div>
@@ -245,9 +287,9 @@ export function Plugins({ params }: { params: URLSearchParams }) {
           </button>
         ))}
       </div>
-      {list.data?.plugins.length === 0 && <Empty>没有插件</Empty>}
-      {selected && <PluginDetail key={selected} id={selected} onChanged={list.reload} />}
-      {!selected && <div className="muted small">点一个插件看它的配置、日志与清单。</div>}
+      {list.data && shown.length === 0 && <Empty>{kind === 'all' ? '没有插件' : `没有${kindLabel(kind)}插件`}</Empty>}
+      <div className="muted small">{KIND_HINT[kind] ?? '点一个插件，打开它的配置、日志与清单。'}</div>
+      {selected && <PluginModal key={selected} id={selected} onClose={() => open(kind)} onChanged={list.reload} />}
     </div>
   );
 }

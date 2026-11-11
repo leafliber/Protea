@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button, ErrorText } from './ui';
 
 type Schema = Record<string, unknown>;
@@ -22,10 +22,30 @@ function simple(s: Schema): boolean {
   return false;
 }
 
+/** A config object as text that does not depend on the order of its top-level keys. */
+function canon(o: Record<string, unknown>): string {
+  return JSON.stringify(
+    Object.keys(o)
+      .sort()
+      .map((k) => [k, o[k]]),
+  );
+}
+
+/** Does this JSON text say something other than the saved config (`base`, from `canon`)? Text that does not parse counts as a change. */
+function differs(raw: string, base: string): boolean {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return typeof parsed !== 'object' || parsed === null || Array.isArray(parsed) || canon(parsed as Record<string, unknown>) !== base;
+  } catch {
+    return true;
+  }
+}
+
 /**
  * A form generated from a plugin's JSON Schema (top-level properties). Complex properties get
  * a JSON box; `x-hot: false` keys are marked (changing them reloads the plugin); `x-secret`
  * keys expect a `${secret:NAME}` reference. "JSON" switches to editing the whole object.
+ * `onDirtyChange` reports whether there are edits that have not been saved.
  */
 export function SchemaForm({
   schema,
@@ -33,12 +53,14 @@ export function SchemaForm({
   coldKeys,
   onSave,
   readOnly,
+  onDirtyChange,
 }: {
   schema: Schema | null;
   value: Record<string, unknown>;
   coldKeys: string[];
   onSave: (config: Record<string, unknown>) => Promise<unknown>;
   readOnly?: boolean;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const props = ((schema?.['properties'] ?? {}) as Record<string, Schema>) || {};
   const required = new Set((schema?.['required'] as string[] | undefined) ?? []);
@@ -50,10 +72,19 @@ export function SchemaForm({
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
+  // The saved config is refetched whenever any plugin changes; only a different config replaces the edits.
+  const base = canon(value);
   useEffect(() => {
     setDraft(value);
     setRaw(JSON.stringify(value, null, 2));
-  }, [value]);
+  }, [base]);
+
+  const dirty = !readOnly && (mode === 'json' ? differs(raw, base) : canon(draft) !== base || Object.keys(jsonErrors).length > 0);
+  const report = useRef(onDirtyChange);
+  report.current = onDirtyChange;
+  useEffect(() => {
+    report.current?.(dirty);
+  }, [dirty]);
 
   const set = (k: string, v: unknown) => {
     setSaved(false);
