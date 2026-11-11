@@ -6,6 +6,7 @@ import { ConsoleShell } from './Console';
 import { live } from './live';
 import { SessionContext, goChat, useRoute, useStatus } from './session';
 import { ChatApp } from './pages/Chat';
+import { Widget } from './components/rich/Widget';
 import { Setup } from './pages/Setup';
 
 function Login({ onDone }: { onDone: (me: WhoAmIResponse) => void }) {
@@ -98,9 +99,20 @@ function SignedIn({ me, onLogout }: { me: WhoAmIResponse; onLogout: () => void }
   }, []);
   return (
     <SessionContext.Provider value={{ role: me.role, canWrite: me.role === 'admin', ...(me.username ? { username: me.username } : {}) }}>
-      <div className={mode === 'chat' ? 'app app-chat' : 'app app-console'}>
+      <div className={mode === 'console' ? 'app app-console' : 'app app-chat'}>
         <RiskBanner />
-        {mode === 'chat' ? <ChatApp me={me} status={status} onLogout={onLogout} /> : <ConsoleShell me={me} page={page} params={params} status={status} reload={reload} onLogout={onLogout} />}
+        {mode === 'chat' ? (
+          <ChatApp me={me} status={status} onLogout={onLogout} />
+        ) : mode === 'widget' ? (
+          <div className="widget-page">
+            <a className="cm-link" href="#/">
+              返回对话
+            </a>
+            <Widget key={page} id={page} title="小组件" enabled={status?.chat?.platforms.find((p) => p.id === 'webchat')?.widgets !== false} tall />
+          </div>
+        ) : (
+          <ConsoleShell me={me} page={page} params={params} status={status} reload={reload} onLogout={onLogout} />
+        )}
       </div>
     </SessionContext.Provider>
   );

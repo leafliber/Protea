@@ -5,6 +5,7 @@ import type {
   ChatDraftUpdate,
   EventEnvelope,
   ForkInfo,
+  ChatReplyParts,
   HandoffKind,
   Level,
   McpServerStatus,
@@ -37,7 +38,7 @@ export interface BusTopics {
   'batch.extended': { batchId: string; cursors: number[]; level: Level };
   'batch.ended': { batchId: string; endReason: BatchEndReason; rounds: number };
   /** `id`: the stored row (outputs table); `batchId` and `callId`: the tool call that sent it. */
-  'plugin.output': { plugin: string; channel?: string; text: string; at: string; id?: number; batchId?: string; callId?: string };
+  'plugin.output': { plugin: string; channel?: string; text: string; at: string; id?: number; batchId?: string } & ChatReplyParts;
   /** A chat reply as the model writes it (the chat window); never stored, not external output. */
   'chat.draft': ChatDraftUpdate;
   'usage.recorded': UsageRecord;

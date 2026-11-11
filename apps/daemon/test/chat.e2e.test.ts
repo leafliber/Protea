@@ -86,7 +86,7 @@ describe('the web chat (POST /api/chat/messages, GET /api/chat)', () => {
     expect(ctx.tools.find((t) => t.name === 'chat_send')).toMatchObject({ owner: 'chat', deferred: false });
     expect(ctx.messages).toHaveLength(2);
     expect(ctx.limits?.softTokens).toBeGreaterThan(0);
-    expect((await api<StatusResponse>('GET', '/api/status')).chat).toMatchObject({ platforms: [{ id: 'webchat', markdown: 'basic' }], last: 'webchat' });
+    expect((await api<StatusResponse>('GET', '/api/status')).chat).toMatchObject({ platforms: [{ id: 'webchat', markdown: 'full', images: true, choices: true, widgets: true, drafts: true }], last: 'webchat' });
     expect((await fetch(`${d.url}/api/sessions/nope/context`, { headers: { authorization: `Bearer ${d.adminToken}` } })).status).toBe(404);
     const bad = await fetch(`${d.url}/api/chat/messages`, { method: 'POST', headers: { authorization: `Bearer ${d.adminToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ text: 'x', trigger: 'store' }) });
     expect(bad.status).toBe(400);

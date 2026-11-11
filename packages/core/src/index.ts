@@ -26,6 +26,8 @@ export * from './events/outputs.js';
 export * from './events/render.js';
 export * from './chat/hub.js';
 export * from './chat/draft.js';
+export * from './chat/settings.js';
+export * from './chat/widgets.js';
 export * from './session/trace.js';
 export * from './session/batch-trace.js';
 export * from './session/transcript.js';

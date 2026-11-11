@@ -1,4 +1,13 @@
-import type { ChatDraftUpdate } from '@protea/protocol';
+import type { ChatDraftUpdate, ChatReplyParts } from '@protea/protocol';
+
+/** What a reply carries besides text, as lines a terminal can show. */
+export function replyExtras(parts: ChatReplyParts): string[] {
+  const lines: string[] = [];
+  for (const i of parts.images ?? []) lines.push(`[image: ${i.handle}]`);
+  if (parts.widget) lines.push(`[widget: ${parts.widget.title}] (open the web chat to see it)`);
+  parts.choices?.options.forEach((o, n) => lines.push(`  ${n + 1}. ${o.label}${o.detail ? ` — ${o.detail}` : ''}`));
+  return lines;
+}
 
 /**
  * Writes `protea chat` replies to a terminal as they are composed. A sent reply finishes its
@@ -29,16 +38,17 @@ export class ChatPrinter {
     this.write(d.text);
   }
 
-  final(text: string, callId?: string): void {
+  final(text: string, callId?: string, parts: ChatReplyParts = {}): void {
     const before = callId !== undefined ? this.shown.get(callId) : undefined;
     if (callId !== undefined) this.shown.delete(callId);
     if (before !== undefined && this.current === callId && text.startsWith(before)) {
       this.write(`${text.slice(before.length)}\n`);
       this.current = null;
-      return;
+    } else {
+      this.close();
+      this.write(`${text}\n`);
     }
-    this.close();
-    this.write(`${text}\n`);
+    for (const line of replyExtras(parts)) this.write(`${line}\n`);
   }
 
   /** End the line of an unfinished draft. */

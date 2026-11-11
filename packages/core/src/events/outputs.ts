@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { CHAT_MESSAGE_EVENT, type BatchEndReason, type BlobImageRef, type ChatBatch, type ChatHistoryResponse, type ChatItem, type EventState } from '@protea/protocol';
+import { CHAT_MESSAGE_EVENT, type BatchEndReason, type BlobImageRef, type ChatAnswer, type ChatBatch, type ChatHistoryResponse, type ChatItem, type ChatReplyParts, type EventState } from '@protea/protocol';
 import type { Db } from '../db/database.js';
 
 export interface OutputRecord {
@@ -11,6 +11,8 @@ export interface OutputRecord {
   text: string;
   sessionId?: string;
   batchId?: string;
+  /** A chat reply's images, choices and widget. */
+  meta?: ChatReplyParts;
 }
 
 interface ChatRow {
@@ -24,6 +26,7 @@ interface ChatRow {
   batch_id: string | null;
   platform: string;
   blobs?: string | null;
+  meta?: string | null;
 }
 
 /** Where the console and the conversation were separated: everything up to here came from the old console chat. */
@@ -53,8 +56,8 @@ export class OutputLog {
 
   record(o: Omit<OutputRecord, 'id'>): OutputRecord {
     const info = this.db
-      .prepare('INSERT INTO outputs (at, plugin, channel, text, session_id, batch_id) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(o.at, o.plugin, o.channel ?? null, o.text, o.sessionId ?? null, o.batchId ?? null);
+      .prepare('INSERT INTO outputs (at, plugin, channel, text, session_id, batch_id, meta) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(o.at, o.plugin, o.channel ?? null, o.text, o.sessionId ?? null, o.batchId ?? null, o.meta && Object.keys(o.meta).length > 0 ? JSON.stringify(o.meta) : null);
     return { id: Number(info.lastInsertRowid), ...o };
   }
 
@@ -81,6 +84,16 @@ export class OutputLog {
   lastChatPlatform(): string | null {
     const row = this.db.prepare(`SELECT source FROM events WHERE type = '${CHAT_MESSAGE_EVENT}' AND sender_role = 'owner' ORDER BY cursor DESC LIMIT 1`).get() as { source: string } | undefined;
     return row?.source ?? null;
+  }
+
+  /** Whether a stored image appears in a conversation: with the owner's message, or with a reply. */
+  showsImage(handle: string): boolean {
+    if (!/^blob:[a-f0-9]{64}$/.test(handle)) return false;
+    const like = `%"${handle}"%`;
+    return (
+      this.db.prepare(`SELECT 1 FROM events WHERE type = '${CHAT_MESSAGE_EVENT}' AND blobs LIKE ? LIMIT 1`).get(like) !== undefined ||
+      this.db.prepare("SELECT 1 FROM outputs WHERE channel = 'chat' AND meta LIKE ? LIMIT 1").get(like) !== undefined
+    );
   }
 
   /** What was sent out during a batch, oldest first. */
@@ -112,16 +125,16 @@ export class OutputLog {
     const rows = this.db
       .prepare(
         `SELECT * FROM (
-           SELECT received_at AS at, 0 AS k, cursor AS id, text, state, sender_key AS who, NULL AS channel, batch_id, source AS platform, blobs
+           SELECT received_at AS at, 0 AS k, cursor AS id, text, state, sender_key AS who, NULL AS channel, batch_id, source AS platform, blobs, meta
              FROM events WHERE type = '${CHAT_MESSAGE_EVENT}' ${all ? '' : 'AND source = ?'}
            UNION ALL
-           SELECT at, 1 AS k, id, text, NULL AS state, NULL AS who, channel, batch_id, plugin AS platform, NULL AS blobs
+           SELECT at, 1 AS k, id, text, NULL AS state, NULL AS who, channel, batch_id, plugin AS platform, NULL AS blobs, meta
              FROM outputs WHERE channel IN (${channels}) ${all ? '' : 'AND plugin = ?'}
            ${split ? `UNION ALL
-           SELECT received_at AS at, 0 AS k, cursor AS id, text, state, sender_key AS who, NULL AS channel, batch_id, '${LEGACY_PLATFORM}' AS platform, NULL AS blobs
+           SELECT received_at AS at, 0 AS k, cursor AS id, text, state, sender_key AS who, NULL AS channel, batch_id, '${LEGACY_PLATFORM}' AS platform, NULL AS blobs, NULL AS meta
              FROM events WHERE source = 'console' AND type = 'console.message' AND cursor <= ?
            UNION ALL
-           SELECT at, 1 AS k, id, text, NULL AS state, NULL AS who, channel, batch_id, '${LEGACY_PLATFORM}' AS platform, NULL AS blobs
+           SELECT at, 1 AS k, id, text, NULL AS state, NULL AS who, channel, batch_id, '${LEGACY_PLATFORM}' AS platform, NULL AS blobs, NULL AS meta
              FROM outputs WHERE plugin = 'console' AND id <= ?` : ''}
          ) ${before ? 'WHERE (at, k, id) < (?, ?, ?)' : ''}
          ORDER BY at DESC, k DESC, id DESC LIMIT ?`,
@@ -221,6 +234,23 @@ function eventImages(blobs: string | null | undefined): { images?: BlobImageRef[
   return images.length > 0 ? { images } : {};
 }
 
+function parsed(json: string | null | undefined): Record<string, unknown> {
+  if (!json) return {};
+  try {
+    const v = JSON.parse(json) as unknown;
+    return typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** `meta.answer` of an owner's message, when it is well formed. */
+function eventAnswer(meta: string | null | undefined): { answer?: ChatAnswer } {
+  const a = parsed(meta)['answer'] as { to?: unknown; labels?: unknown } | undefined;
+  if (!a || typeof a.to !== 'string' || !Array.isArray(a.labels)) return {};
+  return { answer: { to: a.to, labels: a.labels.filter((l): l is string => typeof l === 'string') } };
+}
+
 function toItem(r: ChatRow): ChatItem {
   if (r.k === 0) {
     return {
@@ -234,6 +264,7 @@ function toItem(r: ChatRow): ChatItem {
       ...(r.who !== null ? { sender: r.who } : {}),
       ...(r.batch_id !== null ? { batchId: r.batch_id } : {}),
       ...eventImages(r.blobs),
+      ...eventAnswer(r.meta),
     };
   }
   return {
@@ -244,5 +275,6 @@ function toItem(r: ChatRow): ChatItem {
     text: r.text,
     ...(r.channel !== null ? { channel: r.channel } : {}),
     ...(r.batch_id !== null ? { batchId: r.batch_id } : {}),
+    ...(parsed(r.meta) as ChatReplyParts),
   };
 }

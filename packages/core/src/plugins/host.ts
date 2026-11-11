@@ -625,13 +625,27 @@ export class PluginHost {
       log.warn('a chat platform needs both the manifest block "chat" and the "chat" capability; not registered');
       return;
     }
+    // Drafts, like the platform itself, are declared twice. With one half missing the platform still works, without previews.
+    const { drafts, ...rest } = decl;
+    const takesDrafts = drafts !== undefined && e.capabilities.chatDrafts === true;
+    if ((drafts !== undefined) !== (e.capabilities.chatDrafts === true)) {
+      log.warn('drafts need both "chat.drafts" in the manifest and the "chatDrafts" capability; this platform gets no drafts');
+    }
     this.o.chat?.register({
-      ...decl,
+      ...rest,
+      ...(takesDrafts ? { drafts } : {}),
       id: e.id,
       send: (req) => {
         if (!e.proc || e.state !== 'running') return { ok: false, error: `plugin ${e.id} is not running` };
         return e.proc.chatSend(req);
       },
+      ...(takesDrafts
+        ? {
+            draft: (d) => {
+              if (e.proc && e.state === 'running') e.proc.chatDraft(d);
+            },
+          }
+        : {}),
     });
   }
 

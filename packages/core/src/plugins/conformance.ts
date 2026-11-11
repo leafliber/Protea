@@ -27,7 +27,7 @@ export interface ConformanceProbe {
   /** Minimum number of events the calls should have pushed. */
   events?: number;
   /** Chat platforms: send this through `chat/send` and expect it to succeed (a real send, so it is opt-in). */
-  chat?: { text: string };
+  chat?: { text: string; /** Also offer two choices (a platform that declares `choices`). */ choices?: boolean; /** Also send a draft first, then the message that replaces it (a platform that declares `drafts`). */ draft?: boolean };
 }
 
 export interface ConformanceCheck {
@@ -212,8 +212,19 @@ export async function checkConformance(dir: string, opts: ConformanceOptions = {
     const declaresLogin = m.login !== undefined;
     const advertisesLogin = started.init.capabilities.login === true;
     if (declaresLogin || advertisesLogin) add('the manifest block "login" and the "login" capability go together', declaresLogin && advertisesLogin, `manifest: ${declaresLogin}, capability: ${advertisesLogin}`);
+    const declaresDrafts = m.chat?.drafts !== undefined;
+    const advertisesDrafts = started.init.capabilities.chatDrafts === true;
+    if (declaresDrafts || advertisesDrafts) add('"chat.drafts" in the manifest and the "chatDrafts" capability go together', declaresDrafts && advertisesDrafts, `manifest: ${declaresDrafts}, capability: ${advertisesDrafts}`);
     if (probe.chat) {
-      const r = await proc.chatSend({ text: probe.chat.text }).catch((err: Error) => ({ ok: false, error: err.message }));
+      const callId = 'conformance-chat';
+      if (probe.chat.draft) {
+        add('the chat probe sends a draft only to a platform that declares drafts', declaresDrafts && advertisesDrafts);
+        proc.chatDraft({ callId, batchId: 'conformance', state: 'writing', text: probe.chat.text.slice(0, Math.max(1, Math.floor(probe.chat.text.length / 2))) });
+      }
+      if (probe.chat.choices) add('the chat probe offers choices only to a platform that declares choices', m.chat?.choices === true);
+      const r = await proc
+        .chatSend({ text: probe.chat.text, callId, ...(probe.chat.choices ? { choices: { options: [{ label: 'Yes' }, { label: 'No' }] } } : {}) })
+        .catch((err: Error) => ({ ok: false, error: err.message }));
       add('chat/send delivers a message', r.ok === true, r.ok ? undefined : JSON.stringify(r));
     }
 

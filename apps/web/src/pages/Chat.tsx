@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import type { ApprovalInfo, BatchEndReason, BlobImageRef, ChatBatch, ChatHistoryResponse, ChatItem, ChatMessageRequest, PushEventResponse, RunPhase, StatusResponse, WhoAmIResponse } from '@protea/protocol';
+import type { ApprovalInfo, BatchEndReason, BlobImageRef, ChatAnswer, ChatBatch, ChatHistoryResponse, ChatItem, ChatMessageRequest, ChatPending, PushEventResponse, RunPhase, StatusResponse, WhoAmIResponse } from '@protea/protocol';
 import { get, post, qs, useApi } from '../api';
 import { BlobImages, blobUrl, uploadImage } from '../images';
-import { Rich } from '../components/Rich';
+import { Choices, type ChoiceState } from '../components/rich/Choices';
+import { Rich } from '../components/rich/Markdown';
+import { Widget } from '../components/rich/Widget';
 import { UserMenu } from '../components/UserMenu';
 import { IconAlert, IconArrowDown, IconCheck, IconConsole, IconCopy, IconRetry, IconSend } from '../components/icons';
 import { cx } from '../components/ui';
@@ -24,6 +26,8 @@ const PHASE_TEXT: Partial<Record<RunPhase, string>> = {
 
 /** This window is the web chat; the other platforms are their own conversations. */
 const PLATFORM = 'webchat';
+
+const PENDING_TEXT: Record<ChatPending, string> = { images: '正在准备图片…', choices: '正在准备选项…', widget: '正在生成小组件…' };
 
 const SOURCE_LABEL: Record<string, string> = { cron: '定时提醒', core: '后台任务', telegram: 'Telegram', wechat: '微信', qq: 'QQ', rss: '订阅更新', imap: '新邮件', webhook: 'Webhook', filewatch: '文件变化', shell: '命令' };
 
@@ -91,6 +95,18 @@ function outcomeOf(item: ChatItem, batch: ChatBatch | undefined, lastOfBatch: bo
 function noticeText(i: ChatItem): string {
   const m = /^Approval (\S+) requested: ([\s\S]*?)\. Decide with:/.exec(i.text);
   return m ? `助理请求批准：${m[2]}` : i.text;
+}
+
+/** `meta.answer` of a live event, when it is well formed. */
+function answerOf(meta: Record<string, unknown> | undefined): { answer?: ChatAnswer } {
+  const a = meta?.['answer'] as { to?: unknown; labels?: unknown } | undefined;
+  if (!a || typeof a.to !== 'string' || !Array.isArray(a.labels)) return {};
+  return { answer: { to: a.to, labels: a.labels.filter((l): l is string => typeof l === 'string') } };
+}
+
+function choiceState(i: ChatItem, answers: Map<string, string[]>, open: string | null): ChoiceState {
+  if (i.callId !== undefined && answers.has(i.callId)) return 'answered';
+  return i.key === open ? 'open' : 'closed';
 }
 
 function CopyButton({ text }: { text: string }) {
@@ -179,6 +195,7 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
   const [draft, setDraft] = useState('');
   const [drafts, setDrafts] = useState<ChatDraft[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const colRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const prepend = useRef<number | null>(null);
   const lastKey = useRef<string | null>(null);
@@ -233,7 +250,7 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
         const e = m.data;
         if (e.source !== PLATFORM || e.type !== 'chat.message') return;
         setItems((old) =>
-          merge(old, [{ key: `e${e.cursor}`, kind: 'owner', platform: PLATFORM, at: e.receivedAt, text: e.text, cursor: e.cursor, state: e.state, ...(e.senderKey ? { sender: e.senderKey } : {}), ...(e.batchId ? { batchId: e.batchId } : {}), ...(e.blobs?.length ? { images: e.blobs.map((b) => ({ handle: b.handle, mime: b.mime })) } : {}) }]),
+          merge(old, [{ key: `e${e.cursor}`, kind: 'owner', platform: PLATFORM, at: e.receivedAt, text: e.text, cursor: e.cursor, state: e.state, ...(e.senderKey ? { sender: e.senderKey } : {}), ...(e.batchId ? { batchId: e.batchId } : {}), ...(e.blobs?.length ? { images: e.blobs.map((b) => ({ handle: b.handle, mime: b.mime })) } : {}), ...answerOf(e.meta) }]),
         );
         break;
       }
@@ -255,7 +272,21 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
         }
         const key = o.id !== undefined ? `o${o.id}` : `o${Date.parse(o.at)}.${Math.random().toString(36).slice(2, 6)}`;
         setItems((old) =>
-          merge(old, [{ key, kind: o.channel === 'chat' ? 'reply' : 'notice', platform: PLATFORM, at: o.at, text: o.text, ...(o.channel ? { channel: o.channel } : {}), ...(o.batchId ? { batchId: o.batchId } : {}) }]),
+          merge(old, [
+            {
+              key,
+              kind: o.channel === 'chat' ? 'reply' : 'notice',
+              platform: PLATFORM,
+              at: o.at,
+              text: o.text,
+              ...(o.channel ? { channel: o.channel } : {}),
+              ...(o.batchId ? { batchId: o.batchId } : {}),
+              ...(o.callId ? { callId: o.callId } : {}),
+              ...(o.images ? { images: o.images } : {}),
+              ...(o.choices ? { choices: o.choices } : {}),
+              ...(o.widget ? { widget: o.widget } : {}),
+            },
+          ]),
         );
         if (o.batchId && o.channel === 'chat') {
           const id = o.batchId;
@@ -313,6 +344,18 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
     lastKey.current = newest;
   }, [items, drafts, active, phase.phase, loaded]);
 
+  // A diagram, a picture or a widget grows after it arrives: stay at the newest message while the reader is there.
+  useEffect(() => {
+    const col = colRef.current;
+    if (!col || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      const el = scrollRef.current;
+      if (el && stick.current) el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(col);
+    return () => ro.disconnect();
+  }, []);
+
   const toBottom = () => {
     const el = scrollRef.current;
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
@@ -326,17 +369,31 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
     return new Set(last.values());
   }, [items]);
 
-  const send = async (text: string, trigger?: ChatMessageRequest['trigger'], images: BlobImageRef[] = []): Promise<void> => {
-    const r = await post<PushEventResponse>('/api/chat/messages', { text, ...(trigger ? { trigger } : {}), ...(images.length > 0 ? { images } : {}) });
+  const send = async (text: string, trigger?: ChatMessageRequest['trigger'], images: BlobImageRef[] = [], answer?: ChatAnswer): Promise<void> => {
+    const r = await post<PushEventResponse>('/api/chat/messages', { text, ...(trigger ? { trigger } : {}), ...(images.length > 0 ? { images } : {}), ...(answer ? { answer } : {}) });
     stick.current = true;
     // The live stream often wins the race (a fast reply arrives before this response): never overwrite it.
     const key = `e${r.cursor}`;
     setItems((old) =>
       old.some((i) => i.key === key)
         ? old
-        : merge(old, [{ key, kind: 'owner', platform: PLATFORM, at: new Date().toISOString(), text, cursor: r.cursor, state: r.effectiveTrigger === 'store' ? 'archived' : 'pending', ...(username ? { sender: `console:${username}` } : {}), ...(images.length > 0 ? { images } : {}) }]),
+        : merge(old, [{ key, kind: 'owner', platform: PLATFORM, at: new Date().toISOString(), text, cursor: r.cursor, state: r.effectiveTrigger === 'store' ? 'archived' : 'pending', ...(username ? { sender: `console:${username}` } : {}), ...(images.length > 0 ? { images } : {}), ...(answer ? { answer } : {}) }]),
     );
   };
+
+  // Choices: the newest ones are open until the owner writes; an answer names the reply it answers.
+  const { answers, openChoices } = useMemo(() => {
+    const answers = new Map<string, string[]>();
+    let open: string | null = null;
+    for (const i of items) {
+      if (i.kind === 'owner') {
+        open = null;
+        if (i.answer) answers.set(i.answer.to, i.answer.labels);
+      } else if (i.kind === 'reply' && i.choices) open = i.key;
+    }
+    return { answers, openChoices: open };
+  }, [items]);
+  const widgetsOn = status?.chat?.platforms.find((p) => p.id === PLATFORM)?.widgets !== false;
 
   const rows: ReactNode[] = [];
   let day = '';
@@ -376,6 +433,17 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
             <div className="cm-body">
               <Rich text={i.text} />
             </div>
+            <BlobImages images={i.images} />
+            {i.widget && <Widget id={i.widget.id} title={i.widget.title} enabled={widgetsOn} onPrompt={setDraft} />}
+            {i.choices && (
+              <Choices
+                choices={i.choices}
+                state={choiceState(i, answers, openChoices)}
+                chosen={(i.callId !== undefined ? answers.get(i.callId) : undefined) ?? []}
+                canAnswer={canWrite}
+                onChoose={(labels) => send(labels.join('、'), undefined, [], i.callId !== undefined ? { to: i.callId, labels } : undefined).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))}
+              />
+            )}
             <div className="cm-meta">
               <span title={new Date(i.at).toLocaleString('zh-CN', { hour12: false })}>{hm(i.at)}</span>
               <CopyButton text={i.text} />
@@ -465,7 +533,7 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
           if (el.scrollTop < 160 && before && !olderBusy) void loadOlder();
         }}
       >
-        <div className="chat-col" role="log" aria-live="polite" aria-label="对话">
+        <div className="chat-col" ref={colRef} role="log" aria-live="polite" aria-label="对话">
           {before && (
             <div className="chat-older">
               <button type="button" className="cm-link" disabled={olderBusy} onClick={() => void loadOlder()}>
@@ -497,12 +565,13 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
               </div>
               <div className="cm-main">
                 <div className="cm-body">
-                  <Rich text={d.text} />
+                  <Rich text={d.text} streaming />
                 </div>
                 <div className="typing">
                   <span />
                   <span />
                   <span />
+                  {d.pending && d.pending.length > 0 && <em>{PENDING_TEXT[d.pending[d.pending.length - 1] as ChatPending]}</em>}
                 </div>
               </div>
             </div>
@@ -572,7 +641,8 @@ function Composer({ busy, draft, onDraftUsed, onSend }: { busy: boolean; draft: 
 
   useEffect(() => {
     if (!draft) return;
-    setText(draft);
+    // What the owner already wrote stays: a suggestion is added after it.
+    setText((old) => (old.trim() ? `${old.replace(/\n+$/, '')}\n${draft}` : draft));
     onDraftUsed();
     ref.current?.focus();
   }, [draft]);

@@ -1,10 +1,12 @@
-import type { ChatDraftUpdate } from '@protea/protocol';
+import type { ChatDraftUpdate, ChatPending } from '@protea/protocol';
 
 /** A reply the assistant is still writing, shown until it is sent or withdrawn. */
 export interface ChatDraft {
   callId: string;
   batchId: string;
   text: string;
+  /** Structured parts that will come with the reply. */
+  pending?: ChatPending[];
 }
 
 /**
@@ -14,9 +16,9 @@ export interface ChatDraft {
 export function applyDraft(drafts: ChatDraft[], d: ChatDraftUpdate): ChatDraft[] {
   if (d.state === 'discarded') return removeDraft(drafts, d.callId);
   const cur = drafts.find((x) => x.callId === d.callId);
-  if (!cur) return d.offset === 0 ? [...drafts, { callId: d.callId, batchId: d.batchId, text: d.text }] : drafts;
+  if (!cur) return d.offset === 0 ? [...drafts, { callId: d.callId, batchId: d.batchId, text: d.text, ...(d.pending ? { pending: d.pending } : {}) }] : drafts;
   if (d.offset !== cur.text.length) return drafts;
-  return drafts.map((x) => (x === cur ? { ...x, text: x.text + d.text } : x));
+  return drafts.map((x) => (x === cur ? { ...x, text: x.text + d.text, ...(d.pending ? { pending: d.pending } : {}) } : x));
 }
 
 export function removeDraft(drafts: ChatDraft[], callId: string): ChatDraft[] {

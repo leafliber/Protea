@@ -7,7 +7,8 @@ const target = process.env['PROTEA_URL'] ?? 'http://127.0.0.1:7788';
 export default defineConfig({
   plugins: [react()],
   base: './',
-  build: { outDir: 'dist', emptyOutDir: true, sourcemap: false, chunkSizeWarningLimit: 900 },
+  // Nothing is inlined as a data: URL: the console's CSP only loads fonts and scripts from its own files.
+  build: { outDir: 'dist', emptyOutDir: true, sourcemap: false, chunkSizeWarningLimit: 1600, assetsInlineLimit: 0 },
   server: {
     proxy: {
       '/api': { target, changeOrigin: false },

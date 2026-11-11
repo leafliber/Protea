@@ -13,7 +13,7 @@
 
 ```
 host → plugin : initialize { protocolVersion, pluginId, config, dataDir, hostDataDir, timezone, language, hostCapabilities, modelFacts, levelCap, allowedTriggers }
-plugin → host : result { protocolVersion, capabilities: { tools, events, envPrompt, runPhase, settled, shutdownVerify, approvals?, hooks?, chat?, login? }, displayName? }
+plugin → host : result { protocolVersion, capabilities: { tools, events, envPrompt, runPhase, settled, shutdownVerify, approvals?, hooks?, chat?, chatDrafts?, login? }, displayName? }
 host → plugin : tools/list {}            （capabilities.tools 为真时）
 host → plugin : start {}
 plugin → host : result {}
@@ -38,7 +38,8 @@ plugin → host : result {}
 | `health` | `{}` | `{ ok: boolean, detail? }` |
 | `shutdown/verify` | `{ language }` | `{ snapshot: object }` |
 | `approvals/request` | `{ id, tool, summary, reason?, expiresAt }`（需 capability） | `{ delivered: boolean }` |
-| `chat/send` | `{ text, replyTo?, sessionId?, batchId? }`（需 capability `chat` 与清单的 `chat` 块） | `{ ok, messageIds?, error? }` |
+| `chat/send` | `{ text, replyTo?, sessionId?, batchId?, callId?, images?: [{ handle, mime }], choices?: { options: [{ label, detail? }], multiple? }, widget?: { id, title, url? } }`（需 capability `chat` 与清单的 `chat` 块；后三项只在清单声明了对应能力时出现） | `{ ok, messageIds?, error? }` |
+| `chat/draft` | `{ callId, batchId, state: 'writing', text, pending?: ('images' \| 'choices' \| 'widget')[] }` 或 `{ callId, batchId, state: 'discarded' }`（通知；需 capability `chatDrafts` 与清单的 `chat.drafts`）。`text` 是到目前为止的全文 | — |
 | `http/request` | `{ hook, method, path, query, headers, bodyBase64 }`（需 capability） | `{ status, headers?, body? }` |
 | `login/start` · `login/status` · `login/cancel` | `{}`（需 capability `login` 与清单的 `login` 块） | `PluginLoginStatus`，立即返回 |
 | `login/submit` | `{ code }` | `PluginLoginStatus` |
@@ -67,6 +68,8 @@ plugin → host : result {}
 | `permissions/mode` | `{ senderKey, mode?, forMs? }` | `PermissionModeInfo`；不带 `mode` 只读取。`senderKey` 必须是本插件映射的主人，否则 `Unauthorized`；不带 `forMs` 的 `mode` 写成基线，`bypass` 必须带 `forMs` |
 | `login/complete` | `{ secrets: { NAME: value }, ownerSenderKey? }` | `{ ok }`；只在宿主发起的登录期间有效，否则 `-32007 Unauthorized`；秘密名必须在清单的 `secrets` 或 `optionalSecrets` 里。宿主存入秘密库，把 `ownerSenderKey` 写成本插件的主人（替换旧的），回复后重启插件 |
 | `approvals/decide` | `{ id, decision: 'approve' \| 'deny', senderKey, grantMs? }` | `{ ok, state?, message? }`；`grantMs`：同意时还在这段时间内放行同一组工具（上限 `permissions.grantMaxMs`）；`senderKey` 必须解析为本插件的主人，否则 `-32007 Unauthorized` |
+
+对话平台的答案走 `events/push`：类型 `chat.message`，`text` 是主人选的内容，`meta` 是 `{ answer: { to: <callId>, labels: [...] } }`（[17-chat-and-console.md](../10-architecture/17-chat-and-console.md) §3）。
 
 ## 5. 错误
 

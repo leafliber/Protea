@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import type { BlobImageRef } from '@protea/protocol';
 import { enc, post } from './api';
 
@@ -38,15 +39,35 @@ export async function uploadImage(file: Blob): Promise<BlobImageRef> {
   return post<BlobImageRef>('/api/blobs', { dataBase64: toBase64(await small.arrayBuffer()) });
 }
 
+/** The images of a message as thumbnails; one opens enlarged on the page. An expired image says so. */
 export function BlobImages({ images }: { images: BlobImageRef[] | undefined }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const [gone, setGone] = useState<string[]>([]);
+  useEffect(() => {
+    if (!open) return;
+    const on = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(null);
+    window.addEventListener('keydown', on);
+    return () => window.removeEventListener('keydown', on);
+  }, [open]);
   if (!images || images.length === 0) return null;
   return (
     <div className="blob-images">
-      {images.map((i) => (
-        <a key={i.handle} href={blobUrl(i.handle)} target="_blank" rel="noopener noreferrer" title="查看原图">
-          <img src={blobUrl(i.handle)} alt="图片" loading="lazy" />
-        </a>
-      ))}
+      {images.map((i) =>
+        gone.includes(i.handle) ? (
+          <span key={i.handle} className="blob-gone">
+            图片已不再保存
+          </span>
+        ) : (
+          <button key={i.handle} type="button" className="blob-thumb" title="放大" onClick={() => setOpen(i.handle)}>
+            <img src={blobUrl(i.handle)} alt="图片" loading="lazy" onError={() => setGone((old) => [...old, i.handle])} />
+          </button>
+        ),
+      )}
+      {open && (
+        <div className="lightbox" role="dialog" aria-label="放大的图片" onClick={() => setOpen(null)}>
+          <img src={blobUrl(open)} alt="图片" />
+        </div>
+      )}
     </div>
   );
 }

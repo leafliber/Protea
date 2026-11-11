@@ -1,15 +1,18 @@
 import { fileURLToPath } from 'node:url';
 import { isoInZone, type InprocPlugin, type PluginContext, type PushResult } from '@protea/core';
-import { CHAT_MESSAGE_EVENT, type ApprovalRequestParams, type ChatPlatformDecl, type ChatSendResult } from '@protea/protocol';
+import { CHAT_MESSAGE_EVENT, type ApprovalRequestParams, type ChatAnswer, type ChatPlatformDecl, type ChatSendResult } from '@protea/protocol';
 
 export interface WebchatMessageOptions {
   senderKey: string;
   trigger?: 'flush' | 'interrupt';
   /** Images stored with POST /api/blobs. */
   blobs?: Array<{ handle: string; mime: string }>;
+  /** The message answers the choices of a reply. */
+  answer?: ChatAnswer;
 }
 
-const PLATFORM: ChatPlatformDecl = { displayName: 'Web chat', markdown: 'basic', maxChars: 20_000 };
+/** The chat window shows everything a reply can carry; it reads drafts from the live stream itself. */
+const PLATFORM: ChatPlatformDecl = { displayName: 'Web chat', markdown: 'full', maxChars: 20_000, images: true, choices: true, widgets: true, drafts: {} };
 
 /**
  * The built-in chat platform: the browser's chat window and `protea chat`. Input comes from
@@ -25,7 +28,6 @@ export class WebchatPlugin implements InprocPlugin {
 
   readonly chat = {
     ...PLATFORM,
-    drafts: true,
     send: (): ChatSendResult => (this.ctx ? { ok: true } : { ok: false, error: 'the web chat is not running' }),
   };
 
@@ -48,6 +50,7 @@ export class WebchatPlugin implements InprocPlugin {
       text,
       senderKey: opts.senderKey,
       ...(opts.blobs?.length ? { blobs: opts.blobs } : {}),
+      ...(opts.answer ? { meta: { answer: opts.answer } } : {}),
     });
   }
 

@@ -341,6 +341,18 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 
 未验证：真实模型下的使用与 DeepSeek 的图片格式（T12）。
 
+### 对话的富内容与平台能力（2026-11-11）
+
+方案见 [09-chat-rich-display.md](09-chat-rich-display.md)，决策见 [ADR-0018](../20-decisions/ADR-0018-rich-chat-content-and-widget-sandbox.md)。
+- 渲染：网页的回复换成 `react-markdown` 管线，支持表格、嵌套与任务列表、提示框、代码高亮、` ```mermaid ` 图、`$$` 公式；流式时写完的块不重排；重的部分按需加载。
+- `chat_send` 增加 `images`、`choices`、`widget`，都是平台声明的能力，工具描述里有按声明生成的平台能力说明；不匹配时回执失败并说明。
+- 小组件：模型写的 HTML 只在不透明源的沙箱外壳里运行（`/widget-frame.html`），主页面的 CSP 只写明 `frame-src 'self'`；`chat.widgets` 是总开关。
+- 进程外平台：`chat/draft` 通知（能力位 `chatDrafts`）、`chat/send` 的新字段、`meta.answer`；TS 与 Python SDK、一致性检查、`FakeHost`；示例连接器 `examples/plugins/ts-chat`。
+- 存储：迁移 9（`outputs.meta`、表 `widgets`）。只读账号可以读对话里出现过的图片。
+- 测试 +26，共 546 个通过；`scripts/widget-escape-probe.mjs` 在 Chrome 157 里 25 项全部通过。
+
+未验证：真实模型是否会恰当地使用表格、图、选项和小组件；Firefox 与 Safari 里的沙箱行为；Telegram 与微信没有接入新能力（T16）。已知缺口：WebRTC 不受 CSP 约束（[14-security-and-permissions.md](../10-architecture/14-security-and-permissions.md) §8.1）。
+
 ### 权限模式与 auto 判断模型（2026-11-10）
 
 决策见 [ADR-0015](../20-decisions/ADR-0015-permission-modes-and-auto-review.md)。

@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-__all__ = ["Plugin", "Tool", "ToolContext", "Host", "RpcError", "run", "PROTOCOL_VERSION"]
+__all__ = ["Plugin", "Tool", "ToolContext", "Host", "RpcError", "run", "chat_answer", "PROTOCOL_VERSION"]
 
 PROTOCOL_VERSION = 1
 
@@ -90,9 +90,22 @@ class Plugin:
     def on_chat_send(self, host: "Host", req: Dict[str, Any]) -> Dict[str, Any]:
         """Override to be a chat platform (with the manifest block ``chat``): deliver ``req["text"]`` to the owner.
 
+        ``req`` carries ``images``, ``choices`` and ``widget`` only when the manifest block declares them, and
+        ``callId``, the id of this message. With ``choices``, push the owner's answer back as a ``chat.message``
+        whose ``meta`` is ``chat_answer(req["callId"], labels)``.
+
         Return ``{"ok": True, "messageIds": [...]}`` or ``{"ok": False, "error": "why"}``.
         """
         raise NotImplementedError
+
+    def on_chat_draft(self, host: "Host", draft: Dict[str, Any]) -> None:
+        """Override to show a reply while it is written (with ``chat.drafts`` in the manifest).
+
+        ``draft["state"]`` is ``"writing"`` (``draft["text"]`` is all the text so far) or ``"discarded"`` (the
+        preview must disappear). A ``chat/send`` with the same ``callId`` replaces the preview. Only declare
+        drafts on a platform that can delete or edit what it showed.
+        """
+        pass
 
     def health(self, host: "Host") -> Dict[str, Any]:
         return {"ok": True}
@@ -254,6 +267,11 @@ class Host:
         return os.environ.get(name)
 
 
+def chat_answer(to: str, labels: List[str]) -> Dict[str, Any]:
+    """The ``meta`` of the ``chat.message`` that answers the choices of the message ``to`` (its ``callId``)."""
+    return {"answer": {"to": to, "labels": list(labels)}}
+
+
 def _overrides(plugin: Plugin, name: str) -> bool:
     return getattr(type(plugin), name) is not getattr(Plugin, name)
 
@@ -281,6 +299,7 @@ def run(plugin: Plugin, max_workers: int = 8) -> None:
                 "envPrompt": _overrides(plugin, "env_prompt_vars"),
                 "settled": _overrides(plugin, "on_events_settled"),
                 "chat": _overrides(plugin, "on_chat_send"),
+                "chatDrafts": _overrides(plugin, "on_chat_draft"),
             },
         }
         if plugin.display_name:
@@ -339,6 +358,9 @@ def run(plugin: Plugin, max_workers: int = 8) -> None:
         except Exception as exc:  # the model gets the reason as a failed receipt
             return {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
 
+    def h_chat_draft(params: Dict[str, Any]) -> None:
+        plugin.on_chat_draft(host, params or {})
+
     def h_health(_params: Any) -> Dict[str, Any]:
         return plugin.health(host)
 
@@ -352,6 +374,7 @@ def run(plugin: Plugin, max_workers: int = 8) -> None:
         "env/prompt": h_env_prompt,
         "events/settled": h_settled,
         "chat/send": h_chat_send,
+        "chat/draft": h_chat_draft,
         "run/phase": lambda _p: None,
         "health": h_health,
         "shutdown/verify": lambda _p: {"snapshot": {}},

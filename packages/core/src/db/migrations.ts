@@ -273,4 +273,20 @@ CREATE TABLE approval_grants (
 CREATE INDEX ix_grants_family ON approval_grants(family, expires_ms);
 `,
   },
+  {
+    version: 9,
+    name: 'chat-rich-content',
+    // What a reply carries besides its text (images, choices, a widget), and the widgets themselves.
+    sql: `
+ALTER TABLE outputs ADD COLUMN meta TEXT;
+CREATE TABLE widgets (
+  id          TEXT PRIMARY KEY,
+  title       TEXT NOT NULL,
+  code        TEXT NOT NULL,
+  session_id  TEXT,
+  batch_id    TEXT,
+  created_at  TEXT NOT NULL
+);
+`,
+  },
 ];

@@ -1,0 +1,13 @@
+{
+  "id": "ts-chat",
+  "kind": "connector",
+  "api": 1,
+  "version": "0.1.0",
+  "displayName": "File chat (TypeScript example)",
+  "description": "Example chat platform written with the TypeScript SDK: the conversation lives in two files. It takes everything a reply can carry: drafts, images, choices and widgets.",
+  "runtime": { "exec": "node", "args": ["dist/main.js"], "dev": { "args": ["src/main.ts"] } },
+  "level": 1,
+  "triggers": ["flush"],
+  "envPrompt": "./ENV_PROMPT.md",
+  "chat": { "displayName": "File chat", "markdown": "full", "maxChars": 20000, "images": true, "choices": true, "widgets": true, "drafts": { "minIntervalMs": 250 } }
+}

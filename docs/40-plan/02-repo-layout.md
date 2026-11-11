@@ -71,7 +71,7 @@ Protea/
 │   ├── cli/                     `protea` 命令（serve 直接启动守护进程；dev-plugin 本地运行插件；logq、migrate、healthcheck、backup、restore、replay 直接用数据目录（admin.ts）；其余经 HTTP API / SSE / WebSocket）
 │   └── web/                     @protea/web：网页（Vite + React；App.tsx 登录与路由，pages/Chat.tsx 是对话窗口（#/），Console.tsx 是控制台外壳（#/console/…），pages/ 其余每页一个文件，components/ 通用组件、图标与 JSON Schema 表单，live.ts 是唯一的 WebSocket 连接）
 ├── sdks/python/protea_plugin/   Python 插件 SDK（宿主放进 Python 插件的 PYTHONPATH）
-├── examples/plugins/            py-notes（Python）、ts-notes（TypeScript）示例插件与一致性探针
+├── examples/plugins/            py-notes（Python）、ts-notes（TypeScript）示例插件与一致性探针；ts-chat：示例对话平台（草稿、图片、选项、小组件）
 └── docker/
     ├── entrypoint.sh            容器入口：准备 /data、降权、迁移、exec 守护进程（M6）
     ├── docker-compose.yml       示例部署，tls 档带 Caddy（M6），sandbox 档带 shell 容器

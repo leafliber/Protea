@@ -9,6 +9,8 @@ import {
   type PermissionModeInfo,
   type BlobGetResult,
   type BlobPutResult,
+  type ChatAnswer,
+  type ChatDraftParams,
   type ChatSendParams,
   type ChatSendResult,
   type ConfigChangedParams,
@@ -107,7 +109,22 @@ export interface PluginDefinition<C = Record<string, unknown>> {
   /** Deliver an approval request to the owner. Declaring it advertises the `approvals` capability. */
   onApprovalRequest?(host: Host<C>, req: ApprovalRequestParams): Promise<{ delivered: boolean }> | { delivered: boolean };
   /** Makes the plugin a chat platform (with the manifest block `chat`): `chat_send` reaches the owner through it. */
-  chat?: { send(host: Host<C>, req: ChatSendParams): Promise<ChatSendResult> | ChatSendResult };
+  chat?: {
+    /**
+     * Deliver a message to the owner. `req` carries `images`, `choices` and `widget` only when the
+     * manifest block `chat` declares them. With `choices`, push the owner's answer back as a
+     * `chat.message` whose `meta` is `chatAnswer(req.callId, labels)`, and stop taking answers to
+     * older choices once a newer message or newer choices follow.
+     */
+    send(host: Host<C>, req: ChatSendParams): Promise<ChatSendResult> | ChatSendResult;
+    /**
+     * A reply while it is being written (`chat.drafts` in the manifest; declaring this advertises
+     * `chatDrafts`). `writing` carries all the text so far. A `send` with the same `callId`
+     * replaces the preview; `discarded` means it must disappear, so only declare drafts on a
+     * platform that can delete or edit what it showed.
+     */
+    draft?(host: Host<C>, d: ChatDraftParams): void;
+  };
   /** Webhook names this plugin serves under `/hooks/<name>`, decided from the initial config. */
   hooks?(config: C): string[];
   onHttpRequest?(host: Host<C>, req: HttpRequestParams): Promise<HttpResponse> | HttpResponse;
@@ -242,6 +259,7 @@ export function servePlugin<C>(peer: RpcPeer, def: PluginDefinition<C>, opts: Se
           shutdownVerify: def.shutdownVerify !== undefined,
           ...(def.onApprovalRequest ? { approvals: true } : {}),
           ...(def.chat ? { chat: true } : {}),
+          ...(def.chat?.draft ? { chatDrafts: true } : {}),
           ...(def.login ? { login: true } : {}),
           ...(hooks.length > 0 ? { hooks } : {}),
           ...def.capabilities,
@@ -294,6 +312,10 @@ export function servePlugin<C>(peer: RpcPeer, def: PluginDefinition<C>, opts: Se
         return { ok: false, error: err instanceof Error ? err.message : String(err) };
       }
     })
+    .handle(HOST_TO_PLUGIN.chatDraft, (params) => {
+      def.chat?.draft?.(host, params as ChatDraftParams);
+      return {};
+    })
     .handle(HOST_TO_PLUGIN.loginStart, () => needLogin().start(host))
     .handle(HOST_TO_PLUGIN.loginStatus, () => needLogin().status(host))
     .handle(HOST_TO_PLUGIN.loginSubmit, (params) => needLogin().submit(host, (params as LoginSubmitParams).code))
@@ -318,4 +340,9 @@ export function servePlugin<C>(peer: RpcPeer, def: PluginDefinition<C>, opts: Se
       if (!def.onHttpRequest) throw new RpcError(RPC_ERRORS.MethodNotFound, 'hooks are not supported');
       return def.onHttpRequest(host, params as HttpRequestParams);
     });
+}
+
+/** The `meta` of the `chat.message` that answers the choices of the message `to` (its `callId`). */
+export function chatAnswer(to: string, labels: string[]): { answer: ChatAnswer } {
+  return { answer: { to, labels } };
 }

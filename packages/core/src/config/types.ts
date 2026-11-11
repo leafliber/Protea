@@ -5,6 +5,7 @@ import type { DreamSettings, IdleCompactionSettings } from '../maintenance/setti
 import type { McpSettings } from '../mcp/settings.js';
 import type { BoardSettings } from '../memory/settings.js';
 import type { VisionSettings } from '../blobs/settings.js';
+import type { ChatSettings } from '../chat/settings.js';
 import type { PermissionSettings } from '../permissions/policy.js';
 import type { PluginHostSettings } from '../plugins/settings.js';
 
@@ -202,6 +203,8 @@ export interface ProteaConfig {
   context: ContextSettings;
   memory: MemorySettings;
   vision: VisionSettings;
+  /** What a chat reply may carry (docs/40-plan/09-chat-rich-display.md). */
+  chat: ChatSettings;
   /** Persona directory, relative to the data directory. */
   persona: { dir: string };
   /**

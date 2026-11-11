@@ -160,7 +160,7 @@ stateDiagram-v2
 开发工具：
 - `protea dev-plugin <dir>`：起一个最小宿主，打印插件推送的事件与日志，交互式执行 `tools`、`call <tool> <json>`、`config <json>`、`settle`、`env`、`health`。
 - `protea dev-plugin <dir> --check`：运行 14 项协议一致性检查（握手、工具声明、健康检查、错误码、事件合法性、取消、stdout 只含协议、自行退出等）；插件目录里可选的 `protea.conformance.json` 提供要试调的工具与期望输出。
-- 示例：`examples/plugins/py-notes`（Python）与 `examples/plugins/ts-notes`（TypeScript），行为相同。
+- 示例：`examples/plugins/py-notes`（Python）与 `examples/plugins/ts-notes`（TypeScript），行为相同；`examples/plugins/ts-chat` 是一个对话平台的示例（[17-chat-and-console.md](17-chat-and-console.md) §3）。
 
 任何语言只要实现协议即可（[../30-specs/03-plugin-protocol.md](../30-specs/03-plugin-protocol.md)）。
 

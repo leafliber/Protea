@@ -1,0 +1,191 @@
+<!doctype html>
+<!--
+  The sandbox that inline widgets run in (docs/10-architecture/14-security-and-permissions.md §8).
+  Served with "sandbox allow-scripts" and "default-src 'none'": this document has an opaque
+  origin and no network. It holds no data. The chat window hands it the widget's code once,
+  after this page says it is ready, and treats everything it says back as untrusted.
+-->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Protea widget</title>
+    <style>
+      :root {
+        --text: #19191c;
+        --muted: #64646e;
+        --faint: #9696a0;
+        --line: #e4e4e9;
+        --line-strong: #d3d3da;
+        --panel: #ffffff;
+        --panel-2: #f2f2f4;
+        --accent: #b83b62;
+        --accent-soft: #f9e7ed;
+        --accent-text: #ffffff;
+        --good: #1d7a49;
+        --warn: #8f5f00;
+        --bad: #b3261e;
+        --info: #22599e;
+        --sans: system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        --radius: 8px;
+        color-scheme: light;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --text: #ececf0;
+          --muted: #a3a3ad;
+          --faint: #73737d;
+          --line: #2a2a30;
+          --line-strong: #3a3a42;
+          --panel: #18181b;
+          --panel-2: #212125;
+          --accent: #ea7499;
+          --accent-soft: #3b212b;
+          --accent-text: #1b0c12;
+          --good: #6cc792;
+          --warn: #e5b45a;
+          --bad: #f08a80;
+          --info: #85b3ec;
+          color-scheme: dark;
+        }
+      }
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        background: transparent;
+      }
+      body {
+        display: flow-root;
+        padding: 12px;
+        color: var(--text);
+        font: 14px/1.6 var(--sans);
+        overflow-wrap: anywhere;
+      }
+      button,
+      input,
+      select,
+      textarea {
+        font: inherit;
+        color: inherit;
+      }
+      button {
+        background: var(--panel-2);
+        border: 1px solid var(--line-strong);
+        border-radius: var(--radius);
+        padding: 5px 12px;
+        cursor: pointer;
+      }
+      input[type='text'],
+      input[type='number'],
+      select,
+      textarea {
+        background: var(--panel);
+        border: 1px solid var(--line-strong);
+        border-radius: var(--radius);
+        padding: 5px 8px;
+      }
+      svg {
+        max-width: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      (function () {
+        'use strict';
+        var host = window.parent;
+        if (host === window) return;
+        // The address is still this host's although the origin is opaque: messages go nowhere else.
+        var target = new URL(location.href).origin;
+        var send = function (m) {
+          host.postMessage(m, target);
+        };
+        var rendered = false;
+
+        // Browsers do not hold WebRTC to this page's CSP, and it can carry data out. Two things make it
+        // hard to reach, neither of which is what contains a widget (see the security document):
+        // the constructors are taken off this window, and nested frames, where a new document would
+        // have them again, are removed as soon as they are inserted. A widget has no use for either.
+        ['RTCPeerConnection', 'webkitRTCPeerConnection', 'RTCDataChannel', 'RTCSessionDescription', 'RTCIceCandidate'].forEach(function (name) {
+          try {
+            Object.defineProperty(window, name, { value: undefined, writable: false, configurable: false });
+          } catch (e) {
+            /* already gone */
+          }
+        });
+        var NESTED = 'iframe,frame,object,embed,fencedframe,portal';
+        var removeChild = Node.prototype.removeChild;
+        var matches = Element.prototype.matches;
+        var queryAll = Element.prototype.querySelectorAll;
+        var queryAllIn = DocumentFragment.prototype.querySelectorAll;
+        var observe = MutationObserver.prototype.observe;
+        var attachShadow = Element.prototype.attachShadow;
+        var strip = function (node) {
+          var found = [];
+          if (node.nodeType === 1) {
+            if (matches.call(node, NESTED)) found.push(node);
+            found.push.apply(found, queryAll.call(node, NESTED));
+          } else if (node.nodeType === 11) {
+            found.push.apply(found, queryAllIn.call(node, NESTED));
+          }
+          for (var i = 0; i < found.length; i++) if (found[i].parentNode) removeChild.call(found[i].parentNode, found[i]);
+        };
+        var watcher = new MutationObserver(function (records) {
+          for (var i = 0; i < records.length; i++) for (var j = 0; j < records[i].addedNodes.length; j++) strip(records[i].addedNodes[j]);
+        });
+        observe.call(watcher, document, { childList: true, subtree: true });
+        Element.prototype.attachShadow = function (init) {
+          var root = attachShadow.call(this, init);
+          observe.call(watcher, root, { childList: true, subtree: true });
+          return root;
+        };
+
+        /** Put text into the owner's input box. It is not sent: the owner decides. */
+        window.sendPrompt = function (text) {
+          send({ type: 'prompt', text: String(text) });
+        };
+
+        window.addEventListener('error', function (e) {
+          send({ type: 'error', message: String((e && e.message) || 'error') });
+        });
+        window.addEventListener('unhandledrejection', function (e) {
+          send({ type: 'error', message: String((e && e.reason && e.reason.message) || (e && e.reason) || 'error') });
+        });
+
+        var last = -1;
+        var report = function () {
+          var h = Math.ceil(document.body.getBoundingClientRect().height);
+          if (h === last) return;
+          last = h;
+          send({ type: 'size', height: h });
+        };
+
+        window.addEventListener('message', function (e) {
+          if (e.source !== host || rendered) return;
+          var d = e.data;
+          if (!d || d.type !== 'render' || typeof d.code !== 'string') return;
+          rendered = true;
+          var root = document.getElementById('root');
+          // Scripts in a fragment made this way run when it is inserted, in order.
+          root.appendChild(document.createRange().createContextualFragment(d.code));
+          if (window.ResizeObserver) new ResizeObserver(report).observe(document.body);
+          window.addEventListener('load', report);
+          report();
+          setTimeout(function () {
+            report();
+            send({ type: 'rendered' });
+          }, 0);
+        });
+
+        send({ type: 'ready' });
+      })();
+    </script>
+  </body>
+</html>

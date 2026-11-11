@@ -16,7 +16,7 @@ import {
   type StatusResponse,
   type StreamMessage,
 } from '@protea/protocol';
-import { BROWSER_SERVER_ID, PermissionModeError, type BlobStore, type PermissionModes } from '@protea/core';
+import { BROWSER_SERVER_ID, PermissionModeError, type BlobStore, type PermissionModes, type WidgetStore } from '@protea/core';
 import {
   BoardError,
   MemoryError,
@@ -56,6 +56,8 @@ export interface ControlDeps extends Omit<OpsDeps, 'store' | 'audit'> {
   store: EventStore;
   /** Stored images (GET and POST /api/blobs). */
   blobs?: BlobStore;
+  /** Inline widgets of chat replies (GET /api/widgets/:id). */
+  widgets?: WidgetStore;
   /** The MCP server entry of the bundled browser. */
   browserPreset?: (o: { noSandbox?: boolean }) => Record<string, unknown>;
   /** False in an image without the browser. */
@@ -280,7 +282,18 @@ export function createControlApp(d: ControlDeps): Hono {
   });
 
   // Images: admins only (auth.ts), like the memory they may hold.
+  // A widget's code, for the chat window to hand to its sandbox frame. Always JSON: nothing serves it as a page.
+  app.get('/api/widgets/:id', (c) => {
+    const found = d.widgets?.get(c.req.param('id'));
+    if (!found) return c.json({ error: { code: 'not_found', message: 'no such widget' } }, 404);
+    return c.json(found, 200, { 'cache-control': 'private, max-age=86400, immutable', 'x-content-type-options': 'nosniff' });
+  });
+
   app.get('/api/blobs/:handle', (c) => {
+    // A read-only caller sees the images of the conversation it may read, and no others.
+    if (principal(c).role === 'readonly' && !d.chat?.showsImage(c.req.param('handle'))) {
+      return c.json({ error: { code: 'forbidden', message: 'a read-only account can only read images that appear in a conversation' } }, 403);
+    }
     const found = d.blobs?.get(c.req.param('handle'));
     if (!found) return c.json({ error: { code: 'not_found', message: 'no such image' } }, 404);
     return new Response(new Uint8Array(found.bytes), {
@@ -312,7 +325,11 @@ export function createControlApp(d: ControlDeps): Hono {
     if (stored.includes(null)) return c.json({ error: { code: 'bad_request', message: 'an image is not stored; upload it with POST /api/blobs first' } }, 400);
     if (b.trigger !== undefined && b.trigger !== 'flush' && b.trigger !== 'interrupt') return c.json({ error: { code: 'bad_request', message: 'trigger must be flush or interrupt' } }, 400);
     const refs = stored.map((i) => ({ handle: (i as NonNullable<typeof i>).handle, mime: (i as NonNullable<typeof i>).mime }));
-    const r = d.pushChat({ text: b.text, ...(b.trigger ? { trigger: b.trigger } : {}), ...(refs.length > 0 ? { images: refs } : {}) }, actorOf(principal(c)));
+    const a = b.answer as { to?: unknown; labels?: unknown } | undefined;
+    const okAnswer = a === undefined || (typeof a === 'object' && a !== null && typeof a.to === 'string' && a.to.length <= 256 && Array.isArray(a.labels) && a.labels.length <= 6 && a.labels.every((l) => typeof l === 'string' && l.length <= 40));
+    if (!okAnswer) return c.json({ error: { code: 'bad_request', message: 'answer must be { to, labels }' } }, 400);
+    const answer = a === undefined ? undefined : { to: a.to as string, labels: a.labels as string[] };
+    const r = d.pushChat({ text: b.text, ...(b.trigger ? { trigger: b.trigger } : {}), ...(refs.length > 0 ? { images: refs } : {}), ...(answer ? { answer } : {}) }, actorOf(principal(c)));
     if (!r.ok || r.cursor === undefined) return c.json({ error: { code: 'rejected', message: 'message rejected', details: r.errors ?? [] } }, 422);
     const res: PushEventResponse = { cursor: r.cursor, effectiveLevel: r.effectiveLevel ?? 1, effectiveTrigger: r.effectiveTrigger ?? 'flush', deduped: r.deduped ?? false, warnings: r.warnings };
     return c.json(res, 201);

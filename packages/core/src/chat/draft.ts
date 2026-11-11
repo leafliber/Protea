@@ -1,4 +1,4 @@
-import type { ChatDraftUpdate } from '@protea/protocol';
+import { CHAT_PENDING, type ChatDraftUpdate, type ChatPending } from '@protea/protocol';
 import type { ToolInputDelta } from '../providers/types.js';
 import { CHAT_SEND } from './hub.js';
 
@@ -66,19 +66,21 @@ function skipValue(s: string, start: number): number {
 }
 
 /**
- * The top-level string fields of a JSON object that may be cut off anywhere. A value's text only
- * grows as more of the object arrives. Stops quietly at anything malformed: the tool's real input
- * is parsed and validated when the call is complete, and this is only a preview of it.
+ * The top-level fields of a JSON object that may be cut off anywhere: the string ones with their
+ * text so far, and the name of every field whose value has begun. A value's text only grows as
+ * more of the object arrives. Stops quietly at anything malformed: the tool's real input is
+ * parsed and validated when the call is complete, and this is only a preview of it.
  */
-export function partialStringFields(json: string): Map<string, PartialField> {
-  const out = new Map<string, PartialField>();
+export function partialObject(json: string): { strings: Map<string, PartialField>; started: string[] } {
+  const strings = new Map<string, PartialField>();
+  const started: string[] = [];
   const skip = (from: number): number => {
     let i = from;
     while (i < json.length && /\s/.test(json[i] as string)) i++;
     return i;
   };
   let i = skip(0);
-  if (json[i] !== '{') return out;
+  if (json[i] !== '{') return { strings, started };
   i = skip(i + 1);
   while (i < json.length && json[i] !== '}') {
     if (json[i] === ',') {
@@ -92,9 +94,10 @@ export function partialStringFields(json: string): Map<string, PartialField> {
     if (json[i] !== ':') break;
     i = skip(i + 1);
     if (i >= json.length) break;
+    started.push(key.value);
     if (json[i] === '"') {
       const v = readString(json, i);
-      out.set(key.value, { value: v.value, complete: v.complete });
+      strings.set(key.value, { value: v.value, complete: v.complete });
       if (!v.complete) break;
       i = skip(v.end);
     } else {
@@ -103,7 +106,12 @@ export function partialStringFields(json: string): Map<string, PartialField> {
       i = skip(end);
     }
   }
-  return out;
+  return { strings, started };
+}
+
+/** The top-level string fields of a JSON object that may be cut off anywhere. */
+export function partialStringFields(json: string): Map<string, PartialField> {
+  return partialObject(json).strings;
 }
 
 interface Call {
@@ -111,6 +119,8 @@ interface Call {
   json: string;
   platform: string | null;
   sent: number;
+  /** The structured parts announced so far, joined. */
+  pending: string;
 }
 
 /**
@@ -134,7 +144,7 @@ export class ChatDraftStream {
     if (!CHAT_SEND.startsWith(d.name)) return;
     let c = this.calls.get(d.id);
     if (!c) {
-      c = { name: d.name, json: '', platform: null, sent: 0 };
+      c = { name: d.name, json: '', platform: null, sent: 0, pending: '' };
       this.calls.set(d.id, c);
     }
     c.name = d.name;
@@ -149,14 +159,16 @@ export class ChatDraftStream {
     this.stopTimer();
     for (const [callId, c] of this.calls) {
       if (c.name !== CHAT_SEND) continue;
-      const fields = partialStringFields(c.json);
+      const { strings: fields, started } = partialObject(c.json);
       const platform = fields.get('platform');
       if (!platform?.complete || !this.shows(platform.value)) continue;
       c.platform = platform.value;
       const text = fields.get('text')?.value ?? '';
-      if (text.length <= c.sent) continue;
-      this.emit({ state: 'writing', batchId: this.batchId, callId, platform: c.platform, offset: c.sent, text: text.slice(c.sent) });
-      c.sent = text.length;
+      const pending = CHAT_PENDING.filter((k) => started.includes(k)) as ChatPending[];
+      if (text.length <= c.sent && pending.join() === c.pending) continue;
+      this.emit({ state: 'writing', batchId: this.batchId, callId, platform: c.platform, offset: c.sent, text: text.slice(c.sent), ...(pending.length > 0 ? { pending } : {}) });
+      c.sent = Math.max(c.sent, text.length);
+      c.pending = pending.join();
     }
   }
 
@@ -164,7 +176,7 @@ export class ChatDraftStream {
   discard(): void {
     this.stopTimer();
     for (const [callId, c] of this.calls) {
-      if (c.platform !== null && c.sent > 0) this.emit({ state: 'discarded', batchId: this.batchId, callId, platform: c.platform });
+      if (c.platform !== null && (c.sent > 0 || c.pending !== '')) this.emit({ state: 'discarded', batchId: this.batchId, callId, platform: c.platform });
     }
     this.calls.clear();
   }
