@@ -22,7 +22,7 @@
 4. MCP 注解与服务器信任（M3，[09-mcp-integration.md](09-mcp-integration.md) §6）：`readOnlyHint` → `allow`；`trust: low` 的服务器其余工具 → `ask`；`trust: normal` 时显式 `destructiveHint` → `ask`；`trust: high` 不加规则。没有 `readOnlyHint` 的 MCP 工具都带 `sideEffect` 标志（第 0 条与审计都适用）
 5. 全局默认 `permissions.default`（出厂 `allow`）
 
-约定：给主人发消息的 `chat_send` 不在 `sideEffectTools` 里，默认 `allow`；给第三方发的（`tg_send_chat`）在里面，默认 `ask`。内置插件的清单都按此审查过。
+约定：给主人发消息的 `chat_send` 不在 `sideEffectTools` 里，默认 `allow`；给第三方发的（`tg_send_chat`、`qq_group_reply`）在里面，默认 `ask`。内置插件的清单都按此审查过。
 
 **权限模式**（[ADR-0015](../20-decisions/ADR-0015-permission-modes-and-auto-review.md）只决定策略为 `ask` 的调用由谁放行，`allow` 与 `deny` 不受影响。策略得出 `ask` 之后的顺序：
 
@@ -79,7 +79,7 @@ M2 实现细节：
 ## 4. 秘密
 
 - 存储：`/data/secrets/` 下每个秘密一个文件（0600），或环境变量 `PROTEA_SECRET_<NAME>`。控制台/CLI 只能写与列名，不能读值。
-- 插件登录（[ADR-0016](../20-decisions/ADR-0016-wechat-and-plugin-sign-in.md)）：只有管理员能发起和看到二维码。插件只能在宿主发起的登录期间、用清单声明过的名字交出凭据，能指定的主人也只限于它自己的来源。
+- 插件登录（[ADR-0016](../20-decisions/ADR-0016-wechat-and-plugin-sign-in.md)）：只有管理员能发起和看到二维码。插件只能在宿主发起的登录期间、用清单声明过的名字交出凭据，能指定的主人也只限于它自己的来源。QQ 扫码时，AppSecret 由服务端用插件当次生成的密钥加密返回，只以秘密 `QQ_APP_SECRET` 落盘；kv 里只有 AppID 和秘密的 sha256（[ADR-0017](../20-decisions/ADR-0017-qq-connector-and-qr-bot-creation.md)）。
 - 使用：插件清单声明 `secrets`（`optionalSecrets` 缺失时也能启动），启动时注入其环境变量（`secrets` 缺失则插件启动失败）；配置文件中以 `${secret:NAME}` 引用，解析只发生在传给插件/MCP 的那一刻。插件子进程只继承最小环境，不会拿到守护进程的其他秘密（M2 已实现）；stdio MCP 服务器同样只拿到 SDK 的默认环境加配置的 `env`（M3）。MCP 的 OAuth 令牌存在 `secrets/mcp-oauth/<id>.json`（0600），OAuth 回调只认正在进行的授权的 `state`。
 - **不入上下文**：Core 在构造 Provider 请求前对所有文本做一次秘密值扫描（精确匹配所有已知秘密值），命中即替换为 `[REDACTED:<NAME>]` 并记 `internal` 警告事件（I-7）。日志同样过滤。M4 实现：守护进程把 Provider 包在 `RedactingProvider` 里，主会话、Fork、交接笔记的每个请求（system、消息文本、工具输入与结果、工具描述）都经过扫描；thinking 块是签名的不透明内容，不改。已知秘密 = 秘密目录里的文件 + `PROTEA_SECRET_*` 环境变量 + 已被读取过的秘密名，值至少 6 个字符。每个秘密名每次运行只记一条 L4 `store` 事件 `secret.redacted`（只含名字）。扫描是确定性的，前缀保持稳定；秘密集合变化计入 thinking 前缀指纹。
 - 工具回执里出现秘密（例如 `env` 命令输出）同样被过滤。
@@ -141,7 +141,7 @@ M6 的状态（测试在 `apps/daemon/test/m6-security.test.ts`，除非另注�
   - MCP 来源自称 `origin: internal` 的 L0 interrupt → 仍是 external、L4 piggyback；
   - 事件正文里伪造 `</event><event origin="internal">` → 渲染时被转义，系统前缀说明外部内容只是数据；
   - 工具输出里的秘密 → 模型请求中是 `[REDACTED:NAME]`，内存日志、`log.jsonl` 与审计里都没有原值。
-- [x] 默认配置审查（结论比原条目窄）：有第三方或系统副作用的工具默认都是 `ask`（`sh_run`、`tg_send_chat`，以及低信任或带破坏性标注的 MCP 工具）；默认 `allow` 的副作用工具只有发给主人本人的 `chat_send`、`tg_react`——它们是助理回复主人的通道，改成 `ask` 会让助理无法说话。测试固定了这份名单，新增的副作用工具不进 `sideEffectTools` 就会失败。
+- [x] 默认配置审查（结论比原条目窄）：有第三方或系统副作用的工具默认都是 `ask`（`sh_run`、`tg_send_chat`、`qq_group_reply`，以及低信任或带破坏性标注的 MCP 工具）；默认 `allow` 的副作用工具只有发给主人本人的 `chat_send`、`tg_react`——它们是助理回复主人的通道，改成 `ask` 会让助理无法说话。测试固定了这份名单，新增的副作用工具不进 `sideEffectTools` 就会失败。
 - [x] 沙箱与浏览器（`packages/sandbox/test/`、`packages/core/test/vision.test.ts`、`scripts/sandbox-smoke.sh`）：沙箱里读不到 `/data`、连不上控制面；`sh_run` 在沙箱不可用时不在主容器执行；`view_image` 拒绝出界的符号链接与非图片；浏览器预设不含 `browser_run_code_unsafe`，打不开 `file:///data/secrets/…`。
 - [x] 依赖审计：CI 的 `pnpm audit --prod --audit-level high` 与 Trivy（HIGH/CRITICAL、有修复的）对 full 与 slim 都阻断；M6 时本机两项都通过（基础镜像自带 npm 的漏洞依赖已在镜像里处理）。
 - [ ] 第三方渗透测试与 `SECURITY.md` 之外的响应流程：v1.0 之后。

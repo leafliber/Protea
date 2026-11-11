@@ -113,6 +113,7 @@ describe('daemon', () => {
       'cron:running',
       'filewatch:loaded',
       'imap:loaded',
+      'qq:loaded',
       'rss:loaded',
       'shell:loaded',
       'telegram:loaded',

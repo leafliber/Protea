@@ -15,7 +15,7 @@
 | 人格 | `Persona` | 定义助理身份、行为准则、记忆布局与上下文合成规则的一组文件与钩子。 |
 | 记忆 | `Memory` | 人格的持久化内部状态（文件目录），对 Core 不透明。 |
 | 控制平面 | `ControlPlane` | HTTP API + WebSocket + Web 控制台 + CLI，用于运维与观察。 |
-| 对话平台 | `chat platform` | 声明了对话能力的连接器（内置 `webchat`，还有 `telegram`、`wechat`）。主人的消息是 `chat.message` 事件，回复用 `chat_send`，必须指定平台。 |
+| 对话平台 | `chat platform` | 声明了对话能力的连接器（内置 `webchat`，还有 `telegram`、`wechat`、`qq`）。主人的消息是 `chat.message` 事件，回复用 `chat_send`，必须指定平台。 |
 | 运行流 | `run stream` | 控制台上的完整过程时间线：事件、用户输入、上下文摘要、思考、正文、工具调用、发出的消息、调度动作。 |
 | 数据卷 | `/data` | 所有持久状态所在目录（配置、事件库、会话、记忆、插件、Skills）。 |
 

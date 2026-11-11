@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "appId": { "type": "string", "x-hot": false, "description": "AppID of a bot created by hand on q.qq.com, used with the secret QQ_APP_SECRET. Not needed after a QR sign-in, which brings its own." },
+    "groups": { "type": "boolean", "default": false, "x-hot": false, "description": "Deliver group messages that mention the bot and let the assistant answer in the group (qq_group_reply). Off: they are stored, not delivered." },
+    "stopWords": { "type": "array", "items": { "type": "string" }, "description": "Owner messages equal to one of these interrupt the current turn." },
+    "apiBase": { "type": "string", "default": "https://api.sgroup.qq.com", "x-hot": false, "description": "QQ Open Platform API base URL (for tests)." },
+    "tokenBase": { "type": "string", "default": "https://bots.qq.com", "x-hot": false, "description": "Access-token service base URL (for tests)." },
+    "bindBase": { "type": "string", "default": "https://q.qq.com", "x-hot": false, "description": "QR sign-in service base URL (for tests)." }
+  }
+}

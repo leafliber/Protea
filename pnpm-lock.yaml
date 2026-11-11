@@ -226,6 +226,25 @@ importers:
         specifier: ^3.9.0
         version: 3.9.0
 
+  plugins/qq:
+    dependencies:
+      '@protea/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      '@protea/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      '@tencent-connect/qqbot-nodejs':
+        specifier: 1.0.5
+        version: 1.0.5
+    devDependencies:
+      '@types/ws':
+        specifier: ^8.18.2
+        version: 8.18.2
+      ws:
+        specifier: ^8.22.1
+        version: 8.22.1
+
   plugins/rss:
     dependencies:
       '@protea/plugin-sdk':
@@ -608,6 +627,18 @@ packages:
 
   '@stablelib/base64@1.0.1':
     resolution: {integrity: sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ==}
+
+  '@tencent-connect/qqbot-nodejs@1.0.5':
+    resolution: {integrity: sha512-OAPGoZTtG3soI79lGNQ4YqdAe9xy+lYatUfzZyBPmjaRjH0uLjFeImffMlGVSmhfaM/wJQSIA2g1uZv3eorTRg==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      mpg123-decoder: ^1.0.3
+      silk-wasm: ^3.7.1
+    peerDependenciesMeta:
+      mpg123-decoder:
+        optional: true
+      silk-wasm:
+        optional: true
 
   '@tencent-weixin/openclaw-weixin@2.4.10':
     resolution: {integrity: sha512-qCN7rFtBK5BO/i5YGEJLdpC/8WQrm0dtPlQ0xNxku4RSyzGaRsiBoLVheU5hgpoOIBvfc5pUwKTktMbROLcIVg==}
@@ -1865,6 +1896,13 @@ snapshots:
       selderee: 0.12.0
 
   '@stablelib/base64@1.0.1': {}
+
+  '@tencent-connect/qqbot-nodejs@1.0.5':
+    dependencies:
+      ws: 8.22.1
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
 
   '@tencent-weixin/openclaw-weixin@2.4.10(openclaw@plugins+wechat+shims+openclaw)':
     dependencies:
