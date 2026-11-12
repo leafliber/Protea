@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { isImageBlock, isToolResultBlock, type ContentBlock, type Effort, type HandoffKind, type Level, type TranscriptMessage } from '@protea/protocol';
+import { isImageBlock, isToolResultBlock, type ContentBlock, type HandoffKind, type Level, type ModelRole, type TranscriptMessage } from '@protea/protocol';
 import { stripThinking } from '../context/prefix.js';
 import { isBoardText } from '../memory/board.js';
-import { MAX_MEMORY_FILE_BYTES, MEMORY_ROOT, type MemoryStore } from '../memory/store.js';
+import { CORE_FILES, MAX_MEMORY_FILE_BYTES, MEMORY_ROOT, type MemoryStore } from '../memory/store.js';
 import type { Logger } from '../observability/logger.js';
 import type { HandoffPlan, PersonaHooks } from '../persona/persona.js';
 import type { Provider, ProviderResponse } from '../providers/types.js';
@@ -124,20 +124,24 @@ function withoutBoard(msg: TranscriptMessage): TranscriptMessage {
 
 export const HANDOFF_NOTES_SYSTEM = `You write handoff notes for an always-on personal assistant. Its conversation is about to be compacted: afterwards it has these notes, its whiteboard, its memory files and its most recent messages, so whatever is not in the notes is gone from the conversation.
 
-Write Markdown with these sections, in this order, and keep every concrete detail (names, dates, times, amounts, exact wording of promises):
+Its resident memory (<memory_core>) is part of every request: the owner profile and the standing rules. Do not repeat what it already says.
+
+Write Markdown with these sections, in this order, and keep every concrete detail (names, dates, times, amounts, ids, exact wording of promises):
 
 ## In progress
 What the assistant was working on and how far it got.
 ## Commitments
-Promises and agreements made with the owner or others, with deadlines.
+Promises with a time or deadline: reminders, follow-ups, things owed to someone.
 ## Owner's recent instructions
-Requests, preferences and corrections the owner gave.
+One-off requests and answers the owner gave in this stretch.
 ## Pending
 Approvals, background forks, follow-ups or replies still awaited.
+## Durable, not yet saved
+Standing rules, preferences, corrections and lessons that should hold from now on and are not yet in <memory_core>. Each item one line, phrased as a rule. The memory consolidation moves them into the resident memory.
 ## Facts worth keeping
 Anything else the assistant will need.
 
-Carry over every item from the previous notes that still applies. Do not invent anything. Leave out a section only when it would be empty. Be concise: at most about 800 words. Write in the language the owner uses.`;
+Carry over every item from the previous notes that still applies, unless <memory_core> now says it. Do not invent anything. Leave out a section only when it would be empty. Be concise: at most about 800 words. Write in the language the owner uses. Do not think at length: write the notes.`;
 
 /** Fallback notes when the notes model is unavailable: the latest texts, verbatim. */
 export function mechanicalNotes(dropped: readonly TranscriptMessage[], reason: string): string {
@@ -167,11 +171,10 @@ export interface HandoffDeps {
   timezone: string;
   settings: () => HandoffSettings;
   hooks: () => PersonaHooks | null;
-  cheapEffort: () => Effort;
   /** Remove known secret values from text written to disk: the archive comes from the unredacted transcript. */
   redact?: (text: string) => string;
   /** What the notes request cost, attributed to `level`. */
-  onNotesUsage?: (response: ProviderResponse, level: Level) => void;
+  onNotesUsage?: (response: ProviderResponse, level: Level, role: ModelRole) => void;
 }
 
 /** Next main transcript name: main.0001.jsonl → main.0002.jsonl. */
@@ -211,6 +214,8 @@ export class Handoff {
       strict?: boolean;
       /** No batch is running: mark the new conversation so a restart does not resume it. */
       seal?: boolean;
+      /** Model role that writes the notes (default: cheap). */
+      notesRole?: ModelRole;
       /** The first message of the new conversation (the handoff notice). */
       notice?: (info: { notesPath: string; notes: string | null; dropped: number; kept: number }) => { content: ContentBlock[]; cursors?: number[]; batch?: string; boardRev?: number } | null;
     },
@@ -237,7 +242,7 @@ export class Handoff {
       const start = selectTailStart(messages, opts.mustKeepFrom, opts.limits.keep);
       if (start === 0) return null;
       const dropped = messages.slice(0, start);
-      const notes = await this.notes(dropped, transcript.previousNotes, opts.signal, opts.strict === true, opts.level ?? 2);
+      const notes = await this.notes(dropped, transcript.previousNotes, opts.signal, opts.strict === true, opts.level ?? 2, opts.notesRole ?? 'cheap');
       if (notes === null) return null;
       plan = { start, tail: messages.slice(start), notes, notesPath: null, via: 'default' };
     }
@@ -330,12 +335,20 @@ export class Handoff {
     }
   }
 
-  /** Notes from the cheap model. When it fails: mechanical notes, or null when `strict`. */
-  private async notes(dropped: TranscriptMessage[], previous: string | null, signal: AbortSignal, strict: boolean, level: Level): Promise<string | null> {
+  /** Notes from a model (the cheap one unless said otherwise). When it fails: mechanical notes, or null when `strict`. */
+  private async notes(dropped: TranscriptMessage[], previous: string | null, signal: AbortSignal, strict: boolean, level: Level, role: ModelRole): Promise<string | null> {
     const d = this.d;
     const s = d.settings();
     const prev = previous ? d.memory.readText(previous) : undefined;
+    const core = Object.keys(CORE_FILES)
+      .map((rel) => {
+        const text = d.memory.readText(rel)?.trim();
+        return text ? `<file path="${MEMORY_ROOT}/${rel}">\n${text}\n</file>` : '';
+      })
+      .filter(Boolean)
+      .join('\n');
     const input = [
+      `<memory_core>\n${core || '(empty)'}\n</memory_core>\n`,
       prev ? `<previous-notes path="${MEMORY_ROOT}/${previous}">\n${prev}\n</previous-notes>\n` : '',
       `<conversation>\n${renderForNotes(dropped, s.notesInputTokens)}\n</conversation>`,
       '\nWrite the handoff notes now.',
@@ -350,16 +363,17 @@ export class Handoff {
     try {
       const res = await d.provider.generate(
         {
-          role: 'cheap',
+          role,
           system: [{ id: 'handoff-notes', text: HANDOFF_NOTES_SYSTEM }],
           messages: [{ role: 'user', content: [{ type: 'text', text: input }] }],
           tools: [],
-          effort: d.cheapEffort(),
+          // Notes need no deliberation; thinking that filled the output budget left no notes at all.
+          effort: 'low',
           maxOutputTokens: s.notesMaxTokens,
         },
         { signal },
       );
-      d.onNotesUsage?.(res, level);
+      d.onNotesUsage?.(res, level, role);
       const text = res.content
         .filter((b) => b.type === 'text')
         .map((b) => String(b['text'] ?? ''))

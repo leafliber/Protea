@@ -10,8 +10,6 @@ export interface ProviderToolDef {
   inputSchema: Record<string, unknown>;
   /** Not loaded up front; the model finds it through the provider's tool search. */
   deferLoading?: boolean;
-  /** Provider-defined tool type (see ToolSpec.providerType). */
-  providerType?: string;
 }
 
 /** The reserved input property of tools that need approval: what to tell the owner, and where. */
@@ -71,7 +69,7 @@ export class ToolRegistry {
   /** The schema the model sees: the tool's own, plus `_approval` when its calls need approval. */
   schemaFor(d: ToolDef): Record<string, unknown> {
     const s = d.inputSchema as { type?: unknown; properties?: Record<string, unknown> };
-    if (d.providerType || !this.needsApproval?.(d) || (s.type !== undefined && s.type !== 'object') || (s.properties && APPROVAL_META in s.properties)) return d.inputSchema;
+    if (!this.needsApproval?.(d) || (s.type !== undefined && s.type !== 'object') || (s.properties && APPROVAL_META in s.properties)) return d.inputSchema;
     return { ...d.inputSchema, type: 'object', properties: { ...(s.properties ?? {}), [APPROVAL_META]: APPROVAL_META_SCHEMA } };
   }
 
@@ -205,6 +203,6 @@ export class ToolRegistry {
     // Without tool exposure nothing is held back, so the client-side search tools have no use.
     return this.list()
       .filter((d) => !d.clientSearch && (!filter || filter(d)))
-      .map((d) => ({ name: d.name, description: d.description, inputSchema: this.schemaFor(d), ...(d.providerType ? { providerType: d.providerType } : {}) }));
+      .map((d) => ({ name: d.name, description: d.description, inputSchema: this.schemaFor(d) }));
   }
 }

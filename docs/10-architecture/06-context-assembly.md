@@ -1,6 +1,6 @@
 # 上下文装配
 
-> 状态：Accepted（M0–M4；分层记忆 2026-11-10）· 更新：2026-11-12
+> 状态：Accepted（M0–M4；分层记忆 2026-11-10；常驻记忆 2026-11-12）· 更新：2026-11-12
 
 ## 1. 目标
 
@@ -17,10 +17,11 @@
 ├─ system: [
 │    seg:identity          ← persona/SOUL.md
 │    seg:operating         ← persona/OPERATING.md（含权限策略摘要、事件格式说明）
-│    seg:owner             ← persona/USER.md
 │    seg:env:<plugin>…     ← 各插件 envPrompt（按插件 ID 排序）
 │    seg:skills-catalog    ← Skills 目录（name + description），按 name 排序
-│    seg:memory-index      ← memory/INDEX.md 的发布副本（梦境维护；只在指定时刻变化）
+│    seg:owner             ← memory/core/owner.md 的发布副本
+│    seg:rules             ← memory/core/rules.md 的发布副本
+│    seg:memory-index      ← 由 notes/ 的 summary 生成的索引（发布副本；只在指定时刻变化）
 │  ]  ← 末尾放 cache_control 断点 #1
 ├─ messages: [
 │    …历史（append-only）…  ← 自动缓存 / 断点 #2 放在上一批末尾
@@ -40,14 +41,15 @@
 | `identity` | `persona/SOUL.md` | 极低 | 文件变化 → 下一回合边界生效（M4） |
 | `runtime` | Core 唯一拥有的固定说明（英文）：事件格式、origin 语义、"纯文本不会送达任何人"、时区 | 极低 | 随版本 |
 | `operating` | `persona/OPERATING.md` | 低 | 同 identity |
-| `owner` | `persona/USER.md` | 低 | 同上 |
 | `env:<plugin>` | 插件 `envPrompt()` 模板 + `envPromptVars()` | 低（插件启停时） | 插件生命周期事件 → 回合边界重建 |
 | `env:mcp:<server>` | MCP 服务器配置里的 `envPrompt`（M3） | 低（服务器启停时） | 服务器状态变化 → 回合边界重建 |
 | `tool-catalog` | 工具暴露计划（[12-model-providers.md](12-model-providers.md) §5）：只在 Provider 不能搜索工具、且有工具被延迟时存在；每个来源（MCP 服务器或插件）的说明与被延迟的工具名 | 低（服务器或插件启停、工具列表变化、按需加载开关变化时） | 延迟计划变化 → 回合边界重建 |
 | `skills-catalog` | Skills 注册表（M3） | 低 | 目录文本变化 → 回合边界重建 |
-| `memory-index` | `memory/INDEX.md` 的发布副本，包在 `<memory_index path="/memories/INDEX.md">` 里（超过 8000 字符截断） | 低（通常每天一次） | 压缩或交接、梦境结束、控制台修改、进程启动时发布；主会话忙时推迟到空闲 |
+| `owner` | `memory/core/owner.md` 的发布副本，包在 `<memory_file path="/memories/core/owner.md" chars=… limit="2000">` 里；为空时没有这一段 | 中（助理随时会改） | 压缩或交接、梦境通过验收、控制台修改 `core/` 或 `notes/`、进程启动时发布；主会话忙时推迟到空闲 |
+| `rules` | `memory/core/rules.md` 的发布副本，包法同上（上限 4000） | 中 | 同上 |
+| `memory-index` | Core 由 `notes/` 各文件的 `summary` 生成，包在 `<memory_index root="/memories">` 里（超过 6000 字符按目录折叠） | 中 | 同上 |
 
-**重建代价**：任何分段变化都会让该分段之后的缓存失效，并且此前的 thinking 块从此不再回传（它们绑定旧前缀，[05-sessions-and-agent-loop.md](05-sessions-and-agent-loop.md) §8.1）。因此变动最多的内容（记忆索引）放在最后一段；真正高频的内容（白板、检索结果）不进前缀，只出现在历史末尾（[11-memory-and-persona.md](11-memory-and-persona.md) §3.1）。人格钩子 `systemSegments({ defaults })` 可以改写主会话的分段（M4）。
+**重建代价**：任何分段变化都会让该分段之后的缓存失效，并且此前的 thinking 块从此不再回传（它们绑定旧前缀，[05-sessions-and-agent-loop.md](05-sessions-and-agent-loop.md) §8.1）。因此变动最多的内容（常驻记忆与笔记索引）放在最后三段；真正高频的内容（白板、检索结果）不进前缀，只出现在历史末尾（[11-memory-and-persona.md](11-memory-and-persona.md) §3.1）。人格钩子 `systemSegments({ defaults })` 可以改写主会话的分段（M4）。
 
 ### 3.1 环境提示模板
 
@@ -82,7 +84,7 @@
 - TTL 默认 `1h`（Claude 档案的 `anthropic.cacheTtl`）：个人助理的批次之间常隔 5–60 分钟，5 分钟 TTL 会频繁冷启动。两个断点使用同一 TTL。
 - 稳定性有自动化测试：连续 100 次推送中，每个请求的 system 与 tools 字节相同，消息序列（按内容块展开）是上一个请求的严格前缀（`invariants.test.ts`）。
 - **各厂商的共同点**（2026-11-10 查证）：Anthropic（显式断点，5 分钟或 1 小时）、OpenAI（自动，≥ 1024 token，`prompt_cache_key` 改善路由）、DeepSeek（自动的硬盘 KV 缓存，未使用时通常几小时到几天后清除）、通义千问（隐式缓存自动开启）都是前缀精确匹配。Kimi、GLM 的细节没有查到可靠资料。设计只依赖"前缀精确匹配 + 只追加 + 有寿命"这三点，不依赖任何一家的参数。
-- 动态内容只走末尾；非紧急的前缀变化（`INDEX.md`）只在缓存本来就冷的时刻发布；闲时压缩尽量等到缓存过期（[05-sessions-and-agent-loop.md](05-sessions-and-agent-loop.md) §8）。`prompt_cache_key` 默认只发给 `api.openai.com`（档案的 `openai.promptCacheKey` 可改），第三方兼容接口可能拒绝未知参数。
+- 动态内容只走末尾；非紧急的前缀变化（常驻记忆与笔记索引）只在缓存本来就冷的时刻发布；闲时压缩尽量等到缓存过期（[05-sessions-and-agent-loop.md](05-sessions-and-agent-loop.md) §8）。`prompt_cache_key` 默认只发给 `api.openai.com`（档案的 `openai.promptCacheKey` 可改），第三方兼容接口可能拒绝未知参数。
 - 验证：`usage.cache_read_input_tokens` 连续为 0 → 控制台告警"缓存未命中"，并列出最近一次前缀 diff（哪一段变了）。
 
 ## 8. 容量估算

@@ -211,7 +211,8 @@ describe('M5: operations without SSH', () => {
 
     // Persona: Markdown files only, inside the directory; a write reloads the persona.
     const files = await api<{ files: Array<{ path: string }> }>('GET', '/api/persona/files');
-    expect(files.json.files.map((f) => f.path)).toEqual(expect.arrayContaining(['OPERATING.md', 'SOUL.md', 'USER.md']));
+    expect(files.json.files.map((f) => f.path)).toEqual(expect.arrayContaining(['OPERATING.md', 'SOUL.md']));
+    expect(files.json.files.map((f) => f.path)).not.toContain('USER.md');
     let personaChanged = false;
     d.bus.on('persona.changed', () => (personaChanged = true));
     expect((await api('PUT', '/api/persona/file?path=SOUL.md', '# Soul\nYou are Fern.', { text: true })).status).toBe(200);

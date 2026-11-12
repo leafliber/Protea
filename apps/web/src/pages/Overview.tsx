@@ -53,6 +53,8 @@ export function Overview({ status, reload }: { status: StatusResponse | undefine
   if (status.budget.hardCapReached) todos.push({ key: 'cap', tone: 'bad', text: '今天的费用到了硬上限，现在只处理最紧急的事件。', href: consoleHref('config', { tab: 'budget' }) });
   else if (status.budget.enforced && tightest !== null && tightest >= 0.8) todos.push({ key: 'budget', tone: 'warn', text: `今天的预算已用掉 ${Math.round(tightest * 100)}%`, href: consoleHref('config', { tab: 'budget' }) });
   if (ctxRatio >= 1) todos.push({ key: 'ctx', tone: 'info', text: '对话已经很长，下次空闲时会自动整理。', href: consoleHref('sessions') });
+  if (!status.timezone.set) todos.push({ key: 'tz', tone: 'info', text: `没有设置时区，正在用系统的 ${status.timezone.zone}：日志按这个时区分日，每日记忆整理也按它的时间运行。请在 config.yaml 设置 daemon.timezone 并重启。`, href: consoleHref('config') });
+  if (status.memory.dream.disabled) todos.push({ key: 'dream', tone: 'warn', text: `每日记忆整理连续失败 ${status.memory.dream.failures} 次，已暂停`, href: consoleHref('memory') });
 
   const handoff = async () => {
     if (!(await confirm({ title: '现在整理主会话？', body: '较早的对话会写成笔记，只保留最近的一批。助理不会忘记写进记忆的内容。', confirm: '整理' }))) return;

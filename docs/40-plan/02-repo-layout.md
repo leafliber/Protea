@@ -22,7 +22,7 @@ Protea/
 ├── tsconfig.json                全仓类型检查（paths 指向各包 src，noEmit）
 ├── vitest.config.ts             测试入口（alias 指向各包 src）
 ├── docs/                        设计文档
-├── personas/default/            默认人格（SOUL.md、OPERATING.md、USER.md），首次启动复制到 /data/persona；memory/ 是记忆目录模板（INDEX.md）
+├── personas/default/            默认人格（SOUL.md、OPERATING.md），首次启动复制到 /data/persona
 ├── packages/
 │   ├── protocol/                @protea/protocol：事件、会话、控制 API、插件清单与协议的类型，事件 JSON Schema，JSON-RPC 对等端（rpc.ts，无运行时依赖）
 │   ├── plugin-sdk/              @protea/plugin-sdk：definePlugin / runPlugin，测试用 FakeHost（@protea/plugin-sdk/testing）
@@ -43,7 +43,7 @@ Protea/
 │   │   │   ├── skills/          SKILL.md 解析、Skills 注册表与目录段、skill_load / skill_read
 │   │   │   ├── persona/         人格文件加载与热重载、可选钩子（hooks.*）
 │   │   │   ├── maintenance/     空闲时的维护：闲时压缩的策略与触发、每日记忆整理（梦境）
-│   │   │   ├── memory/          记忆存储（memory 工具命令面）、白板、FTS5 索引、memory / memory_search / memory_recent / board
+│   │   │   ├── memory/          记忆存储与 core/ 上限、分块 FTS5 索引、使用记录、常驻层（生成的笔记索引）、白板、memory / memory_search / board
 │   │   │   ├── config/          默认值、层叠加载、环境变量映射、秘密、旧供应商写法的迁移（legacy.ts）
 │   │   │   ├── auth/            控制台账号（scrypt）、会话、设置码（accounts.ts）
 │   │   │   ├── db/              SQLite 打开与内嵌迁移（含迁移前快照）、仓储（batches/usage/kv/sessions/tool_stats）

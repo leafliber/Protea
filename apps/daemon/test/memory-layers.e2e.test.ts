@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ProviderError, ScriptedProvider, reply, silentLogger, textReply, toolCall, type ProviderRequest, type ScriptStep } from '@protea/core';
-import type { StatusResponse } from '@protea/protocol';
+import type { MemoryOverview, StatusResponse } from '@protea/protocol';
 import { startDaemon, type Daemon } from '../src/index.js';
 
 const running: Daemon[] = [];
@@ -26,7 +26,7 @@ const CONFIG = `scheduler:
 context:
   idleCompaction: { minTokens: 2000, earlyTokens: 100000, earlyAfterMs: 30000, coldAfterMs: 60000, keepTokens: 300, minDroppableTokens: 800, minIntervalMs: 1000 }
 memory:
-  dream: { enabled: false }
+  dream: { enabled: false, model: fork }
 `;
 
 function newDataDir(): string {
@@ -52,7 +52,12 @@ async function boot(steps: { cheap?: ScriptStep; main?: ScriptStep; fork?: Scrip
     new ScriptedProvider([
       (req, i, ctx) => {
         if (req.role === 'cheap') return steps.cheap ? steps.cheap(req, i, ctx) : textReply('## Commitments\n- tea on Friday');
-        if (req.role === 'fork') return steps.fork ? steps.fork(req, i, ctx) : textReply('merged two notes');
+        if (req.role === 'fork') {
+          if (steps.fork) return steps.fork(req, i, ctx);
+          // A consolidation writes something, then reports.
+          const wrote = req.messages.some((m) => m.content.some((b) => b.type === 'tool_result'));
+          return wrote ? textReply('merged two notes') : reply([toolCall('memory', { command: 'append', path: 'journal/2026-11-12.md', text: '- consolidated' })]);
+        }
         return steps.main ? steps.main(req, i, ctx) : reply([toolCall('idle', {})]);
       },
     ]);
@@ -238,29 +243,41 @@ describe('whiteboard in the conversation', () => {
   });
 });
 
-describe('memory index in the prefix', () => {
+describe('resident memory in the prefix', () => {
   it('changes only at chosen moments', async () => {
     const { d, send, mainCalls } = await boot();
-    const index = (): string => mainCalls().at(-1)?.system.find((s) => s.id === 'memory-index')?.text ?? '';
+    const segment = (id: string): string => mainCalls().at(-1)?.system.find((s) => s.id === id)?.text ?? '';
     await send('a');
-    const before = index();
+    expect(segment('rules')).toBe('');
 
-    d.memory.writeText('INDEX.md', '# Memory index\n\n- edited by the assistant\n');
+    // The assistant's own writes wait for the next compaction: the conversation has them already.
+    d.memory.write('core/rules.md', '- 图片一律走 QQ');
+    d.memory.write('notes/a.md', '---\nsummary: 笔记 A\n---\nbody');
     await send('b');
-    expect(index()).toBe(before);
+    expect(segment('rules')).toBe('');
+    expect(segment('memory-index')).toBe('');
 
-    const res = await fetch(`${d.url}/api/memory/file?path=INDEX.md`, { method: 'PUT', headers: { authorization: `Bearer ${d.adminToken}`, 'content-type': 'text/plain' }, body: '# Memory index\n\n- edited by the owner\n' });
+    // The owner's edits from the console show at once (the session is idle).
+    const res = await fetch(`${d.url}/api/memory/file?path=core/owner.md`, { method: 'PUT', headers: { authorization: `Bearer ${d.adminToken}`, 'content-type': 'text/plain' }, body: '主人说中文' });
     expect(res.status).toBe(200);
     await send('c');
-    expect(index()).toContain('edited by the owner');
+    expect(segment('owner')).toContain('主人说中文');
+    expect(segment('rules')).toContain('图片一律走 QQ');
+    expect(segment('memory-index')).toContain('- notes/a.md — 笔记 A');
 
-    d.memory.writeText('INDEX.md', '# Memory index\n\n- after the dream\n');
+    d.memory.write('notes/b.md', '---\nsummary: 笔记 B\n---\nbody');
     await send('d');
-    expect(index()).toContain('edited by the owner');
+    expect(segment('memory-index')).not.toContain('notes/b.md');
     const handoff = await fetch(`${d.url}/api/sessions/main/handoff`, { method: 'POST', headers: { authorization: `Bearer ${d.adminToken}`, 'content-type': 'application/json' }, body: '{}' });
     expect(handoff.status).toBe(200);
     await send('e');
-    expect(index()).toContain('after the dream');
+    expect(segment('memory-index')).toContain('- notes/b.md — 笔记 B');
+
+    // Over the limit: refused from the console too.
+    const big = await fetch(`${d.url}/api/memory/file?path=core/owner.md`, { method: 'PUT', headers: { authorization: `Bearer ${d.adminToken}`, 'content-type': 'text/plain' }, body: 'x'.repeat(2001) });
+    expect(big.status).toBe(400);
+    const history = (await (await fetch(`${d.url}/api/memory/history?path=core/owner.md`, { headers: { authorization: `Bearer ${d.adminToken}` } })).json()) as { versions: unknown[] };
+    expect(history.versions).toHaveLength(0);
   });
 });
 
@@ -288,10 +305,14 @@ describe('control API', () => {
     const { d, provider } = await boot();
     const started = await call<{ started: boolean; forkId: string }>(d, 'POST', '/api/memory/dream');
     expect(started.status).toBe(202);
-    await waitUntil(() => d.dream.status().result === 'completed', 'the consolidation');
+    await waitUntil(() => d.dream.status().result !== undefined, 'the consolidation');
+    expect(d.dream.status()).toMatchObject({ result: 'completed', acceptedAt: expect.any(String) });
     expect(d.dream.status()).toMatchObject({ running: false, summary: 'merged two notes', date: expect.any(String) });
     const names = (r: ProviderRequest | undefined): string[] => (r?.tools ?? []).map((t) => t.name).sort();
-    expect(names(provider.calls.find((c) => c.role === 'fork'))).toEqual(['board', 'memory', 'memory_recent', 'memory_search', 'skill_load']);
+    expect(names(provider.calls.find((c) => c.role === 'fork'))).toEqual(['board', 'memory', 'memory_search', 'skill_load']);
+    expect(provider.calls.find((c) => c.role === 'fork')?.messages[0]?.content.map((b) => String(b['text'] ?? '')).join('')).toContain('<memory_state>');
+    const overview = await call<MemoryOverview>(d, 'GET', '/api/memory/overview');
+    expect(overview.json).toMatchObject({ core: [{ path: 'core/owner.md', chars: 0, limit: 2000 }, { path: 'core/rules.md', chars: 0, limit: 4000 }], index: null, checks: [] });
 
     const before = provider.calls.length;
     const fork = d.forks.spawn({ goal: 'look something up', level: 4, reportTo: 'none' });

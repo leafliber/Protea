@@ -64,8 +64,11 @@ export interface ToolSpec<I = unknown> {
   outboundKey?(input: I): string;
   /** How a call reads when the owner is asked to approve it (title, the value that matters, labels). */
   approval?: ApprovalPresentation;
-  /** A provider-defined tool type with this name (e.g. Anthropic `memory_20250818`); providers that know it declare the type instead of the schema. */
-  providerType?: string;
+  /**
+   * Why this particular call needs the owner's approval although the policy allows the tool,
+   * or null. The owner has to clear it in every mode but locked (like an `ask` they wrote).
+   */
+  askWhen?(input: I, ctx: { sessionId: string; batchId: string }): string | null;
   handler(input: I, ctx: ToolContext): Promise<ToolOutcome | string> | ToolOutcome | string;
 }
 

@@ -2,6 +2,8 @@
 
 状态：Accepted · 日期：2026-11-10 · 相关：[../10-architecture/11-memory-and-persona.md](../10-architecture/11-memory-and-persona.md) · [../10-architecture/05-sessions-and-agent-loop.md](../10-architecture/05-sessions-and-agent-loop.md) §8 · [../10-architecture/06-context-assembly.md](../10-architecture/06-context-assembly.md) §7 · [ADR-0008](ADR-0008-append-only-history-and-handoff.md)
 
+> 修订：`INDEX.md` 改为由 Core 从笔记的 `summary` 生成；主人画像从 `persona/USER.md` 移到助理可写、有上限的 `memory/core/`；记忆工具改为 `read / write / append / edit / move / delete`，删除 `memory_recent`；检索改为分块、不要求全部命中；梦境由 Core 验收。见 [ADR-0024](ADR-0024-resident-memory-and-chunked-search.md)。下文保留当时的设计。
+
 ## 背景
 
 M4 的记忆有几个问题：压缩只在上下文快满时发生，往往正赶上主人在等回复；交接后模型要自己读文件才知道之前在做什么；`INDEX.md` 一改就让整段对话的缓存失效；目标和待办没有结构化的位置；检索对日志和笔记一视同仁，中文两字词没有相关度排序；记忆整理靠模型自觉，几乎不发生。

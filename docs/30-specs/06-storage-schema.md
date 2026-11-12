@@ -255,7 +255,46 @@ CREATE INDEX ix_changes_state ON change_requests(state, expires_ms);
 
 `sessions.state` 多了一个取值 `idle`（待命的 Fork）；它是文本列，不需要迁移。
 
-### 1.11 后续迁移（计划）
+### 1.11 迁移 11：`approval-view`（2026-11-12）
+
+```sql
+ALTER TABLE approvals ADD COLUMN view_json TEXT;        -- 主人看到的标题、目标与字段
+ALTER TABLE approvals ADD COLUMN input_json TEXT;
+ALTER TABLE approvals ADD COLUMN delivered_to TEXT;     -- 请求送到了哪些平台
+ALTER TABLE approvals ADD COLUMN note TEXT;             -- 主人决定时说的话
+```
+
+### 1.12 迁移 12：`memory-chunks`（2026-11-12）
+
+```sql
+DROP TABLE memory_fts;
+DROP TABLE memory_files;
+CREATE TABLE memory_files (                             -- 已索引的记忆文件，用于增量同步与生成笔记索引
+  path TEXT PRIMARY KEY, mtime_ms INTEGER NOT NULL, size INTEGER NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',                     -- frontmatter 的 summary，没有时取首行
+  has_summary INTEGER NOT NULL DEFAULT 0,               -- summary 是否来自 frontmatter
+  indexed_at TEXT NOT NULL
+);
+CREATE VIRTUAL TABLE memory_chunks USING fts5(          -- 每块一行（标题、存档消息、列表项处切开）
+  path UNINDEXED, start_line UNINDEXED, end_line UNINDEXED,
+  meta,                                                 -- 第一块：summary + keywords + 标题；其余：标题
+  body,                                                 -- 正文，CJK 切成重叠二元组
+  chars,                                                -- 每个 CJK 字单独一个词，供单字查询
+  tokenize = 'unicode61'
+);
+CREATE TABLE memory_access (                            -- 记忆的使用记录，保留 90 天
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at_ms INTEGER NOT NULL,
+  session TEXT NOT NULL,                                -- main 或 Fork id
+  kind TEXT NOT NULL CHECK (kind IN ('search','hit','read','write')),
+  path TEXT, query TEXT, hits INTEGER
+);
+CREATE INDEX ix_memory_access_at ON memory_access(at_ms);
+CREATE INDEX ix_memory_access_session ON memory_access(session, kind, at_ms);
+```
+
+`memory_files` 从空开始，启动时的同步重建全部索引。BM25 权重：`meta` 4、`body` 1、`chars` 0.5。片段按行号从文件读，表里不存整篇正文。
+
+### 1.13 后续迁移（计划）
 
 | 表 | 用途 | 里程碑 |
 |---|---|---|
@@ -289,8 +328,8 @@ CREATE INDEX ix_changes_state ON change_requests(state, expires_ms);
 | `cache/` | 目录 | npm/uv/pip 缓存与 `backup-git/<hash>/`（Git 备份的工作副本）；可以清空（M6） |
 | `secrets/<NAME>` | 文本，0600 | 秘密（API 令牌 `PROTEA_ADMIN_TOKEN`、供应商密钥 `PROVIDER_<ID>_API_KEY`、初始化前的设置码 `PROTEA_SETUP_CODE` 等） |
 | `secrets/mcp-oauth/<id>.json` | JSON，0600 | MCP 服务器的 OAuth 客户端注册、令牌与 PKCE verifier |
-| `persona/*.md` | Markdown | 人格文件，首次启动从默认人格复制；`persona/hooks.{ts,mts,mjs,js}` 为可选钩子（M4） |
-| `memory/` | 目录（0700），文件 0600 | 记忆（M4）：`INDEX.md`（发布副本进系统前缀）、`journal/`、`notes/`、`handoff/<UTC>Z.md`（压缩笔记）、`raw/<UTC>Z.md`（被压缩的对话原文）、`blobs/`；首次启动从 `personas/default/memory/` 创建 |
+| `persona/*.md` | Markdown | 人格文件（`SOUL.md`、`OPERATING.md`、`plugins/<id>/ENV_PROMPT.md`），首次启动从默认人格复制；`persona/hooks.{ts,mts,mjs,js}` 为可选钩子（M4） |
+| `memory/` | 目录（0700），文件 0600 | 记忆（M4）：`core/owner.md`、`core/rules.md`（常驻，发布副本进系统前缀）与 `core/.history/`（它们改动前的版本）、`journal/`、`notes/`、`handoff/<UTC>Z.md`（压缩笔记）、`raw/<UTC>Z.md`（被压缩的对话原文）、`blobs/`；首次启动时创建为空目录 |
 | `sessions/main.<seq>.jsonl.abandoned-<ms>` | NDJSON | 交接在切换指针前崩溃留下的新转录（不再使用） |
 | `protea.lock` | 文本 | 单实例锁（pid） |
 

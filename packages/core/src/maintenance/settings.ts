@@ -36,6 +36,8 @@ export interface DreamSettings {
   minIdleMs: number;
   /** Model role of the consolidation fork. */
   model: ModelRole;
+  /** Model rounds the consolidation may take (it is not held to scheduler.forks.maxTurns). */
+  maxTurns: number;
 }
 
-export const DEFAULT_DREAM: DreamSettings = { enabled: true, at: '03:30', minIdleMs: 1_800_000, model: 'fork' };
+export const DEFAULT_DREAM: DreamSettings = { enabled: true, at: '03:30', minIdleMs: 1_800_000, model: 'main', maxTurns: 40 };

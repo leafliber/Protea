@@ -61,7 +61,7 @@ export function defaultConfig(): ProteaConfig {
       compaction: { enabled: false, triggerTokens: 150_000, instructions: null },
       idleCompaction: { ...DEFAULT_IDLE_COMPACTION },
     },
-    memory: { nativeTool: false, board: { ...DEFAULT_BOARD }, dream: { ...DEFAULT_DREAM } },
+    memory: { board: { ...DEFAULT_BOARD }, dream: { ...DEFAULT_DREAM } },
     vision: { ...DEFAULT_VISION_SETTINGS },
     chat: { ...DEFAULT_CHAT_SETTINGS },
     persona: { dir: 'persona' },
@@ -74,7 +74,7 @@ export const STARTER_CONFIG_YAML = `# Protea configuration. Every key is optiona
 # (path segments separated by "__", e.g. PROTEA_SCHEDULER__LEVELS__1__DEBOUNCE_MS=500).
 
 # daemon:
-#   timezone: Asia/Shanghai
+#   timezone: Asia/Shanghai   # the owner's zone: journal dates, the daily memory consolidation and times in the prompt follow it
 
 # owner:
 #   identities:
@@ -152,7 +152,8 @@ export const STARTER_CONFIG_YAML = `# Protea configuration. Every key is optiona
 # memory:
 #   dream:                    # daily consolidation of the memory directory
 #     at: "03:30"             # earliest local time of each day's run
-#     model: fork             # main | fork | cheap
+#     model: main             # main | fork | cheap
+#     maxTurns: 40            # model rounds it may take
 
 # control:
 #   listen: 0.0.0.0:7788      # the web console is at http://<host>:7788/ (first visit: create the admin account

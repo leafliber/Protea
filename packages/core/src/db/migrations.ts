@@ -334,4 +334,34 @@ ALTER TABLE approvals ADD COLUMN delivered_to TEXT;
 ALTER TABLE approvals ADD COLUMN note TEXT;
 `,
   },
+  {
+    version: 12,
+    name: 'memory-chunks',
+    // Search returns pieces of files; the index keeps each note's summary; memory use is recorded.
+    // memory_files starts empty, so the sync at start indexes every file again.
+    sql: `
+DROP TABLE memory_fts;
+DROP TABLE memory_files;
+CREATE TABLE memory_files (
+  path         TEXT PRIMARY KEY,
+  mtime_ms     INTEGER NOT NULL,
+  size         INTEGER NOT NULL,
+  summary      TEXT NOT NULL DEFAULT '',
+  has_summary  INTEGER NOT NULL DEFAULT 0,
+  indexed_at   TEXT NOT NULL
+);
+CREATE VIRTUAL TABLE memory_chunks USING fts5(path UNINDEXED, start_line UNINDEXED, end_line UNINDEXED, meta, body, chars, tokenize = 'unicode61');
+CREATE TABLE memory_access (
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  at_ms    INTEGER NOT NULL,
+  session  TEXT NOT NULL,
+  kind     TEXT NOT NULL CHECK (kind IN ('search','hit','read','write')),
+  path     TEXT,
+  query    TEXT,
+  hits     INTEGER
+);
+CREATE INDEX ix_memory_access_at ON memory_access(at_ms);
+CREATE INDEX ix_memory_access_session ON memory_access(session, kind, at_ms);
+`,
+  },
 ];

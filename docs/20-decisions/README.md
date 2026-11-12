@@ -14,7 +14,7 @@
 | [ADR-0008](ADR-0008-append-only-history-and-handoff.md) | 历史只追加，容量以交接处理 | Accepted |
 | [ADR-0009](ADR-0009-single-uid-with-process-limits.md) | 插件与守护进程同用一个用户，靠资源上限与工作区约束 | Accepted |
 | [ADR-0010](ADR-0010-accounts-and-provider-profiles.md) | 控制台账号与设置码初始化；模型供应商档案 | Accepted |
-| [ADR-0011](ADR-0011-layered-memory-and-idle-compaction.md) | 分层记忆、闲时压缩与每日整理，不使用 embedding | Accepted |
+| [ADR-0011](ADR-0011-layered-memory-and-idle-compaction.md) | 分层记忆、闲时压缩与每日整理，不使用 embedding（索引、记忆工具与梦境部分被 ADR-0024 修订） | Accepted |
 | [ADR-0012](ADR-0012-chat-platforms-and-operator-console.md) | 对话走平台中枢（`chat_send` 必须指定平台），控制台只观察与注入 | Accepted |
 | [ADR-0013](ADR-0013-sandboxed-shell-and-in-container-browser.md) | shell 进独立沙箱容器，浏览器作为 MCP 服务器留在主容器（修订 ADR-0009 的 `shell` 部分） | Accepted |
 | [ADR-0014](ADR-0014-images-as-blob-references.md) | 图片以 blob 引用进入转录，发请求时才解析 | Accepted |
@@ -27,6 +27,7 @@
 | [ADR-0021](ADR-0021-readable-approval-requests-and-delivery.md) | 授权请求按"人读的样子"生成，助理可以选择发到哪个平台 | Accepted |
 | [ADR-0022](ADR-0022-no-backward-compatibility-before-launch.md) | 上线前不做向前兼容，只用最合适的方案（上线时必须被取代） | Accepted |
 | [ADR-0023](ADR-0023-plugin-tools-on-demand.md) | 插件工具也可以按需加载，按插件配置；元工具改名为 `tool_search` / `tool_call`（修订 ADR-0020 的命名） | Accepted |
+| [ADR-0024](ADR-0024-resident-memory-and-chunked-search.md) | 常驻记忆 `core/`、生成的笔记索引、分块检索、写常驻文件的来源管控、压缩退避与梦境验收（修订 ADR-0011） | Accepted |
 
 新增 ADR：复制 `ADR-0000-template.md`（见下），编号递增，提交 PR 时在此表登记。
 

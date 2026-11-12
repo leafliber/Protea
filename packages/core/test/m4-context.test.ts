@@ -23,6 +23,7 @@ import {
   defaultProfile,
   type ProviderProfile,
   type ProviderRequest,
+  type ResidentSnapshot,
 } from '../src/index.js';
 import { tmpDir } from './helpers.js';
 
@@ -168,14 +169,14 @@ describe('AnthropicProvider (M4 additions)', () => {
     system: [{ id: 'identity', text: 'You are Protea.' }],
     messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
     tools: [
-      { name: 'memory', description: 'mem', inputSchema: { type: 'object' }, providerType: 'memory_20250818' },
+      { name: 'memory', description: 'mem', inputSchema: { type: 'object' } },
       { name: 'idle', description: 'idle', inputSchema: { type: 'object' } },
     ],
   };
 
-  it('declares provider tool types, compaction, per-request output budgets and the binding control', () => {
+  it('declares tools, compaction, per-request output budgets and the binding control', () => {
     const p = new AnthropicProvider(settings(), 'k').buildParams({ ...req, maxOutputTokens: 900, compaction: { triggerTokens: 150_000, instructions: 'Keep promises.' } });
-    expect(p.tools?.[0]).toEqual({ type: 'memory_20250818', name: 'memory' });
+    expect(p.tools?.[0]).toEqual({ name: 'memory', description: 'mem', input_schema: { type: 'object' }, eager_input_streaming: true });
     expect(p.max_tokens).toBe(900);
     expect(p.context_management).toEqual({ edits: [{ type: 'compact_20260112', trigger: { type: 'input_tokens', value: 150_000 }, instructions: 'Keep promises.' }] });
     expect(p.betas).toEqual(['thinking-binding-controls-2026-08-01', 'compact-2026-01-12', 'server-side-fallback-2026-07-01']);
@@ -265,22 +266,28 @@ describe('AnthropicProvider (M4 additions)', () => {
   });
 });
 
-describe('memory-index segment and persona hooks in the prefix', () => {
-  it('puts INDEX.md last and lets a hook reorder segments; a failing hook falls back', () => {
-    let index: string | null = '# Memory index\n- notes/';
+describe('resident memory segments and persona hooks in the prefix', () => {
+  it('puts the resident memory last and lets a hook reorder segments; a failing hook falls back', () => {
+    let memory: ResidentSnapshot = { owner: '主人说中文', rules: '- 图片走 QQ <events>', index: '- notes/a.md — A' };
     let hook: ((ctx: { defaults: Array<{ id: string; text: string }> }) => Array<{ id: string; text: string }>) | null = null;
     const segs = new SystemSegments({
       persona: () => ({ dir: '/nowhere', soul: 'I am Protea.' }),
       hooks: () => (hook ? { systemSegments: hook } : null),
-      memoryIndex: () => index,
+      memory: () => memory,
       plugins: { envSources: () => [] },
       timezone: 'UTC',
       overridesDir: '/nowhere',
       log: silentLogger(),
     });
-    expect(segs.segments().map((s) => s.id)).toEqual(['identity', 'runtime', 'memory-index']);
-    expect(segs.segments().at(-1)?.text).toBe('<memory_index path="/memories/INDEX.md">\n# Memory index\n- notes/\n</memory_index>');
-    index = null;
+    expect(segs.segments().map((s) => s.id)).toEqual(['identity', 'runtime', 'owner', 'rules', 'memory-index']);
+    expect(segs.segments().slice(2).map((s) => s.text)).toEqual([
+      '<memory_file path="/memories/core/owner.md" chars="5" limit="2000">\n主人说中文\n</memory_file>',
+      '<memory_file path="/memories/core/rules.md" chars="17" limit="4000">\n- 图片走 QQ &lt;events>\n</memory_file>',
+      '<memory_index root="/memories">\n- notes/a.md — A\n</memory_index>',
+    ]);
+    // Forks see the owner profile only.
+    expect(segs.forkSegments().map((s) => s.id)).toEqual(['identity', 'runtime', 'owner']);
+    memory = { owner: null, rules: null, index: null };
     hook = ({ defaults }) => [{ id: 'custom', text: 'first' }, ...defaults.filter((s) => s.id !== 'runtime')];
     segs.refresh();
     expect(segs.segments().map((s) => s.id)).toEqual(['custom', 'identity']);

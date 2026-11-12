@@ -206,16 +206,17 @@ node scripts/soak.mjs --url http://127.0.0.1:7788 --token-file protea-token --ho
 - **看日志**：`protea logq --q "model call"`（每行有 `provider`、`model`、token 与 `cacheHit`）；`protea logq --q "provider"`（档案保存、连接测试）；`protea logq --level warn`。
 - **导出**：`protea diag --since 2h`；对话质量相关的问题加 `--content`。
 
-### T11 · 白板、闲时压缩与梦境
+### T11 · 白板、常驻记忆、闲时压缩与梦境
 
 1. 让助理记三件事到白板（"记下来：一、……二、……三、……"），在控制台"记忆 → 白板"确认出现，再从控制台改掉其中一条。下一条消息后问助理白板上有什么，应当看到你的修改。
 2. 对话到 `protea status` 显示的估算超过 32k 后停下，等到缓存过期（Anthropic 默认 1 小时，其他 30 分钟）。确认转录序号增加，`/data/memory/raw/` 与 `handoff/` 各多一个文件。
 3. 继续对话：助理不读文件也应该知道之前在做什么。看 `logq --q "model call"` 的 `cacheHit`：压缩后第一次请求的系统前缀部分应仍命中。
-4. 第二天早上在控制台看"记忆整理"：有结果、日志里有整理记录，笔记带 `summary`、`keywords`、`sources`，`INDEX.md` 每个笔记一行。
-5. 问一个换了说法的问题（笔记里写"合伙人"，你问"partner"），看助理能否在两次检索内找到。
+4. 跟助理说一条长期约定（"以后图片都发 QQ"）：它应当当场写进 `/memories/core/rules.md`；压缩后的请求里 `rules` 段出现这一条。在群聊或邮件这类第三方消息所在的批里让它改 `core/`，应当先来一个审批。
+5. 第二天早上在控制台"记忆 → 概况"看"记忆整理"：通过验收（没有"未通过验收"），日志里有整理记录；`core/owner.md` 有你的称呼和时区；笔记带 `summary`、`keywords`、`sources`；笔记索引每个笔记一行；"待整理"为空。
+6. 问一个换了说法的问题（笔记里写"合伙人"，你问"partner"），看助理能否在两次检索内找到；"使用情况"里没有结果的检索应当在下一次整理后补进 `keywords`。
 
-- **通过**：以上都成立；原文文件里没有秘密；`INDEX.md` 没有被改坏。
-- **看日志**：`protea logq --q "idle compaction"`、`protea logq --component dream`、`protea logq --q "handed off"`。
+- **通过**：以上都成立；原文文件里没有秘密；`core/` 没有超限，历史版本里能看到每次改动。
+- **看日志**：`protea logq --q "idle compaction"`（每行有 `notesRole`）、`protea logq --component dream`（未通过验收时有 `rejected`）、`protea logq --q "handed off"`。
 - **导出**：`protea diag --since 48h --content`。
 
 ### T12 · 沙箱、浏览器与视觉

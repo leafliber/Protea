@@ -95,7 +95,7 @@ describe('the layout before provider profiles', () => {
     expect(doc.providers).toEqual({ default: 'anthropic', profiles: { anthropic: { protocol: 'anthropic', models: { main: 'claude-fable-5-1' }, anthropic: { fallbacks: null } } } });
     expect(doc.budget).toEqual({ dailyUsd: 5 });
     const after = loadConfig(dir, {});
-    expect(after.warnings).toEqual([]);
+    expect(after.warnings).toEqual([expect.stringMatching(/^daemon\.timezone is not set/)]);
     expect(after.config.providers.profiles['anthropic']?.apiKeySecret).toBe('PROVIDER_ANTHROPIC_API_KEY');
     expect(migrateLegacyProviders(dir, secrets)).toEqual([]);
   });

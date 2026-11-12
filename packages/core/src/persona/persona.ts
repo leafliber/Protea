@@ -6,7 +6,7 @@ import type { SystemSegment } from '../providers/types.js';
 import type { Logger } from '../observability/logger.js';
 import { errorMessage } from '../util/errors.js';
 
-export const PERSONA_FILES = ['SOUL.md', 'OPERATING.md', 'USER.md'] as const;
+export const PERSONA_FILES = ['SOUL.md', 'OPERATING.md'] as const;
 /** Hook module names, first match wins. TypeScript needs a Node.js that strips types (22.18+). */
 export const HOOK_FILES = ['hooks.ts', 'hooks.mts', 'hooks.mjs', 'hooks.js'] as const;
 
@@ -14,7 +14,6 @@ export interface PersonaFiles {
   dir: string;
   soul?: string;
   operating?: string;
-  user?: string;
 }
 
 /** What a custom handoff strategy sees. */
@@ -80,10 +79,8 @@ export function loadPersona(personaDir: string): PersonaFiles {
   const out: PersonaFiles = { dir: personaDir };
   const soul = read('SOUL.md');
   const operating = read('OPERATING.md');
-  const user = read('USER.md');
   if (soul !== undefined) out.soul = soul;
   if (operating !== undefined) out.operating = operating;
-  if (user !== undefined) out.user = user;
   return out;
 }
 
@@ -124,7 +121,7 @@ export class Persona {
   }
 
   /**
-   * Markdown files under the persona directory (SOUL.md, OPERATING.md, USER.md, environment
+   * Markdown files under the persona directory (SOUL.md, OPERATING.md, environment
    * prompt overrides under plugins/<id>/), for the control API. Hooks are code and stay off it.
    */
   listFiles(): Array<{ path: string; size: number; mtime: string }> {

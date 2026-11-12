@@ -24,7 +24,7 @@ export function stripThinking(msg: TranscriptMessage): TranscriptMessage {
 export function prefixFingerprint(req: ProviderRequest, salt = ''): string {
   const tools = req.tools
     .filter((t) => !t.deferLoading)
-    .map((t) => ({ n: t.name, d: t.description, s: t.inputSchema, p: t.providerType ?? null }))
+    .map((t) => ({ n: t.name, d: t.description, s: t.inputSchema }))
     .sort((a, b) => (a.n < b.n ? -1 : a.n > b.n ? 1 : 0));
   const h = crypto.createHash('sha256');
   h.update(JSON.stringify({ system: req.system.map((s) => s.text), tools, search: req.toolSearch === true, salt }));

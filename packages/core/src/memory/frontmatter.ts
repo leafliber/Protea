@@ -6,9 +6,13 @@ const MAX_SUMMARY_CHARS = 200;
 export interface NoteParts {
   /** The frontmatter `summary`, or the first line of text. */
   summary: string;
+  /** Whether the summary came from the frontmatter. */
+  hasSummary: boolean;
   keywords: string[];
   /** The text after the frontmatter. */
   body: string;
+  /** Lines taken by the frontmatter (0 without one). */
+  headerLines: number;
 }
 
 function firstLine(body: string): string {
@@ -31,12 +35,13 @@ export function parseNote(text: string): NoteParts {
       if (doc && typeof doc === 'object' && !Array.isArray(doc)) {
         const data = doc as Record<string, unknown>;
         const body = text.slice(m[0].length);
-        const summary = typeof data['summary'] === 'string' && data['summary'].trim() ? data['summary'].trim().slice(0, MAX_SUMMARY_CHARS) : firstLine(body);
-        return { summary, keywords: keywordList(data['keywords']), body };
+        const given = typeof data['summary'] === 'string' && data['summary'].trim() !== '';
+        const summary = given ? (data['summary'] as string).trim().replace(/\s+/g, ' ').slice(0, MAX_SUMMARY_CHARS) : firstLine(body);
+        return { summary, hasSummary: given, keywords: keywordList(data['keywords']), body, headerLines: m[0].split('\n').length - (m[0].endsWith('\n') ? 1 : 0) };
       }
     } catch {
       // Not YAML: the whole file is text.
     }
   }
-  return { summary: firstLine(text), keywords: [], body: text };
+  return { summary: firstLine(text), hasSummary: false, keywords: [], body: text, headerLines: 0 };
 }

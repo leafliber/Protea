@@ -177,8 +177,6 @@ export interface ContextSettings {
 }
 
 export interface MemorySettings {
-  /** Declare the provider's own memory tool type instead of a schema (the API then adds its own memory instructions). */
-  nativeTool: boolean;
   board: BoardSettings;
   dream: DreamSettings;
 }

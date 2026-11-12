@@ -2,6 +2,8 @@
 
 > 状态：Accepted（已实现，真实模型下的质量待 T3、T11 实测）· 更新：2026-11-10 · 决策：[ADR-0011](../20-decisions/ADR-0011-layered-memory-and-idle-compaction.md) · 设计：[11-memory-and-persona.md](../10-architecture/11-memory-and-persona.md)
 
+> 修订：第二次重构见 [12-memory-system-v2.md](12-memory-system-v2.md) 与 [ADR-0024](../20-decisions/ADR-0024-resident-memory-and-chunked-search.md)。下文保留当时的落地。
+
 | 要求 | 落地 |
 |---|---|
 | 1 服务单一对话 | 记忆只服务主会话，没有分区；白板默认不给 Fork |

@@ -9,6 +9,7 @@ import {
   type EventInput,
   type HandoffKind,
   type Level,
+  type ModelRole,
   type RunPhase,
   type TextBlock,
   type ToolResultBlock,
@@ -584,7 +585,7 @@ export class MainSession {
         type: 'context.overflow',
         level: 0,
         trigger: 'flush',
-        text: `The conversation does not fit the model's context even after a handoff (about ${est} input tokens, limit ${limits.hard}). The system prompt, tools or the running batch take too much room: shorten the Skills catalog, the MCP tool set or ${MEMORY_ROOT}/INDEX.md. Batches end without a model call until this is fixed.`,
+        text: `The conversation does not fit the model's context even after a handoff (about ${est} input tokens, limit ${limits.hard}). The system prompt, tools or the running batch take too much room: shorten the Skills catalog, the MCP tool set or the resident memory (${MEMORY_ROOT}/core/). Batches end without a model call until this is fixed.`,
       });
     }
     return false;
@@ -597,7 +598,7 @@ export class MainSession {
     mustKeepFrom: number,
     batchId: string | null,
     signal: AbortSignal,
-    how: { kind: HandoffKind; level: Level; strict?: boolean; seal?: boolean },
+    how: { kind: HandoffKind; level: Level; strict?: boolean; seal?: boolean; notesRole?: ModelRole },
   ): Promise<HandoffResult | null> {
     const o = this.o;
     const h = o.handoff as Handoff;
@@ -611,6 +612,7 @@ export class MainSession {
       level: how.level,
       ...(how.strict ? { strict: true } : {}),
       ...(how.seal ? { seal: true } : {}),
+      ...(how.notesRole ? { notesRole: how.notesRole } : {}),
       notice: (info) => this.handoffNotice(info, reason, batchId, how.kind),
     });
     if (!r) return null;
@@ -665,7 +667,7 @@ export class MainSession {
    * `abortIdleWork` or a failed notes request leaves the conversation as it was. Returns the
    * result, or null when it did not happen.
    */
-  async compactWhileIdle(reason: string, keepTokens: number): Promise<HandoffResult | null> {
+  async compactWhileIdle(reason: string, keepTokens: number, opts: { notesRole?: ModelRole } = {}): Promise<HandoffResult | null> {
     const o = this.o;
     if (!o.handoff || !o.limits || this.current || this.idleWork) return null;
     const limits = o.limits();
@@ -673,7 +675,7 @@ export class MainSession {
     const work = (async (): Promise<HandoffResult | null> => {
       this.setPhase('handoff');
       const est = estimateMessagesTokens(this.transcript.messages);
-      return this.handOff(reason, est, { ...limits, keep: keepTokens }, this.transcript.length, null, ac.signal, { kind: 'idle', level: 4, strict: true, seal: true });
+      return this.handOff(reason, est, { ...limits, keep: keepTokens }, this.transcript.length, null, ac.signal, { kind: 'idle', level: 4, strict: true, seal: true, ...(opts.notesRole ? { notesRole: opts.notesRole } : {}) });
     })();
     this.idleWork = work;
     this.idleAbort = ac;

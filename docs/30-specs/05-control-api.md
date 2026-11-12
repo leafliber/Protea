@@ -51,7 +51,7 @@
 | GET | `/healthz` | 存活。不需要令牌 |
 | GET | `/readyz` | `{ ready, reasons }`，不就绪 503：Provider 未就绪、已启用但 failed 的插件或 MCP 服务器、`observability.requiredPlugins` 中没有 running 的插件、SQLite 拿不到写锁、投递被暂停。不需要令牌 |
 | GET | `/metrics` | Prometheus 文本格式（[15-observability.md](../10-architecture/15-observability.md) §3）；需要令牌（只读即可），`control.publicMetrics: true` 时不需要 |
-| GET | `/api/status` | `StatusResponse`：`{ runId, version, startedAt, uptimeSec, phase, batchId, pending: {0..4}, provider: { id（主会话的供应商档案，未配置为 none）, protocol?, mainModel, ready, problem? }, setupRequired, plugins, mcp, skills, tools, context, memory, persona, usage24h, scheduler: { paused, cooldowns }, forks: ForkInfo[], budget: { enforced, dailyUsd, levels: {0..4: { spentUsd, tokens, limitUsd, usedRatio }} } }` |
+| GET | `/api/status` | `StatusResponse`：`{ runId, version, startedAt, uptimeSec, phase, batchId, pending: {0..4}, provider: { id（主会话的供应商档案，未配置为 none）, protocol?, mainModel, ready, problem? }, setupRequired, plugins, mcp, skills, tools, context, memory, timezone: { zone, set }（`set`：配置或环境设置了 `daemon.timezone`）, persona, usage24h, scheduler: { paused, cooldowns }, forks: ForkInfo[], budget: { enforced, dailyUsd, levels: {0..4: { spentUsd, tokens, limitUsd, usedRatio }} } }` |
 
 ## 事件与批
 
@@ -166,14 +166,16 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/memory/tree` | `{ files: [{ path, size, mtime }] }`（相对记忆目录） |
-| GET | `/api/memory/file?path=` | `{ path, text }`；`path` 可写 `notes/a.md` 或 `/memories/notes/a.md`；越界 400，不存在 404 |
-| PUT | `/api/memory/file?path=` | 请求体为纯文本，整份写入（原子替换），记审计 `memory_write`；越界或超过 1 MB 400 |
-| GET | `/api/memory/search?q=&paths=&limit=` | `{ hits: [{ path, snippet, summary? }] }`，搜索全部层 |
+| GET | `/api/memory/file?path=` | `{ path, text }`；`path` 可写 `notes/a.md`、`memories/notes/a.md` 或 `/memories/notes/a.md`；越界 400，不存在 404 |
+| PUT | `/api/memory/file?path=` | 请求体为纯文本，整份写入（原子替换），记审计 `memory_write`；`core/` 与 `notes/` 的修改在主会话空闲时进入系统前缀；越界、超过 1 MB、`core/` 超过上限或不是 `owner.md` / `rules.md` 时 400 |
+| GET | `/api/memory/search?q=&paths=&scope=&limit=` | `{ hits: MemorySearchHit[] }`：`{ path, summary?, matched, terms, chunks: [{ start, end, snippet }] }`；`scope` 是 `notes`、`raw`、`all`（默认） |
+| GET | `/api/memory/overview?days=` | `MemoryOverview`：`core`（两个常驻文件的字数与上限）、`index`（现在生成的笔记索引）、`stale`（前缀里还是旧版本）、`checks`（超限、缺 summary、过长）、`recall`（主会话最近 `days` 天的检索、读过的文件、没被用到的笔记、没有结果的检索） |
+| GET | `/api/memory/history?path=core/owner.md` | `{ path, versions: [{ name, at, text }] }`：常驻文件改动前的版本，新的在前（最多 20 份）；其他路径返回空列表 |
 | GET | `/api/memory/board?closed=1` | `{ rev, items, closed? }`；`closed` 是最近关闭的条目 |
 | POST | `/api/memory/board` | 请求体是 `BoardCommand`（`add` / `update` / `done` / `drop`），返回 `{ ok, receipt, rev }`，记审计 `memory_write`；无效 400 |
-| GET | `/api/memory/dream` | `DreamStatus`：是否启用或停用、是否运行中、最近一次的日期与结果 |
+| GET | `/api/memory/dream` | `DreamStatus`：是否启用或停用、是否运行中、最近一次的日期与结果、未通过验收的原因 `rejected`、上次通过验收的时间 `acceptedAt` |
 | POST | `/api/memory/dream` | 立即整理，202 `{ started, forkId }`；已在运行或预算不允许时 409。同时解除连续失败后的停用 |
-| GET | `/api/persona/files` | `{ files: [{ path, size, mtime }] }`：人格目录下的 `.md`（`SOUL.md`、`OPERATING.md`、`USER.md` 总在列表里，不存在时 size 为 0），含 `plugins/<id>/ENV_PROMPT.md` |
+| GET | `/api/persona/files` | `{ files: [{ path, size, mtime }] }`：人格目录下的 `.md`（`SOUL.md`、`OPERATING.md` 总在列表里，不存在时 size 为 0），含 `plugins/<id>/ENV_PROMPT.md` |
 | GET | `/api/persona/file?path=` | `{ path, text }`；不存在 404 |
 | PUT | `/api/persona/file?path=` | 纯文本整份写入（≤ 256 KB，原子替换），随即重载人格，从下一次模型请求生效；只接受目录内的 `.md`（钩子是代码，不开放）→ 400 |
 
@@ -234,3 +236,4 @@ SSE 与 WS 的消息都按总线记录的因果顺序发出：事件先于为它
 - 实际测试支持（M6 之后）：`/api/diagnostics`。
 - 账号与供应商档案（M6 之后，2026-11-05）：`/api/setup`、`/api/auth/login` 的账号密码方式、`/api/auth/password`、`/api/accounts*`、`/api/providers*`；会话改为服务端存储（`v2.` cookie）；`/api/status` 增加 `setupRequired` 与 `provider.protocol`。
 - M6：`POST /api/budget/release`、`/api/backups`；`BudgetStatus` 增加硬上限、扣住数与放行；`control.allowCidrs`；`/api/status` 的插件与 MCP 状态增加 `memoryBytes`。
+- 常驻记忆（2026-11-12）：`/api/memory/overview`、`/api/memory/history`；`/api/memory/search` 返回分块结果并接受 `scope`；`DreamStatus` 增加 `rejected`、`acceptedAt`；`/api/status` 增加 `timezone`；`ForkInfo` 增加 `unfinished`。

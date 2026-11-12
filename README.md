@@ -17,7 +17,7 @@ Protea 是一个 **24/7 常驻、事件流驱动、可热插拔** 的云端个�
 - **M2**：进程外插件（JSON-RPC over stdio）的发现、监督与热插拔（安装/启用/禁用/重载/卸载，配置热更新）；TypeScript 与 Python 插件 SDK；内置 `telegram`、`webhook`、`filewatch`；工具权限策略、经 Telegram 或终端的审批流与审计。
 - **M3**：MCP 客户端（stdio、Streamable HTTP、SSE；bearer 与 OAuth；运行中增删，工具名 `mcp__<服务器>__<工具>`）；工具很多时启用 Claude 的工具搜索，MCP 工具按需加载；Skills 注册表（`SKILL.md`，热加载、`skill_load`）与 3 个内置 Skills；内置来源 `rss`、`imap`。
 
-- **M4**：记忆目录 `/data/memory`（`memory` 工具，命令面同 Claude 的 memory tool；全文检索 `memory_search`，中文可搜；`INDEX.md` 进系统前缀）；对话变长时自动交接（cheap 模型写交接笔记，新对话带着最近的消息继续）；人格文件与可选钩子热加载；所有发往模型的请求做秘密扫描。
+- **M4**：记忆目录 `/data/memory`（`memory` 工具读写文件；分块全文检索 `memory_search`，中文可搜；主人画像、长期约定与自动生成的笔记索引进系统前缀）；对话变长时自动交接（cheap 模型写交接笔记，新对话带着最近的消息继续）；人格文件与可选钩子热加载；所有发往模型的请求做秘密扫描。
 - **M5**：Web 控制台（总览、事件流、会话、插件、MCP、Skills、审批、记忆与人格、配置、日志），不用 SSH 就能做 M0–M4 的所有操作；完整的控制 API 与 WebSocket；只读令牌；Prometheus 指标与 Grafana 示例面板；运行目录里的关停记录与崩溃报告；`protea logq` 等全套 CLI。
 - **M6**：Docker 镜像（full 含 Python/uv，slim 只有 Node），非 root 运行、启动前自动迁移并快照数据库、健康检查；预算强制执行与全局硬上限（控制台可临时放行）；外发限速；内置 `shell` 工具（工作区、超时、输出截断、无秘密环境）；插件与 MCP 进程的内存与文件描述符上限；日志的秘密过滤；控制平面地址白名单；在线备份、恢复与 Git 备份；模型调用录制与离线回放；CI（测试、依赖审计、镜像构建、容器冒烟测试、Trivy）。
 
@@ -239,11 +239,11 @@ PROTEA_DATA_DIR=.dev-data pnpm protea skills
 
 ## 记忆与人格
 
-助理的记忆是 `.dev-data/memory/` 下的 Markdown 文件，模型用 `memory` 工具读写（路径写作 `/memories/...`），`INDEX.md` 每次请求都会带上，所以只放"去哪找"的指针。你也可以直接编辑这些文件，索引会跟上。
+助理的记忆是 `.dev-data/memory/` 下的 Markdown 文件，模型用 `memory` 工具读写（路径写作 `/memories/...`）。每次请求都带上的只有三样：`core/owner.md`（关于你，上限 2000 字符）、`core/rules.md`（你定下的长期约定和纠正，上限 4000 字符）和由笔记的 `summary` 自动生成的索引；其余按需检索。助理随时维护这两个文件，你也可以在控制台的"记忆"页修改、查看历史版本或恢复。
 
-人格在 `.dev-data/persona/`：`SOUL.md`（是谁）、`OPERATING.md`（怎么做事）、`USER.md`（关于你）。改完从下一次模型请求生效。需要代码时可以加 `persona/hooks.mjs`（例如自定义交接），见 [docs/10-architecture/11-memory-and-persona.md](docs/10-architecture/11-memory-and-persona.md) §6。
+人格在 `.dev-data/persona/`：`SOUL.md`（是谁）、`OPERATING.md`（怎么做事）。改完从下一次模型请求生效。需要代码时可以加 `persona/hooks.mjs`（例如自定义交接），见 [docs/10-architecture/11-memory-and-persona.md](docs/10-architecture/11-memory-and-persona.md) §6。
 
-助理空闲时会压缩对话：较早的部分写成 `memory/handoff/` 下的笔记（原文另存到 `memory/raw/`），新对话带着白板、笔记和最近的消息继续。忙碌时超过 `context.handoff.softTokens`（默认 80k token）会当场交接。也可以在控制台的"会话"页手动触发，或者：
+助理空闲时会压缩对话：较早的部分写成 `memory/handoff/` 下的笔记（原文另存到 `memory/raw/`），新对话带着白板、笔记和最近的消息继续；每天凌晨（`daemon.timezone` 的时间）助理会整理一次记忆。忙碌时超过 `context.handoff.softTokens`（默认 80k token）会当场交接。也可以在控制台的"会话"页手动触发，或者：
 
 ```bash
 PROTEA_DATA_DIR=.dev-data pnpm protea sessions handoff

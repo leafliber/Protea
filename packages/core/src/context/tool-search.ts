@@ -94,7 +94,6 @@ export class ToolExposure {
       name: d.name,
       description: d.description,
       inputSchema: this.o.tools.schemaFor(d),
-      ...(d.providerType ? { providerType: d.providerType } : {}),
     });
 
     if (this.modeFor(opts.role) === 'client') {

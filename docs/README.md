@@ -21,7 +21,7 @@
 | 接口与格式的精确定义 | [30-specs/](30-specs/) |
 | 做到哪一步、下一步做什么 | [40-plan/01-roadmap.md](40-plan/01-roadmap.md) |
 | 在真实环境里怎么测、日志怎么导出 | [40-plan/06-real-world-testing.md](40-plan/06-real-world-testing.md) |
-| 记忆系统重构的要求与落地 | [40-plan/07-memory-system-redesign.md](40-plan/07-memory-system-redesign.md) |
+| 记忆系统重构的要求与落地 | [40-plan/07-memory-system-redesign.md](40-plan/07-memory-system-redesign.md) → 第二次重构 [40-plan/12-memory-system-v2.md](40-plan/12-memory-system-v2.md) |
 | 沙箱 shell、浏览器与视觉支持的落地 | [40-plan/08-sandbox-browser-vision.md](40-plan/08-sandbox-browser-vision.md) |
 | 对话窗口怎么显示表格、流程图、问答、图片与小组件，连接器怎么接入 | [40-plan/09-chat-rich-display.md](40-plan/09-chat-rich-display.md) |
 | 助理怎么提议改自己的能力、MCP 与插件工具怎么按需加载、子 agent 怎么复用 | [40-plan/10-capability-changes-lazy-mcp-fork-reuse.md](40-plan/10-capability-changes-lazy-mcp-fork-reuse.md) |
@@ -79,7 +79,8 @@ docs/
 │   ├── ADR-0020-fork-reuse-client-tool-search-final-reply.md
 │   ├── ADR-0021-readable-approval-requests-and-delivery.md
 │   ├── ADR-0022-no-backward-compatibility-before-launch.md
-│   └── ADR-0023-plugin-tools-on-demand.md
+│   ├── ADR-0023-plugin-tools-on-demand.md
+│   └── ADR-0024-resident-memory-and-chunked-search.md
 ├── 30-specs/                          精确规范（Schema、协议、配置、API）
 │   ├── 01-event-envelope-schema.md
 │   ├── 02-plugin-manifest.md
@@ -98,7 +99,9 @@ docs/
     ├── 07-memory-system-redesign.md   记忆系统重构：九条要求如何落地
     ├── 08-sandbox-browser-vision.md   沙箱 shell、浏览器与视觉支持：方案
     ├── 09-chat-rich-display.md        对话窗口的富内容展示：方案与落地
-    └── 10-capability-changes-lazy-mcp-fork-reuse.md   能力变更审核、MCP 按需加载、Fork 复用：方案与落地
+    ├── 10-capability-changes-lazy-mcp-fork-reuse.md   能力变更审核、MCP 按需加载、Fork 复用：方案与落地
+    ├── 11-console-approvals-schedules.md   定时任务页、授权请求、平台选择、控制台分组
+    └── 12-memory-system-v2.md         记忆系统第二次重构：实测问题、对照与落地
 ```
 
 ## 文档约定

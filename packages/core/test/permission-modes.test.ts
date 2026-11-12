@@ -118,6 +118,23 @@ function setup(o: { settings?: Partial<PermissionSettings>; verdict?: (r: JudgeR
 const temporary = { forMs: HOUR, by: 'test' };
 
 describe('permission modes', () => {
+  it('a call that asks for the owner (askWhen) goes to the owner in every mode but locked, and runs once approved', async () => {
+    const h = setup();
+    await h.modes.set('auto', temporary);
+    const memory: ToolDef = { ...h.def('memory'), owner: 'core', flags: {}, askWhen: (input: unknown, ctx) => ((input as { path: string }).path.startsWith('core/') && ctx.batchId === 'b1' ? 'the batch holds messages from someone other than the owner' : null) };
+    const use = (path: string, id: string): ToolUseBlock => ({ type: 'tool_use', id, name: 'memory', input: { command: 'append', path, text: 'x' } }) as ToolUseBlock;
+    const ctx = { sessionId: 'main', batchId: 'b1', level: 2 as const };
+    expect(await h.guard.check(memory, use('journal/a.md', 'j1'), ctx)).toMatchObject({ action: 'run', policy: 'allow' });
+    const held = await h.guard.check(memory, use('core/rules.md', 'r1'), ctx);
+    expect(held).toMatchObject({ action: 'block', isError: false, policy: 'ask', rule: 'the batch holds messages from someone other than the owner' });
+    expect(h.judged).toHaveLength(0);
+    expect(h.delivered).toHaveLength(1);
+    h.approvals.decide(h.delivered[0] as string, 'approve', 'owner');
+    expect(await h.guard.check(memory, use('core/rules.md', 'r2'), ctx)).toMatchObject({ action: 'run', audit: true });
+    await h.modes.set('locked', temporary);
+    expect(await h.guard.check(memory, use('core/rules.md', 'r3'), ctx)).toMatchObject({ action: 'block', isError: true });
+  });
+
   it('ask (the default) sends the call to the owner and never to the judge', async () => {
     const h = setup();
     expect(h.modes.current()).toBe('ask');

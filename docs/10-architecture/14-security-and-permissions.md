@@ -21,6 +21,7 @@
 3. 插件清单 `sideEffectTools` 的默认：`ask`
 4. MCP 注解与服务器信任（M3，[09-mcp-integration.md](09-mcp-integration.md) §6）：`readOnlyHint` → `allow`；`trust: low` 的服务器其余工具 → `ask`；`trust: normal` 时显式 `destructiveHint` → `ask`；`trust: high` 不加规则。没有 `readOnlyHint` 的 MCP 工具都带 `sideEffect` 标志（第 0 条与审计都适用）
 5. 全局默认 `permissions.default`（出厂 `allow`）
+6. 逐次判断（2026-11-12）：上面得出的不是 `deny` 时，工具规格的 `askWhen(input, { sessionId, batchId })` 可以说明"这一次"为什么需要主人，此时按 `permissions.tools` 里写的 `ask` 处理：任何模式下都只交给主人，`locked` 时不执行。目前只有 `memory` 用它：写常驻记忆 `core/` 时，主会话的批里有主人以外的外部事件、或写入来自梦境以外的 Fork（[11-memory-and-persona.md](11-memory-and-persona.md) §7）。批准后用同样的输入再调用一次。
 
 约定：给主人发消息的 `chat_send` 不在 `sideEffectTools` 里，默认 `allow`；给第三方发的（`tg_send_chat`、`qq_group_reply`）在里面，默认 `ask`。内置插件的清单都按此审查过。
 
