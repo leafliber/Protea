@@ -1,0 +1,55 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "apiBase": {
+      "type": "string",
+      "format": "uri",
+      "default": "https://api.dida365.com",
+      "description": "Open API host. Dida365 (滴答清单): https://api.dida365.com. TickTick (international): https://api.ticktick.com."
+    },
+    "timeZone": {
+      "type": "string",
+      "description": "IANA time zone in which times are read and shown (e.g. Asia/Shanghai). Default: the daemon's time zone."
+    },
+    "defaultProjectId": {
+      "type": "string",
+      "description": "Project that new tasks go to when the assistant names none. Default: the inbox."
+    },
+    "toolsets": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "enum": ["tasks", "projects", "tags", "focus", "habits", "countdowns"] },
+      "default": ["tasks", "projects", "tags", "focus", "habits", "countdowns"],
+      "x-hot": false,
+      "description": "Groups of tools offered to the assistant. Leave some out to keep the tool list short."
+    },
+    "maxResults": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 200,
+      "default": 50,
+      "description": "Most entries a listing returns to the model; a tool call may ask for fewer."
+    },
+    "timeoutSec": { "type": "number", "minimum": 1, "maximum": 120, "default": 20, "description": "Time allowed per request to Dida365." },
+    "reminders": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Events for tasks that reach their time. Off by default.",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "intervalMin": { "type": "number", "minimum": 1, "maximum": 1440, "default": 5, "description": "How often open tasks are checked." },
+        "leadMin": { "type": "integer", "minimum": 0, "maximum": 1440, "default": 0, "description": "Report a timed task this many minutes before its time." },
+        "dailyAt": {
+          "type": "string",
+          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+          "default": "09:00",
+          "description": "Time of day (in timeZone) at which the day's all-day tasks and the overdue summary are reported."
+        },
+        "overdue": { "type": "boolean", "default": true, "description": "Report once a day which tasks from earlier days are still open." },
+        "level": { "enum": [2, 3, 4], "default": 3, "description": "2: delivered at once; 3: a debounced batch; 4: rides along with other events." },
+        "projectIds": { "type": "array", "items": { "type": "string" }, "description": "Only watch these projects. Default: all." }
+      }
+    }
+  }
+}

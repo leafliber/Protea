@@ -366,6 +366,14 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 
 未验证：真实模型是否会用 `final`、是否先搜索再调用被延迟的工具、是否更愿意把工作交给 Fork 并复用它（T17）。已有实例的 `/data/persona/OPERATING.md` 不会自动得到默认人格里新增的「Delegation」一节。
 
+### 滴答清单插件（2026-11-12）
+
+- 内置插件 `dida365`：滴答清单官方 Open API，个人 API Token（秘密 `DIDA365_TOKEN`）。27 个 `dida_*` 工具覆盖任务（查询、新建、修改、完成、移动、批量、指派、评论）、清单与分组、看板列、标签、专注记录、习惯与打卡、倒数日和删除；`toolsets` 可按组关闭。修改任务先读后写，保留没提到的字段。
+- 可选的任务到期事件：轮询未完成任务，到点推 `dida365.task_due`，每天汇总一次 `dida365.overdue`（[08-event-source-plugins.md](../10-architecture/08-event-source-plugins.md) §6.5）。
+- 自动测试用内存中的假 Open API；一致性检查 11 项通过。
+
+未验证：没有用真实账号调用过（T19）。文档没写明的行为都按保守的方式处理，需要实测确认：更新任务时省略的字段是否保留、清除日期（`null`）是否生效、创建任务不带 `projectId` 是否进收集箱、`task/filter` 不带 `status` 时返回什么、看板列与习惯的状态码含义。
+
 ### 权限模式与 auto 判断模型（2026-11-10）
 
 决策见 [ADR-0015](../20-decisions/ADR-0015-permission-modes-and-auto-review.md)。
