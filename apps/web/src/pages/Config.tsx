@@ -1,7 +1,7 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import type { AccountInfo, BudgetStatus, ConfigResponse, SecretInfo } from '@protea/protocol';
 import { api, enc, post, useAction, useApi } from '../api';
-import { Badge, Bar, Button, Card, ErrorText, Field, LevelBadge, Tabs, dateTime, usd } from '../components/ui';
+import { Badge, Bar, Button, Card, ErrorText, Field, LevelBadge, Tabs, dateTime, usd, useAsk } from '../components/ui';
 import { go, useSession } from '../session';
 
 function parseValue(raw: string): unknown {
@@ -138,6 +138,7 @@ function Effective() {
 }
 
 function Secrets() {
+  const ask = useAsk();
   const { canWrite } = useSession();
   const r = useApi<{ secrets: SecretInfo[] }>('/api/secrets');
   const [name, setName] = useState('');
@@ -166,7 +167,7 @@ function Secrets() {
               </td>
               <td>
                 {canWrite && s.source === 'file' && (
-                  <Button small kind="danger" onClick={() => confirm(`删除秘密 ${s.name}？`) && void act.run(() => api('DELETE', `/api/secrets/${enc(s.name)}`)).then(r.reload)}>
+                  <Button small kind="danger" onClick={() => ask(`删除秘密 ${s.name}？`, () => void act.run(() => api('DELETE', `/api/secrets/${enc(s.name)}`)).then(r.reload), { body: '用到它的插件或模型供应商会失去这个值。', confirm: '删除' })}>
                     删除
                   </Button>
                 )}
@@ -189,66 +190,6 @@ function Secrets() {
           </Button>
         </form>
       )}
-    </Card>
-  );
-}
-
-interface PermissionView {
-  settings: { default: string; tools: Record<string, string>; approvalTtlMs: number };
-  tools: Array<{ name: string; owner: string; policy: string; rule: string }>;
-}
-
-function Permissions() {
-  const { canWrite } = useSession();
-  const r = useApi<PermissionView>('/api/permissions');
-  const [filter, setFilter] = useState('');
-  const [result, setResult] = useState<PatchResult | null>(null);
-  const act = useAction();
-  const setPolicy = (tool: string, policy: string | null) =>
-    void act.run(async () => {
-      setResult(await api<PatchResult>('PATCH', '/api/permissions', { tools: { [tool]: policy } }));
-      r.reload();
-    });
-  return (
-    <Card title="权限" actions={<input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="过滤工具" />}>
-      <ErrorText error={r.error ?? act.error} />
-      <PatchNotice result={result} />
-      {r.data && <div className="muted small">默认：{r.data.settings.default} · 审批有效期 {Math.round(r.data.settings.approvalTtlMs / 3_600_000)} 小时</div>}
-      <table className="table">
-        <thead>
-          <tr>
-            <th>工具</th>
-            <th>来自</th>
-            <th>决定</th>
-            <th>规则</th>
-            {canWrite && <th>设置</th>}
-          </tr>
-        </thead>
-        <tbody>
-          {r.data?.tools
-            .filter((t) => !filter || t.name.includes(filter))
-            .map((t) => (
-              <tr key={t.name}>
-                <td className="mono small">{t.name}</td>
-                <td className="small">{t.owner}</td>
-                <td>
-                  <Badge tone={t.policy === 'allow' ? 'good' : t.policy === 'ask' ? 'warn' : 'bad'}>{t.policy}</Badge>
-                </td>
-                <td className="small muted">{t.rule}</td>
-                {canWrite && (
-                  <td>
-                    <select value={r.data?.settings.tools[t.name] ?? ''} onChange={(e) => setPolicy(t.name, e.target.value || null)}>
-                      <option value="">（按规则）</option>
-                      <option value="allow">allow</option>
-                      <option value="ask">ask</option>
-                      <option value="deny">deny</option>
-                    </select>
-                  </td>
-                )}
-              </tr>
-            ))}
-        </tbody>
-      </table>
     </Card>
   );
 }
@@ -447,6 +388,7 @@ function Backups() {
 }
 
 function Scheduler() {
+  const ask = useAsk();
   const { canWrite } = useSession();
   const r = useApi<{ paused: string | null; cooldowns: Array<{ source: string; untilMs: number }>; pending: Record<string, number> }>('/api/scheduler', { refreshMs: 5000 });
   const [levels, setLevels] = useState<number[]>([4]);
@@ -454,7 +396,7 @@ function Scheduler() {
   const act = useAction();
   const s = r.data;
   return (
-    <Card title="调度">
+    <Card title="事件调度">
       <ErrorText error={r.error ?? act.error} />
       {s && (
         <>
@@ -491,12 +433,16 @@ function Scheduler() {
                 small
                 disabled={levels.length === 0}
                 onClick={() =>
-                  confirm(`丢弃 L${levels.join(',')} 的全部待处理事件？`) &&
-                  void act.run(async () => {
-                    const res = await post<{ discarded: number }>('/api/scheduler/discard', { levels });
-                    setNote(`丢弃了 ${res.discarded} 个事件`);
-                    r.reload();
-                  })
+                  ask(
+                    `丢弃 L${levels.join(',')} 的全部待处理事件？`,
+                    () =>
+                      void act.run(async () => {
+                        const res = await post<{ discarded: number }>('/api/scheduler/discard', { levels });
+                        setNote(`丢弃了 ${res.discarded} 个事件`);
+                        r.reload();
+                      }),
+                    { body: '助理不会再看到这些事件，不能恢复。', confirm: '丢弃' },
+                  )
                 }
               >
                 丢弃
@@ -551,6 +497,7 @@ function MyPassword() {
 }
 
 function Accounts() {
+  const ask = useAsk();
   const { username: me } = useSession();
   const r = useApi<{ accounts: AccountInfo[] }>('/api/accounts');
   const [username, setUsername] = useState('');
@@ -608,11 +555,15 @@ function Accounts() {
                       small
                       kind="danger"
                       onClick={() => {
-                        if (confirm(`删除账号 ${a.username}？`))
-                          void act.run(async () => {
-                            await api('DELETE', `/api/accounts/${enc(a.username)}`);
-                            r.reload();
-                          });
+                        ask(
+                          `删除账号 ${a.username}？`,
+                          () =>
+                            void act.run(async () => {
+                              await api('DELETE', `/api/accounts/${enc(a.username)}`);
+                              r.reload();
+                            }),
+                          { confirm: '删除' },
+                        );
                       }}
                     >
                       删除
@@ -645,7 +596,7 @@ function Accounts() {
 
 export function Config() {
   const params = new URLSearchParams(location.hash.split('?')[1] ?? '');
-  const tab = (params.get('tab') ?? 'config') as 'config' | 'accounts' | 'password' | 'secrets' | 'permissions' | 'budget' | 'scheduler' | 'backups';
+  const tab = (params.get('tab') ?? 'config') as 'config' | 'accounts' | 'password' | 'secrets' | 'budget' | 'scheduler' | 'backups';
   const { canWrite } = useSession();
   // Secrets are managed only over TLS or from this machine (docs/10-architecture/14-security-and-permissions.md §8).
   const secure = location.protocol === 'https:' || ['localhost', '127.0.0.1', '[::1]', '::1'].includes(location.hostname);
@@ -653,9 +604,8 @@ export function Config() {
     ['config', '生效配置'],
     ...(canWrite ? ([['accounts', '账号']] as Array<[typeof tab, string]>) : ([['password', '我的密码']] as Array<[typeof tab, string]>)),
     ...(canWrite && secure ? ([['secrets', '秘密']] as Array<[typeof tab, string]>) : []),
-    ['permissions', '权限'],
     ['budget', '预算'],
-    ['scheduler', '调度'],
+    ['scheduler', '事件调度'],
     ['backups', '备份'],
   ];
   return (
@@ -665,7 +615,6 @@ export function Config() {
       {tab === 'accounts' && <Accounts />}
       {tab === 'password' && <MyPassword />}
       {tab === 'secrets' && (secure ? <Secrets /> : <div className="banner banner-warn">秘密只能在 HTTPS 或本机访问时管理（也可以用 protea secrets set）。</div>)}
-      {tab === 'permissions' && <Permissions />}
       {tab === 'budget' && <Budget />}
       {tab === 'scheduler' && <Scheduler />}
       {tab === 'backups' && <Backups />}

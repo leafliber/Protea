@@ -205,18 +205,99 @@ export interface SkillInfo {
   lastLoadedAt?: string;
 }
 
+/**
+ * An approval request as a person reads it: what is about to happen, not the raw arguments.
+ * Every value is plain text on one line, redacted and clipped; none of it is markup.
+ */
+export interface ApprovalView {
+  /** What the call does, in the daemon's language: "Run a command". */
+  title: string;
+  /** The one value that matters most: the command, the recipient, the path. */
+  target?: string;
+  /** The other arguments worth reading, a handful at most. */
+  fields: Array<{ label: string; value: string }>;
+  /** The assistant's own sentence: what this is for. */
+  reason?: string;
+  /** Why the automatic review passed the call on. */
+  held?: string;
+  /** What "do not ask again for a while" would cover. */
+  family: { id: string; label: string };
+}
+
 export interface ApprovalInfo {
   id: string;
   tool: string;
   state: 'pending' | 'approved' | 'denied' | 'expired' | 'used';
+  /** One readable line (title and target). */
   summary: string;
   reason?: string;
+  view?: ApprovalView;
+  /** The redacted input as JSON, clipped, for whoever wants to read all of it. */
+  input?: string;
+  /** The platforms that showed the request to the owner. */
+  deliveredTo?: string[];
+  /** What the owner said with the decision. */
+  note?: string;
   createdAt: string;
   expiresAt: string;
   decidedAt?: string;
   decidedBy?: string;
   /** The time-limited grant this approval created. */
   grantId?: string;
+}
+
+/** A schedule of the cron plugin, as the console shows it. */
+export interface ScheduleInfo {
+  id: string;
+  name: string;
+  /** Five-field cron expression (recurring). */
+  cron?: string;
+  /** The instant a one-time schedule fires, ISO 8601 with offset. */
+  at?: string;
+  /** What the assistant reads when it fires. */
+  note?: string;
+  level: 3 | 4;
+  /** A paused schedule keeps its place and does not fire. */
+  enabled: boolean;
+  /** `wake` is a `sleep_until` of the assistant. */
+  kind: 'once' | 'recurring' | 'wake';
+  createdBy: 'config' | 'assistant' | 'operator';
+  createdAt: string;
+  /** The rule in words ("每个工作日 07:00"); the cron expression when it has no plain reading. */
+  human: string;
+  /** When it fires next; absent while paused or when it never fires again. */
+  nextAt?: string;
+  lastFiredAt?: string;
+  fires: number;
+  /** Defined in config.yaml: it can be run, not changed. */
+  readOnly: boolean;
+}
+
+/** POST /api/schedules, PATCH /api/schedules/:id. */
+export interface ScheduleInput {
+  name?: string;
+  cron?: string;
+  at?: string;
+  note?: string;
+  level?: 3 | 4;
+  enabled?: boolean;
+}
+
+/** POST /api/schedules/preview. */
+export interface SchedulePreview {
+  human: string;
+  /** The next few firing times, ISO 8601 with offset. */
+  next: string[];
+}
+
+/** One firing of a schedule (GET /api/schedules/:id/runs). */
+export interface ScheduleRun {
+  cursor: number;
+  at: string;
+  state: EventState;
+  batchId?: string;
+  /** Fired by hand from the console. */
+  manual?: boolean;
 }
 
 export const PERMISSION_MODES = ['ask', 'auto', 'bypass', 'locked'] as const;
@@ -581,6 +662,7 @@ export type StreamMessage =
   | { topic: 'handoff'; data: { from: string; to: string; notes: string; dropped: number; kept: number } }
   | { topic: 'plugin'; data: PluginStatus }
   | { topic: 'approval'; data: ApprovalInfo }
+  | { topic: 'schedule'; data: { id: string } }
   | { topic: 'permission'; data: PermissionModeInfo };
 
 export type StreamTopic = StreamMessage['topic'];
@@ -627,7 +709,7 @@ export const WS_TOPICS = {
   output: ['output'],
   /** Replies as they are written: only the chat window subscribes. */
   chat: ['chat.draft'],
-  changes: ['fork', 'plugin', 'approval', 'change', 'permission', 'mcp', 'skills', 'handoff', 'persona'],
+  changes: ['fork', 'plugin', 'approval', 'schedule', 'change', 'permission', 'mcp', 'skills', 'handoff', 'persona'],
   usage: ['usage'],
   logs: ['log'],
   /** The run stream: heavy, so only pages that show it subscribe. */

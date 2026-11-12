@@ -2,10 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import type { WhoAmIResponse } from '@protea/protocol';
 import { IconConsole, IconChat, IconLogout, IconUser } from './icons';
 import { consoleHref } from '../session';
+import { setTheme, storedTheme, type Theme } from '../theme';
+import { Segmented } from './ui';
 
 /** The signed-in account: who it is, where to go, sign out. */
 export function UserMenu({ me, onLogout, place }: { me: WhoAmIResponse; onLogout: () => void; place: 'chat' | 'console' }) {
   const [open, setOpen] = useState(false);
+  const [theme, setThemeState] = useState<Theme>(storedTheme);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -40,6 +43,21 @@ export function UserMenu({ me, onLogout, place }: { me: WhoAmIResponse; onLogout
               <IconChat /> 对话
             </a>
           )}
+          <div className="menu-theme">
+            <Segmented
+              label="外观"
+              value={theme}
+              onChange={(t) => {
+                setTheme(t);
+                setThemeState(t);
+              }}
+              options={[
+                ['system', '跟随系统'],
+                ['light', '浅色'],
+                ['dark', '深色'],
+              ]}
+            />
+          </div>
           {me.username && (
             <a role="menuitem" className="menu-item" href={consoleHref('config', { tab: 'password' })} onClick={() => setOpen(false)}>
               <IconUser /> 修改密码

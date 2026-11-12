@@ -230,10 +230,13 @@ class Host:
     def owner_resolve(self, sender_key: str) -> str:
         return (self._conn.request("owner/resolve", {"senderKey": sender_key}) or {}).get("role", "unknown")
 
-    def approvals_decide(self, approval_id: str, decision: str, sender_key: str, grant_ms: Optional[int] = None) -> Dict[str, Any]:
+    def approvals_decide(self, approval_id: str, decision: str, sender_key: str, grant_ms: Optional[int] = None, note: Optional[str] = None) -> Dict[str, Any]:
         params: Dict[str, Any] = {"id": approval_id, "decision": decision, "senderKey": sender_key}
         if grant_ms is not None:
             params["grantMs"] = grant_ms
+        if note:
+            # What the owner said with the decision; it reaches the assistant.
+            params["note"] = note
         return self._conn.request("approvals/decide", params)
 
     def permissions_mode(self, sender_key: str, mode: Optional[str] = None, for_ms: Optional[int] = None) -> Dict[str, Any]:

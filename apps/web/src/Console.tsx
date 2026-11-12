@@ -7,19 +7,23 @@ import {
   IconBook,
   IconChat,
   IconCheckShield,
+  IconClock,
   IconCpu,
   IconGauge,
   IconLayers,
+  IconLock,
   IconLog,
   IconMenu,
+  IconPanel,
   IconPlug,
   IconPuzzle,
   IconSettings,
   IconSparkles,
 } from './components/icons';
-import { PageActionsContext, cx } from './components/ui';
+import { EmptyState, PageActionsContext, cx } from './components/ui';
 import { useLiveState, useReloadOn } from './live';
-import { consoleHref, useSession } from './session';
+import { consoleHref, go, useSession } from './session';
+import { movedTo } from './view-logic';
 import { Approvals } from './pages/Approvals';
 import { usePendingChanges } from './pages/Changes';
 import { Config } from './pages/Config';
@@ -28,8 +32,10 @@ import { Logs } from './pages/Logs';
 import { Mcp } from './pages/Mcp';
 import { Memory } from './pages/Memory';
 import { Overview } from './pages/Overview';
+import { Permissions } from './pages/Permissions';
 import { Plugins } from './pages/Plugins';
 import { Providers } from './pages/Providers';
+import { Schedules } from './pages/Schedules';
 import { Sessions } from './pages/Sessions';
 import { Skills } from './pages/Skills';
 
@@ -42,12 +48,22 @@ interface PageDef {
 
 export const CONSOLE_GROUPS: Array<{ label: string; pages: PageDef[] }> = [
   {
-    label: '运行',
+    label: '',
+    pages: [{ id: 'overview', label: '总览', desc: '需要你处理的事、助理正在做什么、接下来会做什么', icon: <IconGauge /> }],
+  },
+  {
+    label: '待办',
     pages: [
-      { id: 'overview', label: '总览', desc: '运行状态、上下文、用量与预算', icon: <IconGauge /> },
+      { id: 'approvals', label: '审批', desc: '等你点头的操作，和你处理过的记录', icon: <IconCheckShield /> },
+      { id: 'schedules', label: '定时任务', desc: '到点让助理去做的事：每天的简报、每周的提醒、一次性的安排', icon: <IconClock /> },
+    ],
+  },
+  {
+    label: '观察',
+    pages: [
       { id: 'events', label: '运行流', desc: '所有事件、用户输入、模型的思考与输出、工具调用和发出的消息', icon: <IconActivity /> },
       { id: 'sessions', label: '会话', desc: '主会话的转录与上下文、每一批的处理过程与后台 Fork', icon: <IconLayers /> },
-      { id: 'approvals', label: '审批', desc: '需要你批准的操作，以及审批与工具调用的审计记录', icon: <IconCheckShield /> },
+      { id: 'logs', label: '日志', desc: '实时日志、检索、运行记录与诊断包', icon: <IconLog /> },
     ],
   },
   {
@@ -63,8 +79,8 @@ export const CONSOLE_GROUPS: Array<{ label: string; pages: PageDef[] }> = [
   {
     label: '系统',
     pages: [
-      { id: 'config', label: '配置', desc: '生效配置、账号、秘密、权限、预算、调度与备份', icon: <IconSettings /> },
-      { id: 'logs', label: '日志', desc: '实时日志、检索、运行记录与诊断包', icon: <IconLog /> },
+      { id: 'permissions', label: '权限', desc: '哪些事助理可以直接做、哪些要先问你，以及留下的记录', icon: <IconLock /> },
+      { id: 'config', label: '配置', desc: '生效配置、账号、秘密、预算、事件调度与备份', icon: <IconSettings /> },
     ],
   },
 ];
@@ -82,50 +98,81 @@ function usePendingApprovals(): number {
   return (r.data?.approvals?.filter((a) => a.state === 'pending').length ?? 0) + changes;
 }
 
+const COLLAPSED_KEY = 'protea.side.collapsed';
+
 /** The operator console: everything except the conversation. */
 export function ConsoleShell({ me, page, params, status, reload, onLogout }: { me: WhoAmIResponse; page: string; params: URLSearchParams; status: StatusResponse | undefined; reload: () => void; onLogout: () => void }) {
   const ws = useLiveState();
   const [navOpen, setNavOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem(COLLAPSED_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
   const [actionsEl, setActionsEl] = useState<HTMLElement | null>(null);
   const def = ALL_PAGES.find((p) => p.id === page);
   const approvals = usePendingApprovals();
-  const pending = status ? Object.values(status.pending).reduce((a, b) => a + b, 0) : 0;
   const phase = status?.phase ?? 'idle';
+  const moved = movedTo(page, params);
 
   useEffect(() => {
     document.title = `${def?.label ?? '控制台'} · Protea 控制台`;
     setNavOpen(false);
   }, [page]);
+  useEffect(() => {
+    if (moved) go(moved.page, moved.params);
+  }, [moved?.page, moved?.params['tab']]);
+  const toggle = () => {
+    const next = !collapsed;
+    setCollapsed(next);
+    try {
+      localStorage.setItem(COLLAPSED_KEY, next ? '1' : '0');
+    } catch {
+      // The choice lasts for this page only.
+    }
+  };
 
-  const counts: Record<string, number> = { events: pending, approvals };
+  // Only what waits for a decision gets a number: a count that is always there stops meaning anything.
+  const counts: Record<string, number> = { approvals };
   return (
-    <div className="console">
+    <div className={cx('console', collapsed && 'console-narrow')}>
       <aside className={cx('side', navOpen && 'side-open')} aria-label="控制台导航">
         <a className="side-brand" href={consoleHref('overview')}>
           <img src="./favicon.svg" alt="" width="26" height="26" />
-          <span>
+          <span className="side-brand-text">
             <b>Protea</b>
             <small>控制台</small>
           </span>
         </a>
-        <a className="side-chat" href="#/">
-          <IconChat /> 返回对话
+        <a className="side-chat" href="#/" title="返回对话">
+          <IconChat /> <span className="side-text">返回对话</span>
         </a>
         <nav className="side-nav">
           {CONSOLE_GROUPS.map((g) => (
-            <div key={g.label} className="side-group">
-              <div className="side-label">{g.label}</div>
+            <div key={g.label || 'top'} className="side-group">
+              {g.label && <div className="side-label">{g.label}</div>}
               {g.pages.map((p) => (
-                <a key={p.id} href={consoleHref(p.id)} className={cx('side-item', page === p.id && 'side-on')} aria-current={page === p.id ? 'page' : undefined}>
+                <a key={p.id} href={consoleHref(p.id)} title={collapsed ? p.label : undefined} className={cx('side-item', page === p.id && 'side-on')} aria-current={page === p.id ? 'page' : undefined}>
                   {p.icon}
                   <span className="side-text">{p.label}</span>
-                  {(counts[p.id] ?? 0) > 0 && <span className={cx('side-count', p.id === 'approvals' && 'side-count-hot')}>{counts[p.id]}</span>}
+                  {(counts[p.id] ?? 0) > 0 && (
+                    <span className="side-count side-count-hot" aria-label={`${counts[p.id]} 项待处理`}>
+                      {counts[p.id]}
+                    </span>
+                  )}
                 </a>
               ))}
             </div>
           ))}
         </nav>
-        <div className="side-foot">{status ? `${status.version} · run ${status.runId.slice(-6)}` : ' '}</div>
+        <div className="side-foot">
+          <span className="side-text">{status ? `${status.version} · run ${status.runId.slice(-6)}` : ' '}</span>
+          <button type="button" className="icon-btn side-collapse" aria-label={collapsed ? '展开导航' : '收起导航'} title={collapsed ? '展开导航' : '收起导航'} aria-pressed={collapsed} onClick={toggle}>
+            <IconPanel size={16} />
+          </button>
+        </div>
       </aside>
       {navOpen && <div className="side-backdrop" onClick={() => setNavOpen(false)} />}
 
@@ -134,18 +181,17 @@ export function ConsoleShell({ me, page, params, status, reload, onLogout }: { m
           <button type="button" className="icon-btn con-menu" aria-label="打开导航" onClick={() => setNavOpen(true)}>
             <IconMenu size={18} />
           </button>
-          <div className="crumbs">
-            <span className="muted">控制台</span>
-            <span className="crumb-sep">/</span>
-            <span>{def?.label ?? page}</span>
-          </div>
           <div className="spacer" />
-          {status?.scheduler.paused && <span className="badge badge-bad">投递已暂停</span>}
+          {status?.scheduler.paused && (
+            <a className="badge badge-bad" href={consoleHref('overview')}>
+              投递已暂停
+            </a>
+          )}
           <span className={cx('pill', `phase-${phase}`)} title={status?.batchId ? `批 ${status.batchId}` : '主会话'}>
             <span className="lamp" />
             {PHASE_LABEL[phase] ?? phase}
           </span>
-          <span className={cx('live-dot', `live-${ws}`)} title={ws === 'open' ? '实时连接正常' : ws === 'connecting' ? '正在连接' : '实时连接已断开'} />
+          <span className={cx('live-dot', `live-${ws}`)} role="img" aria-label={ws === 'open' ? '实时连接正常' : ws === 'connecting' ? '正在连接' : '实时连接已断开'} title={ws === 'open' ? '实时连接正常' : ws === 'connecting' ? '正在连接' : '实时连接已断开'} />
           <UserMenu me={me} onLogout={onLogout} place="console" />
         </header>
         <main className="con-body">
@@ -157,21 +203,27 @@ export function ConsoleShell({ me, page, params, status, reload, onLogout }: { m
             <div className="page-actions" ref={setActionsEl} />
           </div>
           <PageActionsContext.Provider value={actionsEl}>
-            {page === 'overview' && <Overview status={status} reload={reload} />}
-            {page === 'events' && <Events params={params} />}
-            {page === 'sessions' && <Sessions status={status} params={params} />}
-            {page === 'plugins' && <Plugins params={params} />}
-            {page === 'providers' && <Providers />}
-            {page === 'mcp' && <Mcp />}
-            {page === 'skills' && <Skills />}
-            {page === 'approvals' && <Approvals params={params} />}
-            {page === 'memory' && <Memory params={params} />}
-            {page === 'config' && <Config />}
-            {page === 'logs' && <Logs params={params} />}
-            {!def && (
-              <div className="empty">
-                没有这个页面。<a href={consoleHref('overview')}>回到总览</a>
-              </div>
+            {moved ? null : (
+              <>
+                {page === 'overview' && <Overview status={status} reload={reload} />}
+                {page === 'events' && <Events params={params} />}
+                {page === 'sessions' && <Sessions status={status} params={params} />}
+                {page === 'schedules' && <Schedules params={params} />}
+                {page === 'plugins' && <Plugins params={params} />}
+                {page === 'providers' && <Providers />}
+                {page === 'mcp' && <Mcp />}
+                {page === 'skills' && <Skills />}
+                {page === 'approvals' && <Approvals params={params} />}
+                {page === 'permissions' && <Permissions params={params} />}
+                {page === 'memory' && <Memory params={params} />}
+                {page === 'config' && <Config />}
+                {page === 'logs' && <Logs params={params} />}
+                {!def && (
+                  <EmptyState title="没有这个页面" action={<a href={consoleHref('overview')}>回到总览</a>}>
+                    这个地址不对，或者页面已经改了名字。
+                  </EmptyState>
+                )}
+              </>
             )}
           </PageActionsContext.Provider>
         </main>

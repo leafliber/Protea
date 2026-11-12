@@ -1,4 +1,4 @@
-import { DEFAULT_STOP_WORDS, approvalCommand, definePlugin, isModeCommand, isStopWord, modeCommand, splitMessage as splitAt, type Host, type PluginDefinition } from '@protea/plugin-sdk';
+import { ApprovalInbox, DEFAULT_STOP_WORDS, approvalOutcome, definePlugin, parseApprovalButton, isModeCommand, isStopWord, modeCommand, splitMessage as splitAt, type Host, type PluginDefinition } from '@protea/plugin-sdk';
 import { CHAT_MESSAGE_EVENT, type EventInput } from '@protea/protocol';
 
 export interface TelegramConfig {
@@ -42,10 +42,17 @@ interface TgDocument {
   mime_type?: string;
   file_size?: number;
 }
+interface TgCallbackQuery {
+  id: string;
+  from: TgUser;
+  message?: TgMessage;
+  data?: string;
+}
 interface TgUpdate {
   update_id: number;
   message?: TgMessage;
   edited_message?: TgMessage;
+  callback_query?: TgCallbackQuery;
 }
 
 export class TelegramError extends Error {
@@ -142,6 +149,27 @@ export function createTelegramPlugin(): PluginDefinition<TelegramConfig> {
   let loop: Promise<void> | null = null;
   let lastPollAt = 0;
   let started = false;
+  /** The approval requests shown here, and what the owner's words and presses mean. */
+  let inbox: ApprovalInbox<TelegramConfig> | null = null;
+  const inboxOf = (host: Host<TelegramConfig>): ApprovalInbox<TelegramConfig> => (inbox ??= new ApprovalInbox(host));
+  /** What each request message said, to rewrite it once the request is settled. */
+  const shownText = new Map<string, string>();
+
+  /** A button under an approval request: only the owner's press counts, and the host checks again. */
+  async function pressed(host: Host<TelegramConfig>, q: TgCallbackQuery): Promise<void> {
+    const answer = (text: string): Promise<unknown> =>
+      needClient()
+        .call('answerCallbackQuery', { callback_query_id: q.id, text: text.slice(0, 190) })
+        .catch((err: Error) => host.log.warn('could not answer a Telegram button', { err: err.message }));
+    const zh = host.language.toLowerCase().startsWith('zh');
+    const senderKey = `telegram:${q.from.id}`;
+    if (!parseApprovalButton(q.data ?? '')) return void (await answer(zh ? '这个按钮已经失效' : 'This button no longer works'));
+    if ((await host.owner.resolve(senderKey)) !== 'owner' || q.message?.chat.type !== 'private') return void (await answer(zh ? '只有主人可以决定' : 'Only the owner can decide'));
+    const r = await inboxOf(host).press(senderKey, q.data as string);
+    await answer(r?.text ?? '');
+    // Decided elsewhere or expired while this message kept its buttons: take them off now.
+    if (!r?.ok && q.message) await needClient().call('editMessageReplyMarkup', { chat_id: q.message.chat.id, message_id: q.message.message_id }).catch(() => undefined);
+  }
 
   const needClient = (): TelegramClient => {
     if (!client) throw new Error('telegram is not started');
@@ -176,6 +204,7 @@ export function createTelegramPlugin(): PluginDefinition<TelegramConfig> {
   }
 
   async function handle(host: Host<TelegramConfig>, u: TgUpdate): Promise<void> {
+    if (u.callback_query) return pressed(host, u.callback_query);
     const m = u.message ?? u.edited_message;
     if (!m || !m.from || m.from.is_bot) return;
     const edited = !u.message;
@@ -201,8 +230,9 @@ export function createTelegramPlugin(): PluginDefinition<TelegramConfig> {
           await host.kv.set('ownerChatId', m.chat.id);
         }
         if (!edited) {
-          const answer = await approvalCommand(host, senderKey, text);
+          const answer = typeof m.text === 'string' ? await inboxOf(host).reply(senderKey, text, m.reply_to_message ? { quoted: String(m.reply_to_message.message_id) } : {}) : null;
           if (answer !== null) {
+            inbox?.sentOther();
             await send(m.chat.id, answer, m.message_id);
             return;
           }
@@ -245,7 +275,7 @@ export function createTelegramPlugin(): PluginDefinition<TelegramConfig> {
         if (!me) me = await needClient().call<TgUser>('getMe', {}, signal);
         const updates = await needClient().call<TgUpdate[]>(
           'getUpdates',
-          { offset, timeout, allowed_updates: ['message', 'edited_message'] },
+          { offset, timeout, allowed_updates: ['message', 'edited_message', 'callback_query'] },
           signal,
         );
         lastPollAt = Date.now();
@@ -292,6 +322,7 @@ export function createTelegramPlugin(): PluginDefinition<TelegramConfig> {
         }
         const replyTo = req.replyTo === undefined ? undefined : Number(req.replyTo);
         if (replyTo !== undefined && !Number.isInteger(replyTo)) return { ok: false, error: `reply_to must be a Telegram message id, not "${req.replyTo}"` };
+        inbox?.sentOther();
         const ids = await send(ownerChatId, req.text, replyTo);
         return { ok: true, messageIds: ids.map(String) };
       },
@@ -300,6 +331,7 @@ export function createTelegramPlugin(): PluginDefinition<TelegramConfig> {
       {
         name: 'tg_send_chat',
         description: 'Send a message to another Telegram chat (a group or another user). Needs the owner’s approval.',
+        approval: { title: { zh: '发 Telegram 消息给别人', en: 'Send a Telegram message to someone else' }, target: 'text', fields: { chat_id: { zh: '发给', en: 'To chat' }, reply_to: { zh: '回复的消息', en: 'Replying to' } } },
         inputSchema: {
           type: 'object',
           additionalProperties: false,
@@ -339,11 +371,35 @@ export function createTelegramPlugin(): PluginDefinition<TelegramConfig> {
       },
     ],
     envPromptVars: () => ({ ownerChatKnown: ownerChatId !== null, botUsername: me?.username ?? '' }),
-    async onApprovalRequest(_host, req) {
+    async onApprovalRequest(host, req) {
       if (ownerChatId === null || !client) return { delivered: false };
-      const text = `Approval ${req.id} requested: ${req.summary}${req.reason ? `\nReason: ${req.reason}` : ''}\nReply /approve ${req.id} or /deny ${req.id} (expires ${req.expiresAt}). /approve ${req.id} 1h also allows these tools for an hour.`;
-      await send(ownerChatId, text.slice(0, MAX_TEXT));
-      return { delivered: true };
+      const box = inboxOf(host);
+      const msg = box.message(req);
+      const text = msg.text.slice(0, MAX_TEXT);
+      // Approve and deny side by side, the longer "stop asking for a while" on its own row. Plain text: no parse_mode, so nothing in a tool's input is read as markup.
+      const button = (b: (typeof msg.buttons)[number]) => ({ text: b.label, callback_data: b.data });
+      const rows = [msg.buttons.filter((b) => b.choice !== 'grant').map(button), msg.buttons.filter((b) => b.choice === 'grant').map(button)].filter((r) => r.length > 0);
+      try {
+        const sent = await client.call<TgMessage>('sendMessage', { chat_id: ownerChatId, text, reply_markup: { inline_keyboard: rows } });
+        shownText.set(req.id, text);
+        box.shown(req.id, String(sent.message_id));
+        return { delivered: true };
+      } catch (err) {
+        box.dropped(req.id);
+        host.log.warn('could not send an approval request', { err: (err as Error).message });
+        return { delivered: false };
+      }
+    },
+    async onApprovalResolved(host, p) {
+      const shown = inboxOf(host).resolved(p.id);
+      const text = shownText.get(p.id);
+      shownText.delete(p.id);
+      if (!shown?.messageId || ownerChatId === null || !client) return;
+      // The request stays readable; its buttons give way to the outcome.
+      const outcome = approvalOutcome(p, { language: host.language, timezone: host.timezone });
+      await client
+        .call('editMessageText', { chat_id: ownerChatId, message_id: Number(shown.messageId), text: `${text ?? shown.req.summary}\n\n${outcome}`.slice(0, MAX_TEXT + 60) })
+        .catch((err: Error) => host.log.warn('could not update a settled approval request', { err: err.message }));
     },
     health(host) {
       if (!started) return { ok: true };

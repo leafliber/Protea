@@ -2,7 +2,7 @@ import { useState, type FormEvent, type ReactNode } from 'react';
 import type { LogRecord, PluginLoginView, PluginStatus } from '@protea/protocol';
 import { api, enc, post, qs, useAction, useApi } from '../api';
 import { SchemaForm } from '../components/SchemaForm';
-import { Badge, Button, PageActions, Card, Empty, ErrorText, KV, Modal, StateBadge, Tabs, cx, oneLine } from '../components/ui';
+import { Badge, Button, PageActions, Card, Empty, ErrorText, KV, Modal, StateBadge, Tabs, cx, oneLine, useAsk } from '../components/ui';
 import { useReloadOn } from '../live';
 import { PendingChangesBanner } from './Changes';
 import { go, useSession } from '../session';
@@ -62,6 +62,7 @@ const LOGIN_TEXT: Record<PluginLoginView['state'], string> = {
 };
 
 function LoginPanel({ id }: { id: string }) {
+  const ask = useAsk();
   const { canWrite } = useSession();
   const view = useApi<PluginLoginView>(`/api/plugins/${enc(id)}/login`, { refreshMs: 2000 });
   const act = useAction();
@@ -105,7 +106,7 @@ function LoginPanel({ id }: { id: string }) {
           )}
           {inProgress && <Button onClick={() => run(() => post(`${base}/cancel`))}>取消</Button>}
           {v.state === 'connected' && (
-            <Button kind="danger" onClick={() => confirm('退出登录？登录凭据和这个平台上的主人身份都会清除。') && run(() => api('DELETE', base))}>
+            <Button kind="danger" onClick={() => ask('退出这个平台的登录？', () => run(() => api('DELETE', base)), { body: '登录凭据和这个平台上的主人身份都会清除。', confirm: '退出登录' })}>
               退出登录
             </Button>
           )}
@@ -138,6 +139,7 @@ type DetailTab = 'login' | 'config' | 'logs' | 'manifest';
 
 /** One plugin in a dialog of its own: actions, facts, then sign-in, config, logs and manifest. */
 function PluginModal({ id, onClose, onChanged }: { id: string; onClose: () => void; onChanged: () => void }) {
+  const ask = useAsk();
   const { canWrite } = useSession();
   const [picked, setTab] = useState<DetailTab | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -151,7 +153,8 @@ function PluginModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
   const act = useAction();
   const action = (a: string) => void act.run(() => post(`/api/plugins/${enc(id)}/${a}`)).then(() => (p.reload(), onChanged()));
   const close = () => {
-    if (!dirty || confirm('配置有还没保存的修改，关闭后会丢失。仍要关闭吗？')) onClose();
+    if (!dirty) onClose();
+    else ask('放弃还没保存的修改？', onClose, { body: '配置有还没保存的修改，关闭后会丢失。', confirm: '放弃修改' });
   };
   const s = p.data;
   if (!s)
@@ -182,11 +185,15 @@ function PluginModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
                 small
                 kind="danger"
                 onClick={() =>
-                  confirm(`卸载 ${s.id}？（需先禁用；插件数据默认一并删除）`) &&
-                  void act.run(() => api('DELETE', `/api/plugins/${enc(id)}`)).then((ok) => {
-                    onChanged();
-                    if (ok) onClose();
-                  })
+                  ask(
+                    `卸载插件 ${s.id}？`,
+                    () =>
+                      void act.run(() => api('DELETE', `/api/plugins/${enc(id)}`)).then((ok) => {
+                        onChanged();
+                        if (ok) onClose();
+                      }),
+                    { body: '需要先禁用。插件的数据默认一并删除。', confirm: '卸载' },
+                  )
                 }
               >
                 卸载

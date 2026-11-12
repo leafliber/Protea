@@ -61,18 +61,27 @@
 
 见 [05-sessions-and-agent-loop.md](05-sessions-and-agent-loop.md) §7。补充安全要求：
 
-- 审批请求必须包含工具名、输入摘要（脱敏）、助理给出的理由。
-- 决定只能来自 owner 身份；通过渠道回复、控制台或 CLI。
+- 审批请求必须说清要做什么：标题、最要紧的那个值、其余要紧的参数（都已脱敏），以及助理给出的理由（有的话）。请求的形态见下面的"呈现与决定"。
+- 决定只能来自 owner 身份；通过渠道的按钮或回复、控制台或 CLI。
 - 批准是一次性的、绑定到该次 `tool_use` 的输入哈希；输入变化需重新审批。
 - 过期：默认 24 h。
 - 所有审批与决定进入 `audit` 表。
-- **时限授权**：批准时可以附带时限（Telegram `/approve a12 1h`、`protea approvals approve a12 --for 1h`、控制台按钮），时限内同一组工具的 `ask` 调用直接放行，每次调用照常审计并带上授权编号。一组工具是一个插件的、一个 MCP 服务器的，或单个 Core 工具。上限 `permissions.grantMaxMs`（默认 8 h，0 关闭）；可以提前撤销；`deny` 不受影响。
+- **时限授权**：批准时可以附带时限（请求上的"同意，1 小时内不再问"、`/approve a12 1h`、`protea approvals approve a12 --for 1h`、控制台），时限内同一组工具的 `ask` 调用直接放行，每次调用照常审计并带上授权编号。一组工具是一个插件的、一个 MCP 服务器的，或单个 Core 工具。上限 `permissions.grantMaxMs`（默认 8 h，0 关闭）；可以提前撤销；`deny` 与 `locked` 不受它影响。
+
+**呈现与决定**（[ADR-0021](../20-decisions/ADR-0021-readable-approval-requests-and-delivery.md)）：
+
+- 核心在创建请求时生成 `ApprovalView { title, target?, fields[], reason?, held?, family }`，存进 `approvals.view_json`，随 `approvals/request` 发给插件。标题与字段来自工具的声明 `approval: { title, target, fields }`；MCP 工具用服务器给的标题；都没有时用工具名和标量参数。文字用 `daemon.language`。
+- 参数值是数据：每个值压成一行、截断、去掉不可见的控制符，只当纯文本显示。输入里的换行不能冒充请求的另一行。
+- 编号（`a12`）只用于审计、API 和事件，请求里不出现。
+- 各平台：网页是卡片；QQ 是官方消息按钮（不让发按钮时降级为文字）；Telegram 是 inline keyboard，决定后原消息去掉按钮、写上结果；微信是文字加回复词。文字、按钮和回复词由 `@protea/plugin-sdk` 的 `ApprovalInbox` 统一生成。
+- 回复词（同意 / 拒绝 / yes / no；"同意 1 小时"带时限授权，"拒绝 太贵了"带一句话）只在不可能指别的事时才算决定：消息引用了请求；或带了请求的编号；或整条消息就是一个回复词，且这个平台上只有一个待定请求，且它是机器人在这个平台发出的最后一条消息。否则照常作为对话交给助理。连接器把决定连同发送者交给宿主，宿主核实其为本插件映射的主人（`approvals/decide`），非主人的回复只是一条普通消息；按钮回调同样核实。
+- 请求被决定或过期时，宿主用 `approvals/resolved` 通知所有显示过它的插件。
+- **发到哪里**：策略为 `ask` 的工具多一个保留输入 `_approval: { reason?, platforms? }`，分发器在校验、求哈希、执行和审计之前把它摘掉。不给 `platforms` 就发给所有能显示请求的运行中平台；给了就只发这些，它们都没送达时改发其余平台；回执写明实际发到了哪里。`approval_request` 同样接受 `platforms`，对还在等的请求再调一次可以补理由或在别的平台再显示。平台只决定通知发到哪：网页卡片与控制台始终显示全部待定请求，主人在任何平台都能决定。
 
 M2 实现细节：
-- 审批编号为 `a<n>`（如 `a12`），主人在 Telegram 回复 `/approve a12` 或 `/deny a12`，或在终端 `protea approvals approve a12`；连接器把决定连同发送者交给宿主，宿主核实其为本插件映射的主人（`approvals/decide`），非主人的回复只是一条普通消息。
+- 审批编号为 `a<n>`（如 `a12`）。`/approve a12`、`/deny a12` 与 `protea approvals approve a12` 仍然有效，不再出现在请求里。
 - 输入哈希：工具名 + 规范化 JSON（键排序）的 sha256，所以键顺序不同的同一输入匹配同一审批。相同调用再次触发时复用尚未决定的请求，不会重复打扰主人。
-- 请求同时发给所有声明了 `approvals` 能力的运行中渠道（控制台输出 + Telegram）。
-- 决定产生 L1 flush 的 `approval.decided` 内部事件；获批的调用在过期前只能执行一次，执行后审批变为 `used`。待决与已批未用的审批到期变为 `expired`（每分钟检查一次，查询时也会检查）。
+- 决定产生 L1 flush 的 `approval.decided` 内部事件（拒绝时带上主人说的话）；获批的调用在过期前只能执行一次，执行后审批变为 `used`。待决与已批未用的审批到期变为 `expired`（每分钟检查一次，查询时也会检查）；待决的请求过期时另推一条 L3 的 `approval.expired`，助理不必一直等。
 - 摘要与理由经过秘密扫描：已知秘密值替换为 `[REDACTED:<NAME>]`。
 - `audit` 记录：`tool_call`（有副作用或受限的调用及其结果）、`tool_blocked`（被拒绝或等待审批）、`approval_requested`、`approval_decided`、`approval_expired`（I-8）。
 

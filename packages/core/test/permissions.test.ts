@@ -109,7 +109,7 @@ describe('approvals', () => {
     const t = setup({}, { ask: ['ch_post'] });
     const first = await t.call('ch_post', { to: 'family', text: 'dinner' });
     expect(first.is_error).toBeUndefined();
-    expect(first.content).toMatch(/^pending approval a1: ch_post needs the owner's approval and did not run/);
+    expect(first.content).toMatch(/^pending approval a1: ch_post did not run\. .* The request expires in \d+ (minutes|hours)\./);
     const again = await t.call('ch_post', { text: 'dinner', to: 'family' }); // same input, other key order
     expect(again.content).toMatch(/^pending approval a1:/);
     expect(t.delivered).toEqual(['a1']);
@@ -188,7 +188,9 @@ describe('approvals', () => {
     const r = await t.call('approval_request', { tool: 'sh_run', input: { cmd: 'login --password hunter2' }, reason: 'rotate the key' });
     expect(r.content).toMatch(/^approval a1 is pending/);
     const a = t.approvals.get('a1');
-    expect(a?.summary).toBe('sh_run {"cmd":"login --password [REDACTED:PASSWORD]"}');
+    expect(a?.summary).toBe('Sh run: login --password [REDACTED:PASSWORD]');
+    expect(a?.view).toMatchObject({ title: 'Sh run', target: 'login --password [REDACTED:PASSWORD]', reason: 'rotate the key' });
+    expect(a?.input).not.toContain('hunter2');
     expect(a?.reason).toBe('rotate the key');
     expect((await t.call('approval_request', { tool: 'ch_send', input: {}, reason: 'x' })).content).toBe('ch_send does not need approval; call it directly');
     expect((await t.call('approval_request', { tool: 'ch_read', input: {}, reason: 'x' })).is_error).toBe(true);

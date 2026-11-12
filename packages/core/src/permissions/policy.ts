@@ -107,7 +107,13 @@ export class PermissionPolicy {
       if (d.policy === 'deny') deny.push(t.name);
     }
     if (ask.length === 0 && deny.length === 0) return null;
-    const flow = 'Calling a tool that needs approval does not run it: the result says "pending approval <id>" and the owner is asked. An approval.decided event reports the decision; if approved, call the tool again with exactly the same input (the approval is valid once). You can ask ahead of time with approval_request.';
+    const flow =
+      'Calling a tool that needs approval does not run it: the result says "pending approval <id>", and the owner gets a request that shows the call, with buttons to approve or deny it. ' +
+      "Such tools take an extra `_approval` input. Put in its `reason` one sentence, in the owner's language, saying what the call is for; the request already shows the call itself. " +
+      'Put in its `platforms` the platform of the message you are answering (its source); leave `platforms` out for background or scheduled work, and the owner is asked on every platform. ' +
+      'Do not repeat the request in a chat message and do not tell the owner to type a command. ' +
+      'An approval.decided event reports the decision. If approved, call the tool again with exactly the same input (`_approval` aside); the approval is valid once. If denied, do not run it and do not reach the same result another way. ' +
+      'An approval.expired event means nobody answered. You can ask ahead of time with approval_request.';
     const lines = ['# Permissions', ''];
     const needs = "- Needs the owner's approval: ";
     if (mode === 'locked') {

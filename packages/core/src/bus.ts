@@ -55,6 +55,8 @@ export interface BusTopics {
   'fork.changed': ForkInfo;
   'plugin.changed': PluginStatus;
   'approval.changed': ApprovalInfo;
+  /** A schedule of the cron plugin was added, changed, removed or fired. */
+  'schedule.changed': { id: string };
   /** A change request for MCP servers, skills or plugins was filed or settled. */
   'change.changed': ChangeRequestInfo;
   'permission.mode': PermissionModeInfo;

@@ -94,7 +94,7 @@ describe('EventStore', () => {
 describe('migrations', () => {
   it('are idempotent and refuse a newer schema', () => {
     const db = new Database(':memory:');
-    expect(migrate(db).applied).toEqual(['1_init', '2_approvals-and-audit', '3_tool-stats', '4_memory-index', '5_accounts', '6_outputs', '7_memory-layers', '8_blobs-and-grants', '9_chat-rich-content', '10_change-requests']);
+    expect(migrate(db).applied).toEqual(['1_init', '2_approvals-and-audit', '3_tool-stats', '4_memory-index', '5_accounts', '6_outputs', '7_memory-layers', '8_blobs-and-grants', '9_chat-rich-content', '10_change-requests', '11_approval-view']);
     expect(migrate(db).applied).toEqual([]);
     db.prepare("INSERT INTO schema_version VALUES (99, 'future', 'now')").run();
     expect(() => migrate(db)).toThrow(/newer than this build/);

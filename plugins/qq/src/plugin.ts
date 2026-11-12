@@ -1,7 +1,9 @@
 import crypto from 'node:crypto';
 import {
   DEFAULT_STOP_WORDS,
-  approvalCommand,
+  ApprovalInbox,
+  parseApprovalButton,
+  type ApprovalMessage,
   chatAnswer,
   definePlugin,
   isModeCommand,
@@ -153,6 +155,18 @@ function keyboardOf(c: ChatChoices): InlineKeyboard {
   return { content: { rows } };
 }
 
+/** Approve and deny side by side, the longer "stop asking for a while" on its own row. A pressed button shows the outcome. */
+function approvalKeyboard(m: ApprovalMessage): InlineKeyboard {
+  const button = (b: ApprovalMessage['buttons'][number]) => ({
+    id: b.data,
+    render_data: { label: b.label, visited_label: b.done, style: b.choice === 'approve' ? 1 : 0 },
+    action: { type: 1, permission: { type: 2 }, data: b.data, click_limit: 1 },
+  });
+  const short = m.buttons.filter((b) => b.choice !== 'grant').map(button);
+  const long = m.buttons.filter((b) => b.choice === 'grant').map(button);
+  return { content: { rows: [{ buttons: short }, ...(long.length > 0 ? [{ buttons: long }] : [])] } };
+}
+
 /** The options as text, for when there are no buttons: the owner answers with numbers. */
 function numbered(c: ChatChoices): string {
   const lines = c.options.map((o, i) => `${i + 1}. ${o.label}${o.detail ? `（${o.detail}）` : ''}`);
@@ -201,6 +215,9 @@ export function createQqPlugin(opts: QqPluginOptions = {}): PluginDefinition<QqC
   /** When the owner's newest message arrived (ms): streaming is allowed only shortly after it. */
   let lastMsgAt = 0;
   let openChoices: OpenChoices | null = null;
+  /** The approval requests shown here, and what the owner's words and presses mean. */
+  let inbox: ApprovalInbox<QqConfig> | null = null;
+  const inboxOf = (host: Host<QqConfig>): ApprovalInbox<QqConfig> => (inbox ??= new ApprovalInbox(host));
   const previews = new Map<string, Preview>();
   const groupMessages = new Map<string, string>();
   const retryMs = opts.retryMs ?? 5000;
@@ -323,7 +340,7 @@ export function createQqPlugin(opts: QqPluginOptions = {}): PluginDefinition<QqC
       await host.kv.set('ownerOpenid', sender);
     }
     const command = m.content.trim();
-    const answer = await approvalCommand(host, senderKey, command);
+    const answer = m.attachments?.length ? null : await inboxOf(host).reply(senderKey, command);
     if (answer !== null) return tell(host, answer);
     if (isModeCommand(command)) return tell(host, await modeCommand(host, senderKey, command));
     // Whatever the owner writes closes the options; numbers or a label answer them.
@@ -459,6 +476,7 @@ export function createQqPlugin(opts: QqPluginOptions = {}): PluginDefinition<QqC
 
   /** A `chat_send`: the text (finishing its preview when there is one), then the pictures, then the options. */
   async function reply(host: Host<QqConfig>, req: ChatSendParams): Promise<ChatSendResult> {
+    inbox?.sentOther();
     const p = req.callId ? previews.get(req.callId) : undefined;
     if (req.callId) previews.delete(req.callId);
     if (p) await p.work;
@@ -515,9 +533,17 @@ export function createQqPlugin(opts: QqPluginOptions = {}): PluginDefinition<QqC
     const ack = (code: number): Promise<void> => b.acknowledgeInteraction(e.id, code).catch((err: unknown) => host.log.warn('could not acknowledge a QQ button', { err: detailOf(err) }));
     const data = e.data?.resolved?.button_data ?? '';
     const m = /^choice:(\d+)$/.exec(data);
-    if (!m) return ack(ACK_FAILED);
+    const approval = parseApprovalButton(data);
+    if (!m && !approval) return ack(ACK_FAILED);
     const user = e.user_openid ?? e.group_member_openid;
     if (e.group_openid || !user || (await host.owner.resolve(`qq:${user}`)) !== 'owner') return ack(ACK_NO_PERMISSION);
+    if (approval) {
+      // The host checks the owner again and that the request is still open; a stale press just fails.
+      const r = await inboxOf(host).press(`qq:${user}`, data);
+      if (!r?.ok) host.log.info('dropped a press on an approval request that is no longer open', { approval: approval.id });
+      return ack(r?.ok ? ACK_OK : ACK_FAILED);
+    }
+    if (!m) return ack(ACK_FAILED);
     const asked = openChoices;
     const index = Number(m[1]);
     const label = asked?.labels[index];
@@ -543,6 +569,7 @@ export function createQqPlugin(opts: QqPluginOptions = {}): PluginDefinition<QqC
 
   /** Short notices to the owner (answers to commands). A closed window only costs the notice. */
   async function tell(host: Host<QqConfig>, text: string): Promise<void> {
+    inbox?.sentOther();
     const r = await deliver(text);
     if (!r.ok) host.log.warn('could not answer the owner on QQ', { err: r.error });
   }
@@ -550,6 +577,7 @@ export function createQqPlugin(opts: QqPluginOptions = {}): PluginDefinition<QqC
   const groupReply: PluginTool<{ message_id: string; text: string }, QqConfig> = {
     name: 'qq_group_reply',
     description: 'Answer a QQ group message that mentioned the bot, in that group. message_id is the "msg" id of the qq.message event. Everyone in the group reads the answer.',
+    approval: { title: { zh: '在 QQ 群里回复', en: 'Reply in a QQ group' }, target: 'text', fields: { message_id: { zh: '回复的消息', en: 'Answering message' } } },
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -692,9 +720,34 @@ export function createQqPlugin(opts: QqPluginOptions = {}): PluginDefinition<QqC
     },
     tools: (host) => (host.config.groups === true ? [groupReply] : []),
     envPromptVars: (host) => ({ signedIn: bot !== null, groups: host.config.groups === true, groupsStored: host.config.groups !== true }),
-    async onApprovalRequest(_host, req) {
-      const text = `Approval ${req.id} requested: ${req.summary}${req.reason ? `\nReason: ${req.reason}` : ''}\nReply /approve ${req.id} or /deny ${req.id} (expires ${req.expiresAt}). /approve ${req.id} 1h also allows these tools for an hour.`;
-      return { delivered: (await deliver(text.slice(0, CHUNK))).ok };
+    async onApprovalRequest(host, req) {
+      const box = inboxOf(host);
+      const msg = box.message(req);
+      const b = bot;
+      const owner = ownerOpenid;
+      if (b && secret && !gatewayRefusal && owner) {
+        // Buttons first. One try only: a refusal may be about the buttons (many bots may not send them), not the message.
+        const replyTo = lastMsgId && passiveRefused !== lastMsgId ? lastMsgId : undefined;
+        try {
+          const id = (await b.sendTextWithKeyboard({ scope: 'c2c', targetId: owner, ...(replyTo ? { msgId: replyTo } : {}) }, msg.text.slice(0, CHUNK), approvalKeyboard(msg))).id;
+          box.shown(req.id, id);
+          return { delivered: true };
+        } catch (err) {
+          if (!refused(err)) host.log.warn('could not send an approval request with buttons', { err: detailOf(err) });
+        }
+      }
+      // Words work everywhere.
+      const r = await deliver(`${msg.text.slice(0, CHUNK - 200)}\n${msg.hint}`);
+      if (!r.ok) {
+        box.dropped(req.id);
+        return { delivered: false };
+      }
+      box.shown(req.id, r.messageIds?.[0]);
+      return { delivered: true };
+    },
+    onApprovalResolved(host, p) {
+      // QQ cannot edit a message: a pressed button already shows the outcome, and a late press is refused.
+      inboxOf(host).resolved(p.id);
     },
     health() {
       // Waiting for an operator is not a fault: no warning every 30 s while nobody has scanned yet.

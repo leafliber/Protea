@@ -14,6 +14,32 @@ export interface ProviderToolDef {
   providerType?: string;
 }
 
+/** The reserved input property of tools that need approval: what to tell the owner, and where. */
+export const APPROVAL_META = '_approval';
+
+export interface ApprovalMeta {
+  reason?: string;
+  platforms?: string[];
+}
+
+const APPROVAL_META_SCHEMA = {
+  type: 'object',
+  description:
+    'Only matters when this call needs the owner\'s approval; it is not passed to the tool. reason: one sentence, in the owner\'s language, saying what this is for (the owner already sees the call itself). platforms: where to ask, e.g. the platform of the message you are answering; leave it out to ask on every platform.',
+  properties: { reason: { type: 'string', maxLength: 300 }, platforms: { type: 'array', items: { type: 'string' } } },
+};
+
+/** `input` without the reserved property, and what the property said. A tool that declares the name itself keeps it. */
+export function splitApprovalMeta(def: Pick<ToolDef, 'inputSchema'>, input: unknown): { input: unknown; meta?: ApprovalMeta } {
+  if (typeof input !== 'object' || input === null || Array.isArray(input) || !(APPROVAL_META in input)) return { input };
+  if (APPROVAL_META in ((def.inputSchema as { properties?: object }).properties ?? {})) return { input };
+  const { [APPROVAL_META]: raw, ...rest } = input as Record<string, unknown>;
+  const m = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
+  const reason = typeof m['reason'] === 'string' && m['reason'].trim() ? m['reason'].trim().slice(0, 500) : undefined;
+  const platforms = Array.isArray(m['platforms']) ? m['platforms'].filter((p): p is string => typeof p === 'string' && p.length > 0) : [];
+  return { input: rest, meta: { ...(reason !== undefined ? { reason } : {}), ...(platforms.length > 0 ? { platforms } : {}) } };
+}
+
 /** Sort rank of a tool owner: kernel, then plugins, then MCP servers (owners "mcp" and "mcp:<id>"). */
 function ownerRank(owner: string): string {
   if (owner === 'core') return '0';
@@ -32,6 +58,22 @@ export class ToolRegistry {
   private readonly tombstones = new Map<string, string>();
   private readonly ajv = createAjv();
   private version = 0;
+  private needsApproval: ((d: ToolDef) => boolean) | null = null;
+
+  /**
+   * Which tools are shown to the model with the reserved `_approval` property (those whose
+   * policy is `ask`). The caller bumps nothing: the answer must only change when the policy does.
+   */
+  setApprovalMeta(needs: ((d: ToolDef) => boolean) | null): void {
+    this.needsApproval = needs;
+  }
+
+  /** The schema the model sees: the tool's own, plus `_approval` when its calls need approval. */
+  schemaFor(d: ToolDef): Record<string, unknown> {
+    const s = d.inputSchema as { type?: unknown; properties?: Record<string, unknown> };
+    if (d.providerType || !this.needsApproval?.(d) || (s.type !== undefined && s.type !== 'object') || (s.properties && APPROVAL_META in s.properties)) return d.inputSchema;
+    return { ...d.inputSchema, type: 'object', properties: { ...(s.properties ?? {}), [APPROVAL_META]: APPROVAL_META_SCHEMA } };
+  }
 
   register<I>(owner: string, spec: ToolSpec<I>): void {
     if (!NAME_RE.test(spec.name)) throw new Error(`invalid tool name "${spec.name}"`);
@@ -150,6 +192,6 @@ export class ToolRegistry {
     // Without tool exposure nothing is held back, so the client-side search tools have no use.
     return this.list()
       .filter((d) => !d.clientSearch && (!filter || filter(d)))
-      .map((d) => ({ name: d.name, description: d.description, inputSchema: d.inputSchema, ...(d.providerType ? { providerType: d.providerType } : {}) }));
+      .map((d) => ({ name: d.name, description: d.description, inputSchema: this.schemaFor(d), ...(d.providerType ? { providerType: d.providerType } : {}) }));
   }
 }

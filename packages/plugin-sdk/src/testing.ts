@@ -227,6 +227,11 @@ export class FakeHost {
     return this.host.request<T>(method, params);
   }
 
+  /** Send the plugin a notification (no answer expected), e.g. `approvals/resolved`. */
+  notify(method: string, params?: unknown): void {
+    this.host.notify(method, params);
+  }
+
   /** Stop the plugin; calling it again is a no-op. */
   async stop(reason = 'test end'): Promise<void> {
     if (this.host.isClosed) return;

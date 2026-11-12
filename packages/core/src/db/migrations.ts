@@ -323,4 +323,15 @@ CREATE INDEX ix_changes_id ON change_requests(id);
 CREATE INDEX ix_changes_state ON change_requests(state, expires_ms);
 `,
   },
+  {
+    version: 11,
+    name: 'approval-view',
+    // What the owner reads (title, target, fields), where it was shown, and what the owner said.
+    sql: `
+ALTER TABLE approvals ADD COLUMN view_json TEXT;
+ALTER TABLE approvals ADD COLUMN input_json TEXT;
+ALTER TABLE approvals ADD COLUMN delivered_to TEXT;
+ALTER TABLE approvals ADD COLUMN note TEXT;
+`,
+  },
 ];

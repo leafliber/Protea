@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { diffLines, diffStat, foldDiff } from '../src/diff';
 import { MAX_SCALE, MIN_SCALE, fitScale, svgSize, zoomAt } from '../src/components/Lightbox';
-import { chatActivity, visiblePlugins } from '../src/view-logic';
+import { cronOf, draftOfCron } from '../src/pages/Schedules';
+import { chatActivity, movedTo, visiblePlugins } from '../src/view-logic';
 
 describe('line diff', () => {
   it('finds what was removed and added and keeps the rest', () => {
@@ -104,5 +105,39 @@ describe('what the console lists and the chat shows', () => {
     expect(chatActivity({ ...base, phase: 'model', drafts: 1 })).toBe('none');
     expect(chatActivity({ ...base, phase: 'model', drafts: 1, replied: true })).toBe('none');
     expect(chatActivity({ ...base, active: false, phase: 'model' })).toBe('none');
+  });
+});
+
+describe('schedule form', () => {
+  const base = { repeat: 'daily' as const, time: '07:05', days: [1], dom: 1, every: 30, cron: '' };
+
+  it('writes the cron expression a preset stands for', () => {
+    expect(cronOf(base)).toBe('5 7 * * *');
+    expect(cronOf({ ...base, repeat: 'weekdays' })).toBe('5 7 * * 1-5');
+    expect(cronOf({ ...base, repeat: 'weekly', days: [5, 1, 0] })).toBe('5 7 * * 0,1,5');
+    expect(cronOf({ ...base, repeat: 'monthly', dom: 15 })).toBe('5 7 15 * *');
+    expect(cronOf({ ...base, repeat: 'minutes', every: 10 })).toBe('*/10 * * * *');
+    expect(cronOf({ ...base, repeat: 'hours', every: 6 })).toBe('0 */6 * * *');
+    expect(cronOf({ ...base, repeat: 'custom', cron: ' 0 9 1-7 * 1 ' })).toBe('0 9 1-7 * 1');
+  });
+
+  it('opens an existing schedule in the preset that wrote it, or as a custom expression', () => {
+    for (const expr of ['5 7 * * *', '5 7 * * 1-5', '5 7 * * 0,1,5', '5 7 15 * *', '*/10 * * * *', '0 */6 * * *']) {
+      const d = draftOfCron(expr);
+      expect(d.repeat).not.toBe('custom');
+      expect(cronOf(d)).toBe(expr);
+    }
+    expect(draftOfCron('0 9 1-7 * 1')).toMatchObject({ repeat: 'custom', cron: '0 9 1-7 * 1' });
+    expect(draftOfCron('0 9 * 6 *').repeat).toBe('custom');
+  });
+});
+
+describe('old console links', () => {
+  it('lead to where the page went', () => {
+    expect(movedTo('approvals', new URLSearchParams('tab=audit'))).toEqual({ page: 'permissions', params: { tab: 'audit' } });
+    expect(movedTo('approvals', new URLSearchParams('tab=grants'))).toEqual({ page: 'permissions', params: { tab: 'grants' } });
+    expect(movedTo('config', new URLSearchParams('tab=permissions'))).toEqual({ page: 'permissions', params: { tab: 'rules' } });
+    expect(movedTo('approvals', new URLSearchParams('tab=changes&id=c1'))).toBeNull();
+    expect(movedTo('config', new URLSearchParams('tab=budget'))).toBeNull();
   });
 });

@@ -11,6 +11,10 @@ import {
   type EventState,
   type PushEventRequest,
   type PushEventResponse,
+  type ScheduleInfo,
+  type ScheduleInput,
+  type SchedulePreview,
+  type ScheduleRun,
   type SetPermissionModeRequest,
   type SessionContextResponse,
   type StatusResponse,
@@ -72,6 +76,17 @@ export interface ControlDeps extends Omit<OpsDeps, 'store' | 'audit'> {
   /** Changes to MCP servers, skills and plugins the assistant proposed; decided here and nowhere else. */
   changes?: ChangeRequestService;
   permissionModes?: PermissionModes;
+  /** The cron plugin's schedules, for the console (docs/30-specs/05-control-api.md). */
+  schedules?: {
+    list(): ScheduleInfo[];
+    get(id: string): ScheduleInfo | undefined;
+    create(input: ScheduleInput): ScheduleInfo;
+    update(id: string, patch: ScheduleInput): ScheduleInfo;
+    remove(id: string): boolean;
+    run(id: string): boolean;
+    preview(input: { cron?: string; at?: string }): SchedulePreview;
+    runs(id: string): ScheduleRun[];
+  };
   /** Re-scan plugin directories (after uninstall, so a built-in with the same id reappears). */
   rescanPlugins?: () => Promise<void>;
   /** Validate, apply and persist a plugin's configuration. */
@@ -734,6 +749,73 @@ export function createControlApp(d: ControlDeps): Hono {
     return c.json(d.changes.detail(c.req.param('id')));
   });
 
+  // Schedules (the cron plugin).
+  const noSchedules = (c: Context) => c.json({ error: { code: 'not_found', message: 'the cron plugin is not running' } }, 404);
+  const scheduleInput = async (c: Context): Promise<ScheduleInput | null> => {
+    const b = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!b || typeof b !== 'object') return null;
+    const text = (k: string): string | undefined => (typeof b[k] === 'string' ? (b[k] as string) : undefined);
+    return {
+      ...(text('name') !== undefined ? { name: text('name') as string } : {}),
+      ...(text('cron') ? { cron: text('cron') as string } : {}),
+      ...(text('at') ? { at: text('at') as string } : {}),
+      ...(text('note') !== undefined ? { note: text('note') as string } : {}),
+      ...(b['level'] === 3 || b['level'] === 4 ? { level: b['level'] } : {}),
+      ...(typeof b['enabled'] === 'boolean' ? { enabled: b['enabled'] } : {}),
+    };
+  };
+  app.get('/api/schedules', (c) => c.json({ schedules: d.schedules?.list() ?? [] }));
+  app.post('/api/schedules/preview', async (c) => {
+    if (!d.schedules) return noSchedules(c);
+    const input = await scheduleInput(c);
+    if (!input) return c.json({ error: { code: 'bad_request', message: 'a JSON body is required' } }, 400);
+    try {
+      return c.json(d.schedules.preview(input));
+    } catch (err) {
+      return errorJson(c, 422, 'invalid', err);
+    }
+  });
+  app.post('/api/schedules', async (c) => {
+    if (!d.schedules) return noSchedules(c);
+    const input = await scheduleInput(c);
+    if (!input) return c.json({ error: { code: 'bad_request', message: 'a JSON body is required' } }, 400);
+    try {
+      return c.json(d.schedules.create(input), 201);
+    } catch (err) {
+      return errorJson(c, 422, 'invalid', err);
+    }
+  });
+  app.patch('/api/schedules/:id', async (c) => {
+    if (!d.schedules) return noSchedules(c);
+    const id = c.req.param('id');
+    if (!d.schedules.get(id)) return c.json({ error: { code: 'not_found', message: `no schedule ${id}` } }, 404);
+    const input = await scheduleInput(c);
+    if (!input) return c.json({ error: { code: 'bad_request', message: 'a JSON body is required' } }, 400);
+    if (input.cron !== undefined && input.at !== undefined) return c.json({ error: { code: 'invalid', message: 'give at most one of cron or at' } }, 422);
+    try {
+      return c.json(d.schedules.update(id, input));
+    } catch (err) {
+      return errorJson(c, 422, 'invalid', err);
+    }
+  });
+  app.delete('/api/schedules/:id', (c) => {
+    if (!d.schedules) return noSchedules(c);
+    try {
+      return d.schedules.remove(c.req.param('id')) ? c.json({ ok: true }) : c.json({ error: { code: 'not_found', message: `no schedule ${c.req.param('id')}` } }, 404);
+    } catch (err) {
+      return errorJson(c, 409, 'conflict', err);
+    }
+  });
+  app.post('/api/schedules/:id/run', (c) => {
+    if (!d.schedules) return noSchedules(c);
+    return d.schedules.run(c.req.param('id')) ? c.json({ ok: true }, 202) : c.json({ error: { code: 'not_found', message: `no schedule ${c.req.param('id')}` } }, 404);
+  });
+  app.get('/api/schedules/:id/runs', (c) => {
+    if (!d.schedules) return noSchedules(c);
+    const info = d.schedules.get(c.req.param('id'));
+    return c.json({ ...(info ? { schedule: info } : {}), runs: d.schedules.runs(c.req.param('id')) });
+  });
+
   // Approvals.
   app.get('/api/approvals', (c) => {
     const state = c.req.query('state');
@@ -742,13 +824,16 @@ export function createControlApp(d: ControlDeps): Hono {
     return c.json({ approvals: d.approvals?.list(state as never) ?? [] });
   });
   app.post('/api/approvals/:id/decide', async (c) => {
-    const body = (await c.req.json().catch(() => null)) as { decision?: unknown; grantMs?: unknown } | null;
+    const body = (await c.req.json().catch(() => null)) as { decision?: unknown; grantMs?: unknown; note?: unknown } | null;
     if (body?.grantMs !== undefined && !(typeof body.grantMs === 'number' && body.grantMs > 0)) return c.json({ error: { code: 'bad_request', message: 'grantMs must be a positive number' } }, 400);
     if (body?.decision !== 'approve' && body?.decision !== 'deny') {
       return c.json({ error: { code: 'bad_request', message: 'decision must be approve or deny' } }, 400);
     }
     if (!d.approvals) return c.json({ error: { code: 'not_found', message: 'no approvals' } }, 404);
-    const r = d.approvals.decide(c.req.param('id'), body.decision, 'console:admin', typeof body.grantMs === 'number' ? { grantMs: body.grantMs } : {});
+    const r = d.approvals.decide(c.req.param('id'), body.decision, 'console:admin', {
+      ...(typeof body.grantMs === 'number' ? { grantMs: body.grantMs } : {}),
+      ...(typeof body.note === 'string' && body.note.trim() ? { note: body.note } : {}),
+    });
     if (!r.ok) return c.json({ error: { code: r.state ? 'conflict' : 'not_found', message: r.message ?? 'not decided' } }, r.state ? 409 : 404);
     return c.json(d.approvals.get(c.req.param('id')));
   });

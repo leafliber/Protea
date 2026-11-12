@@ -83,6 +83,7 @@ export function createShellPlugin(): PluginDefinition<ShellConfig> {
   const tools: PluginTool<any, ShellConfig>[] = [
     {
       name: 'sh_run',
+      approval: { title: { zh: '运行命令', en: 'Run a command' }, target: 'command', fields: { cwd: { zh: '目录', en: 'In' }, timeoutSec: { zh: '超时（秒）', en: 'Timeout (s)' }, stdin: { zh: '标准输入', en: 'Standard input' } } },
       description:
         'Run a non-interactive shell command and return its exit code and output. With the sandbox the shell keeps going between calls: the current directory, exported variables and functions carry over. Long output is cut in the middle; a command that runs past the timeout is killed with everything it started. For anything that should keep running, use sh_job_start.',
       inputSchema: {
@@ -152,6 +153,7 @@ export function createShellPlugin(): PluginDefinition<ShellConfig> {
     },
     {
       name: 'sh_job_start',
+      approval: { title: { zh: '在后台启动命令', en: 'Start a command in the background' }, target: 'command', fields: { name: { zh: '名称', en: 'Label' }, cwd: { zh: '目录', en: 'In' } } },
       description: 'Start a command in the background (a server, a long build) and return its job id. Its output goes to a log; a shell.job_exited event tells you when it ends.',
       inputSchema: {
         type: 'object',
@@ -214,6 +216,7 @@ export function createShellPlugin(): PluginDefinition<ShellConfig> {
     },
     {
       name: 'sh_job_stop',
+      approval: { title: { zh: '停止后台任务', en: 'Stop a background job' }, target: 'id' },
       description: 'Stop a background job and everything it started.',
       inputSchema: { type: 'object', additionalProperties: false, required: ['id'], properties: { id: { type: 'string' } } },
       flags: { sideEffect: true },
@@ -225,6 +228,7 @@ export function createShellPlugin(): PluginDefinition<ShellConfig> {
     },
     {
       name: 'sh_reset',
+      approval: { title: { zh: '重置 shell 状态', en: 'Reset the shell state' } },
       description: 'Forget the shell\'s state (current directory, variables, functions). Files stay.',
       inputSchema: { type: 'object', additionalProperties: false, properties: {} },
       flags: { sideEffect: true },

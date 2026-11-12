@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import type { McpServerStatus, McpToolInfo } from '@protea/protocol';
 import { api, enc, post, useAction, useApi } from '../api';
-import { Badge, Button, PageActions, Card, Empty, ErrorText, Field, StateBadge, oneLine } from '../components/ui';
+import { Badge, Button, PageActions, Card, Empty, ErrorText, Field, StateBadge, oneLine, useAsk } from '../components/ui';
 import { useReloadOn } from '../live';
 import { PendingChangesBanner } from './Changes';
 import { useSession } from '../session';
@@ -117,6 +117,7 @@ function Tools({ id }: { id: string }) {
 }
 
 export function Mcp() {
+  const ask = useAsk();
   const { canWrite } = useSession();
   const r = useApi<{ servers: McpServerStatus[] }>('/api/mcp/servers');
   useReloadOn('mcp', r.reload);
@@ -174,7 +175,7 @@ export function Mcp() {
                 )}
                 {m.enabled ? <Button small onClick={() => action(m.id, 'disable')}>禁用</Button> : <Button small onClick={() => action(m.id, 'enable')}>启用</Button>}
                 <Button small onClick={() => action(m.id, 'restart')}>重启</Button>
-                <Button small kind="danger" onClick={() => confirm(`移除 ${m.id}？它的工具从下一回合起消失。`) && void act.run(() => api('DELETE', `/api/mcp/servers/${enc(m.id)}`)).then(r.reload)}>
+                <Button small kind="danger" onClick={() => ask(`移除 MCP 服务器 ${m.id}？`, () => void act.run(() => api('DELETE', `/api/mcp/servers/${enc(m.id)}`)).then(r.reload), { body: '它的工具从下一回合起消失。', confirm: '移除' })}>
                   移除
                 </Button>
               </>

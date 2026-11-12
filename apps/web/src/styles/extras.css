@@ -1,0 +1,182 @@
+/* —— A button that reads as a link (toggles inside a line of text) —— */
+.link-btn {
+  border: none;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+/* —— Line diff (components/Diff.tsx) —— */
+.diff {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.diff-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+  background: var(--panel-2);
+}
+
+.diff-add {
+  color: var(--good);
+  font-weight: 600;
+}
+
+.diff-del {
+  color: var(--bad);
+  font-weight: 600;
+}
+
+.diff-body {
+  margin: 0;
+  padding: 6px 0;
+  max-height: 460px;
+  overflow: auto;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.diff-line {
+  padding: 0 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.diff-line-add {
+  background: color-mix(in srgb, var(--good) 14%, transparent);
+}
+
+.diff-line-del {
+  background: color-mix(in srgb, var(--bad) 14%, transparent);
+}
+
+.diff-sign {
+  display: inline-block;
+  width: 1.4em;
+  color: var(--faint);
+  user-select: none;
+}
+
+.diff-skip {
+  padding: 2px 12px;
+  color: var(--faint);
+  font-size: 12px;
+  background: var(--panel-2);
+}
+
+/* —— Change requests (pages/Changes.tsx) —— */
+.change-row {
+  cursor: pointer;
+}
+
+.change-meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 14px;
+  font-size: 13.5px;
+  margin: 0 0 12px;
+}
+
+.change-meta dt {
+  color: var(--muted);
+}
+
+.change-meta dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+.change-section {
+  margin: 14px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.change-files {
+  display: grid;
+  grid-template-columns: minmax(180px, 280px) 1fr;
+  gap: 10px;
+  align-items: start;
+}
+
+.change-files ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.change-files li button {
+  display: flex;
+  width: 100%;
+  gap: 8px;
+  justify-content: space-between;
+  border: none;
+  background: none;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+
+.change-files li button:hover,
+.change-files li button.on {
+  background: var(--panel-2);
+}
+
+.change-file-body {
+  margin: 0;
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.change-decide {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.change-decide input {
+  flex: 1;
+  min-width: 200px;
+}
+
+.banner-info {
+  background: var(--info-soft, var(--panel-2));
+  color: var(--info, var(--text));
+}
+
+@media (max-width: 720px) {
+  .change-files {
+    grid-template-columns: 1fr;
+  }
+}

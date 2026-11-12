@@ -1,0 +1,895 @@
+/* Shared pieces added with the console rework (components/ui.tsx, ApprovalCard.tsx) and the pages built from them. */
+
+/* —— Small utilities —— */
+.nowrap {
+  white-space: nowrap;
+}
+
+.stat-value,
+.countdown,
+.table td,
+time {
+  font-variant-numeric: tabular-nums;
+}
+
+.row-off {
+  opacity: 0.6;
+}
+
+.plain-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.note-box {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--s-3);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: var(--s-4);
+  align-items: start;
+}
+
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  min-width: 0;
+}
+
+.banner-link {
+  display: block;
+  color: inherit;
+}
+
+.banner-link:hover {
+  text-decoration: none;
+  filter: brightness(0.98);
+}
+
+/* —— Switch —— */
+.switch {
+  width: 34px;
+  height: 20px;
+  flex: none;
+  padding: 2px;
+  border: none;
+  border-radius: 10px;
+  background: var(--line-strong);
+  cursor: pointer;
+  transition: background var(--ease);
+}
+
+.switch-knob {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--ease);
+}
+
+.switch-on {
+  background: var(--good);
+}
+
+.switch-on .switch-knob {
+  transform: translateX(14px);
+}
+
+.switch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* —— Segmented control —— */
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+
+.seg {
+  height: var(--ctl-sm);
+  padding: 0 var(--s-3);
+  border: none;
+  border-radius: 5px;
+  background: none;
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.seg:hover {
+  color: var(--text);
+}
+
+.seg-on {
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
+/* —— Stat tiles —— */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--s-4);
+}
+
+.stat {
+  display: block;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--s-4);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+  min-width: 0;
+}
+
+.stat-link:hover {
+  text-decoration: none;
+  border-color: var(--line-strong);
+}
+
+.stat-label {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.stat-value {
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+.stat-hint {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.stat-good {
+  color: var(--good);
+}
+
+.stat-warn {
+  color: var(--warn);
+}
+
+.stat-bad {
+  color: var(--bad);
+}
+
+/* —— Empty state, skeleton —— */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-2);
+  text-align: center;
+  padding: 48px var(--s-5);
+  background: var(--panel);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+}
+
+.empty-icon {
+  width: 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--panel-2);
+  color: var(--muted);
+}
+
+.empty-title {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.empty-text {
+  color: var(--muted);
+  max-width: 52ch;
+  line-height: 1.7;
+}
+
+.empty-action {
+  margin-top: var(--s-2);
+}
+
+.skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding: var(--s-2) 0;
+}
+
+.skeleton-line {
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--panel-2) 25%, var(--panel-3) 37%, var(--panel-2) 63%);
+  background-size: 400% 100%;
+  animation: skeleton 1.4s ease infinite;
+}
+
+@keyframes skeleton {
+  from {
+    background-position: 100% 50%;
+  }
+
+  to {
+    background-position: 0 50%;
+  }
+}
+
+/* —— Menus (⋯), the theme choice in the user menu —— */
+.menu-dots {
+  font-size: 18px;
+  line-height: 1;
+  letter-spacing: 1px;
+}
+
+.menu-pop {
+  z-index: var(--z-pop);
+}
+
+.menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.menu-danger {
+  color: var(--bad);
+}
+
+.menu-note {
+  padding: 6px 10px;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.menu-theme {
+  padding: var(--s-2) 6px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+
+.menu-theme .segmented {
+  display: flex;
+}
+
+.menu-theme .seg {
+  flex: 1;
+}
+
+/* —— Confirmation dialog, toasts —— */
+.modal-small {
+  width: min(460px, 100%);
+  height: auto;
+  max-height: 100%;
+}
+
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.confirm-body {
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.confirm-actions,
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-2);
+}
+
+.toasts {
+  position: fixed;
+  left: 50%;
+  bottom: var(--s-5);
+  transform: translateX(-50%);
+  z-index: var(--z-toast);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-2);
+  pointer-events: none;
+}
+
+.toast {
+  max-width: min(520px, 92vw);
+  padding: 9px var(--s-4);
+  border-radius: 999px;
+  background: var(--text);
+  color: var(--bg);
+  font-size: var(--fs-sm);
+  box-shadow: var(--shadow-pop);
+  animation: toast-in 160ms ease;
+  overflow-wrap: anywhere;
+}
+
+.toast-bad {
+  background: var(--bad);
+  color: #fff;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.countdown-soon {
+  color: var(--bad);
+  font-weight: 600;
+}
+
+/* —— Forms in drawers —— */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.form input:not([type='checkbox']):not([type='radio']),
+.form select,
+.form textarea {
+  width: 100%;
+}
+
+.form textarea {
+  resize: vertical;
+  line-height: 1.6;
+}
+
+.advanced summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  margin-bottom: var(--s-3);
+}
+
+.rule-preview {
+  padding: var(--s-3);
+  border-radius: var(--radius-sm);
+  background: var(--info-soft);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.rule-bad {
+  background: var(--bad-soft);
+  color: var(--bad);
+}
+
+.day-picks {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.day-pick {
+  width: var(--ctl);
+  height: var(--ctl);
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.day-on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+/* —— Tables: steady rows, a header that stays, cards on a narrow screen —— */
+.table thead th {
+  position: sticky;
+  top: var(--top-h);
+  background: var(--panel);
+  z-index: 1;
+}
+
+.drawer .table thead th,
+.modal .table thead th {
+  top: 0;
+}
+
+.table tbody tr:hover {
+  background: color-mix(in srgb, var(--panel-2) 60%, transparent);
+}
+
+.table td {
+  vertical-align: middle;
+}
+
+.table tr.selected {
+  background: var(--accent-soft);
+}
+
+.cell-tight {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.cell-main {
+  font-weight: 600;
+}
+
+@media (max-width: 720px) {
+  .table-cards thead {
+    display: none;
+  }
+
+  .table-cards,
+  .table-cards tbody,
+  .table-cards tr,
+  .table-cards td {
+    display: block;
+    width: 100%;
+  }
+
+  .table-cards tr {
+    padding: var(--s-3) 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .table-cards td {
+    border: none;
+    padding: 2px 0;
+  }
+
+  .table-cards td[data-label]::before {
+    content: attr(data-label) '：';
+    color: var(--muted);
+    font-size: var(--fs-xs);
+  }
+
+  .table-cards td.cell-tight {
+    width: auto;
+    display: inline-block;
+    margin-right: var(--s-2);
+  }
+
+  .grid-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* —— Approval request card (conversation and approvals page) —— */
+.ap-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.ap-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  background: var(--panel);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--line));
+  border-left: 4px solid var(--warn);
+  border-radius: var(--radius);
+  padding: var(--s-4);
+  box-shadow: var(--shadow-sm);
+  min-width: 0;
+}
+
+.ap-compact {
+  border-radius: 14px;
+  padding: var(--s-3) var(--s-4);
+  gap: var(--s-2);
+}
+
+.ap-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  font-size: var(--fs-xs);
+}
+
+.ap-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--warn);
+  font-weight: 650;
+}
+
+.ap-left {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.ap-title {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 650;
+  color: var(--text);
+}
+
+.ap-target,
+.ap-input {
+  margin: 0;
+  padding: var(--s-3);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.ap-input {
+  margin-top: var(--s-2);
+  max-height: 320px;
+}
+
+.ap-summary {
+  overflow-wrap: anywhere;
+}
+
+.ap-fields {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.ap-field {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: var(--s-3);
+}
+
+.ap-field dt {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.ap-field dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.ap-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-3);
+}
+
+.ap-more .ap-input {
+  flex-basis: 100%;
+}
+
+.ap-actions,
+.ap-deny {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+.ap-deny input {
+  flex: 1;
+  min-width: 160px;
+}
+
+.ap-grant {
+  position: relative;
+}
+
+.ap-grant-pop {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
+/* History rows on the approvals page. */
+.hist-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  width: 100%;
+  padding: 2px 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.hist-title {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.hist-target {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.hist-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-3) 0 var(--s-2);
+}
+
+/* —— Permission modes —— */
+.mode-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: var(--s-3);
+}
+
+.mode-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--s-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--ease),
+    box-shadow var(--ease);
+}
+
+.mode-card:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.mode-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.mode-on {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  background: var(--accent-soft);
+  opacity: 1 !important;
+}
+
+.mode-name {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-weight: 650;
+  font-size: var(--fs-lg);
+}
+
+.mode-what {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+
+.mode-hint {
+  color: var(--warn);
+  font-size: var(--fs-xs);
+}
+
+.mode-foot {
+  margin-top: var(--s-3);
+}
+
+/* —— Overview: what needs the owner —— */
+.todo {
+  border-radius: var(--radius);
+  padding: var(--s-4);
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.todo h2 {
+  font-size: var(--fs-lg);
+}
+
+.todo-none {
+  background: var(--good-soft);
+  border-color: color-mix(in srgb, var(--good) 25%, transparent);
+}
+
+.todo-none h2 {
+  color: var(--good);
+}
+
+.todo-some {
+  border-left: 4px solid var(--warn);
+}
+
+.todo ul {
+  list-style: none;
+  margin: var(--s-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.todo-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+
+.todo-item a {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 3px;
+}
+
+.todo-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--info);
+}
+
+.todo-bad .todo-dot {
+  background: var(--bad);
+}
+
+.todo-warn .todo-dot {
+  background: var(--warn);
+}
+
+/* —— Sidebar: the collapsed rail, the footer —— */
+.side-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  padding-bottom: 0;
+}
+
+.side-foot .side-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side-collapse {
+  width: var(--ctl-sm);
+  height: var(--ctl-sm);
+  color: var(--muted);
+  flex: none;
+}
+
+.side-item {
+  position: relative;
+}
+
+@media (min-width: 961px) {
+  .console-narrow .side {
+    width: var(--side-w-narrow);
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  .console-narrow .side-text,
+  .console-narrow .side-label,
+  .console-narrow .side-brand-text {
+    display: none;
+  }
+
+  .console-narrow .side-brand,
+  .console-narrow .side-item,
+  .console-narrow .side-foot {
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .console-narrow .side-group + .side-group {
+    border-top: 1px solid var(--line);
+    padding-top: var(--s-3);
+  }
+
+  .console-narrow .side-count {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    min-width: 16px;
+    height: 16px;
+    line-height: 16px;
+    font-size: 10px;
+    padding: 0 4px;
+  }
+}
+
+@media (max-width: 960px) {
+  .side-collapse {
+    display: none;
+  }
+}
+
+/* —— Motion —— */
+.drawer {
+  animation: drawer-in var(--ease);
+}
+
+@keyframes drawer-in {
+  from {
+    transform: translateX(16px);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drawer,
+  .toast,
+  .skeleton-line {
+    animation: none;
+  }
+
+  .switch,
+  .switch-knob,
+  .mode-card {
+    transition: none;
+  }
+}

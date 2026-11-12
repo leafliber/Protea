@@ -6,6 +6,7 @@ export interface SentMessage {
   text: string;
   message_id: number;
   reply_parameters?: { message_id: number };
+  reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
 }
 
 /**
@@ -15,11 +16,15 @@ export interface SentMessage {
 export class FakeTelegram {
   readonly sent: SentMessage[] = [];
   readonly reactions: Array<Record<string, unknown>> = [];
+  /** Edits of sent messages (editMessageText, editMessageReplyMarkup). */
+  readonly edits: Array<Record<string, unknown>> = [];
+  /** Answers to button presses. */
+  readonly answers: Array<{ id: string; text: string }> = [];
   readonly calls: string[] = [];
   /** What getFile serves, by "photos/<file_id>.bin". */
   readonly files = new Map<string, Buffer>();
   readonly fileRequests: string[] = [];
-  private updates: Array<{ update_id: number; message: Record<string, unknown> }> = [];
+  private updates: Array<{ update_id: number; message?: Record<string, unknown>; callback_query?: Record<string, unknown> }> = [];
   private waiters: Array<() => void> = [];
   private nextUpdate = 100;
   private nextMessage = 5000;
@@ -55,6 +60,17 @@ export class FakeTelegram {
         ...m.extra,
         ...(m.replyToFrom ? { reply_to_message: { message_id: 1, date: 0, chat: { id: m.chatId }, from: { id: m.replyToFrom, is_bot: true } } } : {}),
       },
+    });
+    for (const w of this.waiters.splice(0)) w();
+    return id;
+  }
+
+  /** Someone presses an inline button under a message of the bot. Returns the callback query id. */
+  press(m: { fromId: number; data: string; messageId: number; chatType?: string }): string {
+    const id = `cb${this.nextUpdate}`;
+    this.updates.push({
+      update_id: this.nextUpdate++,
+      callback_query: { id, from: { id: m.fromId, is_bot: false, first_name: 'User' }, data: m.data, message: { message_id: m.messageId, date: 0, chat: { id: m.fromId, type: m.chatType ?? 'private' } } },
     });
     for (const w of this.waiters.splice(0)) w();
     return id;
@@ -110,10 +126,18 @@ export class FakeTelegram {
           text: String(params['text']),
           message_id: this.nextMessage++,
           ...(params['reply_parameters'] ? { reply_parameters: params['reply_parameters'] as { message_id: number } } : {}),
+          ...(params['reply_markup'] ? { reply_markup: params['reply_markup'] as NonNullable<SentMessage['reply_markup']> } : {}),
         };
         this.sent.push(m);
         return reply(200, { ok: true, result: { message_id: m.message_id, date: 0, chat: { id: m.chat_id, type: 'private' } } });
       }
+      case 'editMessageText':
+      case 'editMessageReplyMarkup':
+        this.edits.push({ method, ...params });
+        return reply(200, { ok: true, result: true });
+      case 'answerCallbackQuery':
+        this.answers.push({ id: String(params['callback_query_id']), text: String(params['text'] ?? '') });
+        return reply(200, { ok: true, result: true });
       case 'setMessageReaction':
         this.reactions.push(params);
         return reply(200, { ok: true, result: true });

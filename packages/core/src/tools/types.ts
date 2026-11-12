@@ -1,4 +1,4 @@
-import type { Level } from '@protea/protocol';
+import type { ApprovalPresentation, Level } from '@protea/protocol';
 
 export type JsonSchema = Record<string, unknown>;
 
@@ -62,6 +62,8 @@ export interface ToolSpec<I = unknown> {
    * counts against the platform it sends to.
    */
   outboundKey?(input: I): string;
+  /** How a call reads when the owner is asked to approve it (title, the value that matters, labels). */
+  approval?: ApprovalPresentation;
   /** A provider-defined tool type with this name (e.g. Anthropic `memory_20250818`); providers that know it declare the type instead of the schema. */
   providerType?: string;
   handler(input: I, ctx: ToolContext): Promise<ToolOutcome | string> | ToolOutcome | string;

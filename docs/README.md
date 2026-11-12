@@ -25,6 +25,7 @@
 | 沙箱 shell、浏览器与视觉支持的落地 | [40-plan/08-sandbox-browser-vision.md](40-plan/08-sandbox-browser-vision.md) |
 | 对话窗口怎么显示表格、流程图、问答、图片与小组件，连接器怎么接入 | [40-plan/09-chat-rich-display.md](40-plan/09-chat-rich-display.md) |
 | 助理怎么提议改自己的能力、MCP 工具怎么按需加载、子 agent 怎么复用 | [40-plan/10-capability-changes-lazy-mcp-fork-reuse.md](40-plan/10-capability-changes-lazy-mcp-fork-reuse.md) |
+| 定时任务页、授权请求怎么显示和决定、助理怎么选平台、控制台怎么分组 | [40-plan/11-console-approvals-schedules.md](40-plan/11-console-approvals-schedules.md) |
 
 ## 目录结构
 
@@ -75,7 +76,8 @@ docs/
 │   ├── ADR-0017-qq-connector-and-qr-bot-creation.md
 │   ├── ADR-0018-rich-chat-content-and-widget-sandbox.md
 │   ├── ADR-0019-capability-change-requests.md
-│   └── ADR-0020-fork-reuse-client-tool-search-final-reply.md
+│   ├── ADR-0020-fork-reuse-client-tool-search-final-reply.md
+│   └── ADR-0021-readable-approval-requests-and-delivery.md
 ├── 30-specs/                          精确规范（Schema、协议、配置、API）
 │   ├── 01-event-envelope-schema.md
 │   ├── 02-plugin-manifest.md

@@ -71,6 +71,7 @@ export * from './plugins/conformance.js';
 export * from './permissions/policy.js';
 export * from './permissions/audit.js';
 export * from './permissions/approvals.js';
+export * from './permissions/view.js';
 export * from './permissions/guard.js';
 export * from './permissions/modes.js';
 export * from './permissions/judge.js';

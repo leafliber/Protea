@@ -1,4 +1,4 @@
-import type { ApprovalRequestParams, ChatPlatformDecl, ChatSendParams, ChatSendResult, EventInput, Level, SenderRole, TerminalOutcome, Trigger } from '@protea/protocol';
+import type { ApprovalRequestParams, ApprovalResolvedParams, ChatPlatformDecl, ChatSendParams, ChatSendResult, EventInput, Level, SenderRole, TerminalOutcome, Trigger } from '@protea/protocol';
 import type { KvNamespace } from '../db/repos.js';
 import type { PushResult } from '../events/gateway.js';
 import type { Logger } from '../observability/logger.js';
@@ -13,6 +13,8 @@ export interface PluginContext {
   readonly config: Record<string, unknown>;
   readonly dataDir: string;
   readonly timezone: string;
+  /** The daemon's language (`daemon.language`), for text a person reads. */
+  readonly language: string;
   readonly log: Logger;
   readonly kv: KvNamespace;
   readonly clock: Clock;
@@ -45,4 +47,6 @@ export interface InprocPlugin {
   onEventsSettled?(events: Array<{ cursor: number }>, outcome: TerminalOutcome): void;
   /** Deliver an approval request to the owner through this channel. */
   onApprovalRequest?(req: ApprovalRequestParams): Promise<{ delivered: boolean }> | { delivered: boolean };
+  /** A request this channel showed was decided or expired. */
+  onApprovalResolved?(p: ApprovalResolvedParams): void;
 }

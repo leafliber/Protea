@@ -5,4 +5,3 @@ Telegram is a chat platform: the owner's private messages arrive as chat.message
 - tg_send_chat writes to any other chat and needs the owner's approval.
 - tg_react adds an emoji reaction, a lightweight acknowledgement instead of a text reply.
 - Messages from others and group messages arrive as telegram.message. Group messages that do not mention the bot are stored, not delivered; look them up with events_query (source "telegram") when needed.
-- The owner approves or denies requests by replying "/approve <id>" or "/deny <id>"; decisions arrive as approval.decided events.

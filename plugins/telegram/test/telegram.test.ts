@@ -158,13 +158,82 @@ describe('telegram connector', () => {
     const { tg, host } = await setup({}, new Map([['ownerChatId', OWNER]]));
     const delivered = await host.request('approvals/request', { id: 'a3', tool: 'tg_send_chat', summary: 'tg_send_chat {"chat_id":-100}', expiresAt: '2026-11-04T00:00:00Z' });
     expect(delivered).toEqual({ delivered: true });
-    expect(tg.sent.at(-1)?.text).toContain('Reply /approve a3 or /deny a3');
+    // The request reads as a request, and nothing in it asks for a command or an id.
+    expect(tg.sent.at(-1)?.text).toMatch(/^\[Needs your OK\] tg_send_chat\n/);
+    expect(tg.sent.at(-1)?.text).not.toMatch(/\/approve|a3/);
     tg.inject({ fromId: OWNER, text: '/approve a3' });
     tg.inject({ fromId: 77, text: '/approve a3' }); // a stranger: just a message, never a decision
     await waitFor(() => host.decisions.length === 1 && host.events.length === 1);
     expect(host.decisions).toEqual([{ id: 'a3', decision: 'approve', senderKey: `telegram:${OWNER}` }]);
     expect(host.events[0]?.senderKey).toBe('telegram:77');
-    await waitFor(() => tg.sent.some((m) => m.text === 'a3 approved.'));
+    await waitFor(() => tg.sent.some((m) => m.text === 'Approved: tg_send_chat'));
+  });
+
+  const view = { title: 'Send a Telegram message to someone else', target: 'Dinner at 7', fields: [{ label: 'To chat', value: '-100' }], reason: 'you asked me to tell the family', family: { id: 'telegram', label: 'the tools of the telegram plugin' } };
+  const request = (id: string) => ({ id, tool: 'tg_send_chat', summary: 'x', expiresAt: new Date(Date.now() + 600_000).toISOString(), view, grantMaxMs: 8 * 3_600_000 });
+
+  it('shows a request with buttons, takes the owner’s press, and puts the outcome in place of the buttons', async () => {
+    const { tg, host } = await setup({}, new Map([['ownerChatId', OWNER]]));
+    expect(await host.request('approvals/request', request('a7'))).toEqual({ delivered: true });
+    const sent = tg.sent.at(-1);
+    expect(sent?.text).toBe('[Needs your OK] Send a Telegram message to someone else\nDinner at 7\nTo chat: -100\nWhy: you asked me to tell the family\nValid for 10 minutes');
+    expect(sent?.reply_markup?.inline_keyboard.map((row) => row.map((b) => b.text))).toEqual([['Approve', 'Deny'], ["Approve, don't ask for 1 hour"]]);
+    const grant = sent?.reply_markup?.inline_keyboard[1]?.[0]?.callback_data as string;
+
+    // Someone else's press decides nothing.
+    tg.press({ fromId: 77, data: grant, messageId: sent?.message_id as number });
+    await waitFor(() => tg.answers.length === 1);
+    expect(tg.answers[0]?.text).toBe('Only the owner can decide');
+    expect(host.decisions).toHaveLength(0);
+
+    tg.press({ fromId: OWNER, data: grant, messageId: sent?.message_id as number });
+    await waitFor(() => host.decisions.length === 1);
+    expect(host.decisions[0]).toEqual({ id: 'a7', decision: 'approve', senderKey: `telegram:${OWNER}`, grantMs: 3_600_000 });
+    await waitFor(() => tg.answers.length === 2);
+    expect(tg.answers[1]?.text).toBe('Approved: Send a Telegram message to someone else');
+    expect(host.events).toHaveLength(0);
+
+    // The host says it is settled: the message keeps the request and loses the buttons.
+    host.notify('approvals/resolved', { id: 'a7', state: 'approved', by: `telegram:telegram:${OWNER}` });
+    await waitFor(() => tg.edits.length === 1);
+    expect(tg.edits[0]).toMatchObject({ method: 'editMessageText', message_id: sent?.message_id });
+    expect(String(tg.edits[0]?.['text'])).toMatch(/Dinner at 7[\s\S]*\n\nApproved · \d\d:\d\d$/);
+    expect(tg.edits[0]).not.toHaveProperty('reply_markup');
+  });
+
+  it('takes a plain word as the answer only when it cannot mean anything else', async () => {
+    const { tg, host } = await setup({}, new Map([['ownerChatId', OWNER]]));
+    // No request open: "yes" is conversation.
+    tg.inject({ fromId: OWNER, text: 'yes' });
+    await waitFor(() => host.events.length === 1);
+    expect(host.decisions).toHaveLength(0);
+
+    await host.request('approvals/request', request('a1'));
+    tg.inject({ fromId: OWNER, text: '拒绝 太晚了' });
+    await waitFor(() => host.decisions.length === 1);
+    expect(host.decisions[0]).toEqual({ id: 'a1', decision: 'deny', senderKey: `telegram:${OWNER}`, note: '太晚了' });
+    host.notify('approvals/resolved', { id: 'a1', state: 'denied' });
+
+    // Two open: a bare word names neither, a number or a quoted reply does.
+    await host.request('approvals/request', request('a2'));
+    await host.request('approvals/request', request('a3'));
+    expect(tg.sent.at(-1)?.text).toMatch(/^\[Needs your OK\] Send a Telegram message to someone else \(2\)\n/);
+    const before = tg.sent.length;
+    tg.inject({ fromId: OWNER, text: 'approve' });
+    await waitFor(() => tg.sent.length === before + 1);
+    expect(tg.sent.at(-1)?.text).toMatch(/^2 requests are waiting:\n1\. /);
+    expect(host.decisions).toHaveLength(1);
+    tg.inject({ fromId: OWNER, text: 'approve 2 1h' });
+    await waitFor(() => host.decisions.length === 2);
+    expect(host.decisions[1]).toEqual({ id: 'a3', decision: 'approve', senderKey: `telegram:${OWNER}`, grantMs: 3_600_000 });
+
+    // After the bot said something else, a bare word is conversation again.
+    host.notify('approvals/resolved', { id: 'a3', state: 'approved' });
+    const events = host.events.length;
+    tg.inject({ fromId: OWNER, text: 'ok' });
+    tg.inject({ fromId: OWNER, text: 'yes' });
+    await waitFor(() => host.events.length === events + 2);
+    expect(host.decisions).toHaveLength(2);
   });
 
   it('keeps polling through an outage', async () => {

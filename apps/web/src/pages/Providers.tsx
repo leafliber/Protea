@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import type { ModelRole, ProbeProviderResponse, ProviderProfileInfo, ProviderProtocolName, ProvidersResponse } from '@protea/protocol';
 import { api, enc, post, useAction, useApi } from '../api';
-import { Badge, Button, PageActions, Card, Drawer, Empty, ErrorText, Field, cx } from '../components/ui';
+import { Badge, Button, PageActions, Card, Drawer, Empty, ErrorText, Field, cx, useAsk } from '../components/ui';
 import { useSession } from '../session';
 
 const ROLES: Array<[ModelRole, string, string]> = [
@@ -310,6 +310,7 @@ function fromPreset(view: ProvidersResponse, presetId: string): Draft {
 }
 
 function ProfileCard({ p, view, onEdit, onChange }: { p: ProviderProfileInfo; view: ProvidersResponse; onEdit: () => void; onChange: (v: ProvidersResponse) => void }) {
+  const ask = useAsk();
   const { canWrite } = useSession();
   const [probe, setProbe] = useState<ProbeProviderResponse | null>(null);
   const act = useAction();
@@ -341,7 +342,7 @@ function ProfileCard({ p, view, onEdit, onChange }: { p: ProviderProfileInfo; vi
               small
               kind="danger"
               onClick={() => {
-                if (confirm(`删除供应商 ${p.id}？它的密钥（若是默认名字）也会删除。`)) void act.run(async () => onChange(await api<ProvidersResponse>('DELETE', `/api/providers/${enc(p.id)}`)));
+                ask(`删除供应商 ${p.id}？`, () => void act.run(async () => onChange(await api<ProvidersResponse>('DELETE', `/api/providers/${enc(p.id)}`))), { body: '它的密钥（若是默认名字）也会删除。', confirm: '删除' });
               }}
             >
               删除

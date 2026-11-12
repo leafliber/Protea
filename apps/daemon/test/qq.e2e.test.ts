@@ -147,13 +147,15 @@ describe('QQ: scan to create the bot and sign in, then talk to the owner', () =>
     // With groups on, someone mentions the bot in a group. Answering there asks first, and the
     // owner approves on QQ.
     groupMessage = qq.group({ group: 'GROUP1', from: 'MEMBER1', text: 'hello group bot' });
-    await waitUntil(() => qq.sent.some((s) => s.content.startsWith('Approval ')), 'the approval request on QQ');
-    const asked = qq.sent.find((s) => s.content.startsWith('Approval '));
+    const isRequest = (s: { content: string }): boolean => /需要你确认|Needs your OK/.test(s.content);
+    await waitUntil(() => qq.sent.some(isRequest), 'the approval request on QQ');
+    const asked = qq.sent.find(isRequest);
     expect(asked).toMatchObject({ scope: 'c2c', target: SCANNER, msgId: hello });
-    expect(asked?.content).toContain('qq_group_reply');
+    // What the owner reads is the answer about to be posted, and the buttons that decide it.
+    expect(asked?.content).toContain('hi group');
+    expect(asked?.content).not.toContain('qq_group_reply');
     expect(qq.sent.some((s) => s.scope === 'group')).toBe(false);
-    const approval = /^Approval (\S+) requested/.exec(asked?.content ?? '')?.[1] as string;
-    qq.c2c({ from: SCANNER, text: `/approve ${approval}` });
+    qq.press({ from: SCANNER, data: asked?.keyboard?.content.rows[0]?.buttons[0]?.action.data as string });
     await waitUntil(() => qq.sent.some((s) => s.scope === 'group'), 'the group answer');
     expect(qq.sent.find((s) => s.scope === 'group')).toEqual({ scope: 'group', target: 'GROUP1', content: 'hi group', msgId: groupMessage, msgType: 0 });
 
