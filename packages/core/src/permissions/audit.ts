@@ -3,7 +3,7 @@ import type { Clock } from '../util/time.js';
 
 export interface AuditRecord {
   /** `control_write`: a state-changing control API request (M5), summary "METHOD /path". */
-  kind: 'tool_call' | 'tool_blocked' | 'approval_requested' | 'approval_decided' | 'approval_expired' | 'approval_grant' | 'permission_mode' | 'permission_judge' | 'memory_write' | 'control_write';
+  kind: 'tool_call' | 'tool_blocked' | 'approval_requested' | 'approval_decided' | 'approval_expired' | 'approval_grant' | 'permission_mode' | 'permission_judge' | 'memory_write' | 'control_write' | 'change_requested' | 'change_decided';
   tool?: string;
   owner?: string;
   sessionId?: string;

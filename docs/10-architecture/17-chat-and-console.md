@@ -26,11 +26,13 @@
   "reply_to": "可选，平台的消息 id",
   "images": ["charts/spend.png", "blob:…"],
   "choices": { "options": [{ "label": "周五下午", "detail": "15:00" }, { "label": "下周一" }], "multiple": false },
-  "widget": { "title": "支出与预算", "code": "<div>…</div><script>…</script>" }
+  "widget": { "title": "支出与预算", "code": "<div>…</div><script>…</script>" },
+  "final": true
 }
 ```
 
-- `text` 之外的三项都是可选的，只有平台声明了对应能力才能用（§3）；`chat_send` 的 schema 里只出现至少有一个运行中的平台声明了的字段。
+- `final: true` 表示这条消息是本回合最后一件事：发送成功后回合立刻结束，不再为看回执多调用一次模型（[ADR-0020](../20-decisions/ADR-0020-fork-reuse-client-tool-search-final-reply.md)）。不带时照旧继续（先回一句再接着干活）。对话窗口在本批已经送达过回复后，不为"只是在看回执"的那一轮显示思考提示，页头写"收尾中…"；确实在用工具时照常显示。
+- `text` 之外的三项（`images`、`choices`、`widget`）都是可选的，只有平台声明了对应能力才能用（§3）；`chat_send` 的 schema 里只出现至少有一个运行中的平台声明了的字段。
 - **能力不匹配时不改写**：调用带了平台没有声明的字段，回执失败并说明（如 `telegram does not show choices; put the options in the text`），没有消息发出。
 - 工具描述里有一行按声明生成的平台能力（`webchat: full Markdown, …, images, choices, widget; telegram: plain text, up to 3500 characters a message`），模型据此决定写什么，新平台不用在提示词里再写一遍。
 - `images`：工作区路径或 blob 句柄，和 `view_image` 同一套解析；最多 `vision.maxImagesPerMessage` 张。

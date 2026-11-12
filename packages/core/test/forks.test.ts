@@ -58,7 +58,8 @@ describe('forks', () => {
       const brief = h.push({ text: 'morning brief', level: 3, trigger: 'flush', type: 'cron.tick' }, 'cron', 3);
       await waitFor(() => h.forks.list().length === 1);
       const id = (h.forks.list()[0] as ForkInfo).id;
-      const done = await waitState(h, id, 'completed');
+      // It reported, and now waits with its conversation for follow-up work.
+      const done = await waitState(h, id, 'idle');
       await waitFor(() => h.store.query({ type: 'fork.completed' })[0]?.state === 'delivered', 3000);
       await h.idle();
 
@@ -84,7 +85,7 @@ describe('forks', () => {
       const usage = h.db.prepare('SELECT role, session_id AS s, level FROM usage WHERE role = ?').all('fork') as Array<{ s: string; level: number }>;
       expect(usage).toHaveLength(3);
       expect(usage.every((u) => u.s === id && u.level === 3)).toBe(true);
-      expect(h.sessions.get(id)).toMatchObject({ kind: 'fork', state: 'completed', level: 3, parentId: h.store.get(brief.cursor as number)?.batchId });
+      expect(h.sessions.get(id)).toMatchObject({ kind: 'fork', state: 'idle', level: 3, parentId: h.store.get(brief.cursor as number)?.batchId });
     } finally {
       await h.close();
     }
@@ -123,14 +124,14 @@ describe('forks', () => {
       await waitState(h, f.id, 'paused');
       expect(h.main.busy).toBe(true);
       expect(h.forks.get(f.id)?.pauseReason).toBe('yield');
-      const done = await waitState(h, f.id, 'completed');
+      const done = await waitState(h, f.id, 'idle');
       await h.idle();
 
       expect(done.summary).toBe('report written');
       // At most the step already in flight finished during the owner's turn; no new one started.
       expect(ownerTurn.startSteps).toBeGreaterThanOrEqual(1);
       expect(ownerTurn.endSteps - ownerTurn.startSteps).toBe(0);
-      expect(states).toEqual(['running', 'paused:yield', 'running', 'running', 'running', 'running', 'completed']);
+      expect(states).toEqual(['running', 'paused:yield', 'running', 'running', 'running', 'running', 'idle']);
       expect(acts.map((a) => a.kind)).toEqual(['fork_yield', 'fork_resume']);
       expect(log).toHaveLength(4);
       const msgs = h.forks.transcript(f.id) ?? [];
@@ -165,7 +166,7 @@ describe('forks', () => {
       h.push({ text: 'hi', level: 1, trigger: 'flush' });
       await waitState(h, f.id, 'paused');
       expect(Date.now() - t0).toBeLessThan(1000);
-      const done = await waitState(h, f.id, 'completed');
+      const done = await waitState(h, f.id, 'idle');
       expect(forkCalls).toBe(2);
       expect(done.rounds).toBe(1); // the cancelled call left nothing behind
     } finally {
@@ -180,7 +181,7 @@ describe('forks', () => {
     await h1.close(0); // no grace: the running step is cancelled
     const h2 = makeHarness({ dir: h1.dir, extraTools: [stepTool(5)], steps: [route(idleMain, forkWork(3, 'survived'))] });
     try {
-      const done = await waitState(h2, f.id, 'completed');
+      const done = await waitState(h2, f.id, 'idle');
       expect(done.summary).toBe('survived');
       const results = (h2.forks.transcript(f.id) ?? []).flatMap((m) => m.content.filter(isToolResultBlock));
       expect(results.some((r) => r.content === 'step was cancelled')).toBe(true);
@@ -196,8 +197,8 @@ describe('forks', () => {
       const a = h.forks.spawn({ goal: 'a', level: 3 });
       const b = h.forks.spawn({ goal: 'b', level: 3 });
       expect([a.state, b.state]).toEqual(['running', 'queued']);
-      await waitState(h, a.id, 'completed');
-      await waitState(h, b.id, 'completed');
+      await waitState(h, a.id, 'idle');
+      await waitState(h, b.id, 'idle');
     } finally {
       await h.close();
     }
@@ -280,6 +281,152 @@ describe('forks', () => {
       expect(results[0]?.content).toContain('level raised to 3');
       expect(results[1]).toMatchObject({ is_error: true, content: 'fork not started: these tools are not available to forks: idle' });
       expect(h.forks.list().map((f) => f.level)).toEqual([3]);
+    } finally {
+      await h.close();
+    }
+  });
+
+  /** Fork script: the goal takes one step; each <followup> is answered from what it already knows. */
+  const reusable: ScriptStep = (req) => {
+    const said = req.messages.flatMap((m) => m.content.filter(isTextBlock).map((b) => b.text)).join('\n');
+    const followups = (said.match(/<followup from="main"/g) ?? []).length;
+    const answered = req.messages.filter((m) => m.role === 'assistant' && !m.content.some((b) => b.type === 'tool_use')).length;
+    if (followups >= answered && followups > 0) return textReply(`follow-up ${followups} done${said.includes('<message from="main"') ? ' (with the note)' : ''}`);
+    return forkRounds(req) < 1 ? reply([toolCall('step', {})]) : textReply('first result');
+  };
+
+  it('keeps a fork that reported, gives it follow-up work with its conversation, and releases it when none comes', async () => {
+    const h = makeHarness({ forks: { idleTtlMs: 150 }, extraTools: [stepTool(5)], steps: [route(idleMain, reusable)] });
+    try {
+      const f = h.forks.spawn({ goal: 'look into A', level: 3 });
+      const idle = await waitState(h, f.id, 'idle');
+      expect(idle).toMatchObject({ summary: 'first result', rounds: 2 });
+      expect(Date.parse(idle.idleUntil as string) - Date.now()).toBeLessThanOrEqual(150);
+      await waitFor(() => h.store.query({ type: 'fork.completed' }).length === 1);
+      expect(h.store.query({ type: 'fork.completed' })[0]?.text).toMatch(/The fork stays idle with its conversation until .+: fork_send gives it follow-up work\./);
+      // An idle fork is not work in progress.
+      expect(h.forks.activeCount()).toBe(0);
+
+      expect(h.forks.send(f.id, 'now look into B')).toMatchObject({ delivery: 'resumed', fork: { state: 'running' } });
+      await waitFor(() => h.store.query({ type: 'fork.completed' }).length === 2);
+      const again = await waitState(h, f.id, 'idle');
+      expect(again).toMatchObject({ summary: 'follow-up 1 done', rounds: 3, tasks: 2 });
+      expect(h.store.query({ type: 'fork.completed' }).some((e) => e.text.includes('completed (follow-up 1)'))).toBe(true);
+      // One conversation: the goal, its work, the first answer, then the follow-up and its answer.
+      const t = h.forks.transcript(f.id) ?? [];
+      expect(t.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'user', 'assistant']);
+      const followup = t[4]?.content[0];
+      expect(followup && isTextBlock(followup) ? followup.text : '').toMatch(/^<followup from="main" task="2" max_rounds="20" now="[^"]+">\nnow look into B\n<\/followup>$/);
+
+      // Nothing more comes: it is released, quietly, and can take no more work.
+      await sleep(170);
+      expect(h.forks.sweep()).toBe(1);
+      expect(h.forks.get(f.id)).toMatchObject({ state: 'completed', summary: 'follow-up 1 done' });
+      expect(h.forks.get(f.id)?.idleUntil).toBeUndefined();
+      expect(h.sessions.get(f.id)?.state).toBe('completed');
+      expect(h.store.query({ type: 'fork.completed' })).toHaveLength(2);
+      expect(() => h.forks.send(f.id, 'one more')).toThrow(/is completed and its conversation is closed; spawn a new fork/);
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('hands a message to a fork that is still working at its next step', async () => {
+    const h = makeHarness({
+      extraTools: [stepTool(60)],
+      steps: [
+        route(idleMain, (req) => {
+          const said = req.messages.flatMap((m) => m.content.filter(isTextBlock).map((b) => b.text)).join('\n');
+          return forkRounds(req) < 2 ? reply([toolCall('step', {})]) : textReply(said.includes('<message from="main"') ? 'done, with the correction' : 'done');
+        }),
+      ],
+    });
+    try {
+      const f = h.forks.spawn({ goal: 'long job', level: 3 });
+      await waitFor(() => (h.forks.get(f.id)?.rounds ?? 0) >= 1);
+      expect(h.forks.send(f.id, 'use the 2026 figures')).toMatchObject({ delivery: 'queued' });
+      const done = await waitState(h, f.id, 'idle');
+      expect(done).toMatchObject({ summary: 'done, with the correction' });
+      // A correction is part of the work in hand, not a piece of work of its own.
+      expect(done.tasks).toBeUndefined();
+      expect(h.store.query({ type: 'fork.completed' })).toHaveLength(1);
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('keeps at most maxIdle forks, and ends at once a fork nobody will follow up on', async () => {
+    const h = makeHarness({ forks: { maxIdle: 1 }, steps: [route(idleMain, () => textReply('ok'))] });
+    try {
+      const a = h.forks.spawn({ goal: 'a', level: 3 });
+      await waitState(h, a.id, 'idle');
+      const b = h.forks.spawn({ goal: 'b', level: 3 });
+      await waitState(h, b.id, 'idle');
+      // The one idle longest made room.
+      expect(h.forks.get(a.id)?.state).toBe('completed');
+      // A fork that reports to nobody (the nightly consolidation) has no one to follow up.
+      const quiet = h.forks.spawn({ goal: 'quiet', level: 3, reportTo: 'none' });
+      await waitState(h, quiet.id, 'completed');
+      // Releasing by hand: cancelling an idle fork ends it without calling it cancelled.
+      expect(h.forks.cancel(b.id)).toMatchObject({ state: 'completed' });
+      expect(h.store.query({ type: 'fork.cancelled' })).toEqual([]);
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('ends forks at once when idle time is turned off', async () => {
+    const h = makeHarness({ forks: { idleTtlMs: 0 }, steps: [route(idleMain, () => textReply('ok'))] });
+    try {
+      const f = h.forks.spawn({ goal: 'a', level: 3 });
+      await waitState(h, f.id, 'completed');
+      expect(h.store.query({ type: 'fork.completed' })[0]?.text).not.toContain('fork_send');
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('keeps an idle fork across a restart, where it still takes follow-up work', async () => {
+    const h1 = makeHarness({ extraTools: [stepTool(5)], steps: [route(idleMain, reusable)] });
+    const f = h1.forks.spawn({ goal: 'look into A', level: 3 });
+    await waitState(h1, f.id, 'idle');
+    await h1.close();
+    const h2 = makeHarness({ dir: h1.dir, extraTools: [stepTool(5)], steps: [route(idleMain, reusable)] });
+    try {
+      expect(h2.forks.get(f.id)).toMatchObject({ state: 'idle', summary: 'first result' });
+      h2.forks.send(f.id, 'and B?');
+      await waitFor(() => h2.forks.get(f.id)?.summary === 'follow-up 1 done');
+      expect(h2.forks.get(f.id)?.state).toBe('idle');
+    } finally {
+      await h2.close();
+    }
+  });
+
+  it('lets the main session reuse a fork with fork_send', async () => {
+    let sent = false;
+    const h = makeHarness({
+      extraTools: [stepTool(5)],
+      steps: [
+        route((req) => {
+          const reports = req.messages.flatMap((m) => m.content.filter(isTextBlock)).filter((b) => b.text.includes('type="fork.completed"'));
+          const id = /Fork (f_[A-Z0-9]+) completed/.exec(reports.map((b) => b.text).join('\n'))?.[1];
+          if (reports.length > 0 && id && !sent) {
+            sent = true;
+            return reply([toolCall('fork_send', { id, message: 'and the weather?' })]);
+          }
+          if (req.messages.length === 1) return reply([toolCall('fork_spawn', { goal: 'Collect headlines.' })]);
+          return reply([toolCall('idle', {})]);
+        }, reusable),
+      ],
+    });
+    try {
+      h.push({ text: 'brief', level: 3, trigger: 'flush' }, 'cron', 3);
+      await waitFor(() => h.store.query({ type: 'fork.completed' }).length === 2, 8000);
+      await h.idle();
+      const results = h.transcript.messages.flatMap((m) => m.content.filter(isToolResultBlock)).map((r) => String(r.content));
+      expect(results.some((r) => /^Fork f_\w+ took the follow-up work and is (running|queued)\. Its result arrives as a fork\.completed event\.$/.test(r))).toBe(true);
+      expect(h.forks.list()).toHaveLength(1);
+      expect(h.forks.list()[0]).toMatchObject({ state: 'idle', tasks: 2, summary: 'follow-up 1 done' });
     } finally {
       await h.close();
     }

@@ -1,4 +1,5 @@
 import type {
+  ChangeRequestInfo,
   ApprovalInfo,
   BatchEndReason,
   BatchReason,
@@ -54,6 +55,8 @@ export interface BusTopics {
   'fork.changed': ForkInfo;
   'plugin.changed': PluginStatus;
   'approval.changed': ApprovalInfo;
+  /** A change request for MCP servers, skills or plugins was filed or settled. */
+  'change.changed': ChangeRequestInfo;
   'permission.mode': PermissionModeInfo;
   'mcp.changed': McpServerStatus;
   /** The Skills catalog changed (listed names). */

@@ -226,7 +226,34 @@ CREATE TABLE widgets (                                  -- chat_send 发出的�
 
 选项的答案不单独存：它是 `chat.message` 事件的 `meta.answer`（`{ to, labels }`）。`widgets` 和 `outputs` 一样不自动清理，备份带上，诊断包不导出。迁移之后旧镜像不能再打开这个数据库，回退要用升级前的备份。
 
-### 1.10 后续迁移（计划）
+### 1.10 迁移 10：`change-requests`（2026-11-12）
+
+```sql
+CREATE TABLE change_requests (                          -- 助理提议、管理员决定的能力变更（ADR-0019）
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL,   -- id 为 'c<seq>'
+  kind TEXT NOT NULL CHECK (kind IN ('mcp','skill','plugin')),
+  action TEXT NOT NULL,                                 -- add | update | remove | enable | disable | configure
+  target TEXT NOT NULL,                                 -- 服务器 id、skill 名或插件 id
+  summary TEXT NOT NULL, reason TEXT NOT NULL,          -- Core 写的一行说明；助理给的理由（都已脱敏）
+  payload TEXT NOT NULL,                                -- 应用时需要的输入（JSON）
+  before_text TEXT, after_text TEXT,                    -- 提议时的现状与提议后的样子，供比较；没有则 NULL
+  meta TEXT NOT NULL,                                   -- JSON：{ source?, warnings?, secrets?, files?: [{ path, size }] }
+  digest TEXT NOT NULL,                                 -- 暂存文件树的摘要；没有文件时为空串
+  base_hash TEXT NOT NULL,                              -- 提议时目标状态的哈希；决定时不一致 → stale
+  state TEXT NOT NULL CHECK (state IN ('pending','applied','rejected','failed','stale','expired','withdrawn')),
+  session_id TEXT, batch_id TEXT,
+  created_at TEXT NOT NULL, expires_at TEXT NOT NULL, expires_ms INTEGER NOT NULL,
+  decided_at TEXT, decided_by TEXT, note TEXT, result TEXT
+);
+CREATE INDEX ix_changes_id ON change_requests(id);
+CREATE INDEX ix_changes_state ON change_requests(state, expires_ms);
+```
+
+暂存的文件在 `/data/changes/<id>/`，只在 `pending` 期间存在；决定、撤回或过期后删除，表里留下说明、两版文本和文件清单。迁移之后旧镜像不能再打开这个数据库。
+
+`sessions.state` 多了一个取值 `idle`（待命的 Fork）；它是文本列，不需要迁移。
+
+### 1.11 后续迁移（计划）
 
 | 表 | 用途 | 里程碑 |
 |---|---|---|

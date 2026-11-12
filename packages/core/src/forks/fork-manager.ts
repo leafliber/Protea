@@ -28,6 +28,7 @@ import type { ToolDispatcher } from '../tools/dispatcher.js';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { ToolDef } from '../tools/types.js';
 import { sleep } from '../util/abort.js';
+import { estimateMessagesTokens } from '../util/tokens.js';
 import { errorMessage } from '../util/errors.js';
 import { globToRegExp } from '../util/glob.js';
 import { newId } from '../util/ids.js';
@@ -43,6 +44,11 @@ export interface ForkRequest {
   maxTurns?: number;
   parentBatch?: string;
   reportTo?: 'main' | 'none';
+  /**
+   * Stay available for follow-up work after reporting (`send`). Default: forks that report to
+   * the main session do, the others end at once.
+   */
+  reusable?: boolean;
 }
 
 /** Everything needed to continue a fork after a pause or restart (`<id>.checkpoint.json`). */
@@ -57,7 +63,17 @@ interface Checkpoint {
   parentBatch?: string;
   reportTo: 'main' | 'none';
   state: ForkState;
+  /** Model rounds over the fork's whole life. */
   rounds: number;
+  /** Model rounds spent on the current piece of work; `maxTurns` limits these. Absent in old checkpoints. */
+  taskRounds?: number;
+  /** Pieces of work so far: the goal, then each follow-up given to the idle fork. */
+  tasks?: number;
+  reusable?: boolean;
+  /** Messages from the main session that join the conversation at the next boundary. */
+  inbox?: string[];
+  /** Set while `idle`: when it finished its last piece of work. */
+  idleSince?: string;
   createdAt: string;
   updatedAt: string;
   endedAt?: string;
@@ -120,6 +136,13 @@ const WRAP_UP_TEXT =
   '[fork] One model round is left. Finish now: reply with your final summary of the outcome instead of calling more tools.';
 const MAX_REPORT_CHARS = 4000;
 const RECENT_ENDED = 10;
+/** Messages that may wait for a fork's next boundary. */
+const MAX_INBOX = 8;
+const MAX_MESSAGE_CHARS = 20_000;
+/** An idle fork is not reused once its conversation fills this share of the context window. */
+const REUSE_CONTEXT_SHARE = 0.5;
+const DEFAULT_CONTEXT_WINDOW = 200_000;
+const SWEEP_MS = 15_000;
 
 function clip(text: string, n: number): string {
   return text.length > n ? `${text.slice(0, n)}…` : text;
@@ -143,7 +166,9 @@ export function forkExcluded(d: ToolDef): boolean {
  * scheduling (04-scheduling-and-preemption.md §7): a concurrency cap with a FIFO queue,
  * cooperative pause while the main session runs an urgent batch, resume afterwards,
  * checkpoints, and recovery after a restart. Forks never receive events (I-1); they
- * report back through an internal `fork.completed` / `fork.failed` event.
+ * report back through an internal `fork.completed` / `fork.failed` event. A fork that reported
+ * to the main session then stays `idle` with its conversation, takes follow-up work through
+ * `send`, and is released when none arrives within `idleTtlMs`.
  */
 export class ForkManager {
   private readonly forks = new Map<string, Fork>();
@@ -151,6 +176,7 @@ export class ForkManager {
   private stopping = false;
   private yielding = false;
   private resumeTimer: ReturnType<typeof setTimeout> | null = null;
+  private sweepTimer: ReturnType<typeof setInterval> | null = null;
   private mainBatch: { id: string; level: Level } | null = null;
 
   constructor(private readonly o: ForkManagerOptions) {
@@ -173,11 +199,16 @@ export class ForkManager {
   /** Queue the forks that had not finished when the daemon last stopped. Call before start(). */
   recover(): number {
     let n = 0;
-    for (const row of this.o.sessions.list('fork', ['queued', 'running', 'paused'])) {
+    for (const row of this.o.sessions.list('fork', ['queued', 'running', 'paused', 'idle'])) {
       const cp = this.readCheckpoint(row.id);
       if (!cp) {
         this.o.sessions.setState(row.id, 'failed', { endedAt: this.nowIso(), summary: 'checkpoint missing' });
         this.o.log.warn({ fork: row.id }, 'fork checkpoint missing; marked failed');
+        continue;
+      }
+      // An idle fork keeps waiting: its time runs from when it went idle, restarts included.
+      if (cp.state === 'idle') {
+        this.track(cp);
         continue;
       }
       // An operator pause outlives restarts; every other pause resumes as queued.
@@ -199,6 +230,9 @@ export class ForkManager {
 
   start(): void {
     this.started = true;
+    this.sweep();
+    this.sweepTimer = setInterval(() => this.sweep(), SWEEP_MS);
+    this.sweepTimer.unref?.();
     this.pump();
   }
 
@@ -224,8 +258,11 @@ export class ForkManager {
       level: req.level,
       maxTurns: Math.min(Math.max(1, req.maxTurns ?? settings.maxTurns), settings.maxTurns),
       reportTo: req.reportTo ?? 'main',
+      reusable: req.reusable ?? (req.reportTo ?? 'main') === 'main',
       state: 'queued',
       rounds: 0,
+      taskRounds: 0,
+      tasks: 1,
       createdAt: now,
       updatedAt: now,
       ...(req.context !== undefined ? { context: req.context } : {}),
@@ -256,12 +293,75 @@ export class ForkManager {
     const f = this.forks.get(id);
     if (!f) throw new Error(`no fork ${id}`);
     if (isForkTerminal(f.cp.state)) return this.info(f);
+    if (f.cp.state === 'idle') {
+      // Its work is done and reported: cancelling an idle fork only releases it.
+      this.release(f, 'released');
+      return this.info(f);
+    }
     if (f.cp.state === 'running' && f.hard) {
       f.hard.abort('cancel');
       return this.info(f);
     }
     this.finish(f, { kind: 'cancelled' });
     return this.info(f);
+  }
+
+  /**
+   * Give a fork more work. An idle fork takes it as its next piece of work, with its conversation
+   * intact; one that is still working gets it at its next boundary. Throws with a model-readable
+   * message when the fork cannot take it.
+   */
+  send(id: string, message: string): { fork: ForkInfo; delivery: 'resumed' | 'queued' } {
+    const f = this.forks.get(id);
+    if (!f) {
+      const ended = this.o.sessions.get(id)?.kind === 'fork';
+      throw new Error(ended ? `fork ${id} has ended and its conversation is closed; spawn a new fork` : `no fork ${id}`);
+    }
+    if (isForkTerminal(f.cp.state)) throw new Error(`fork ${id} is ${f.cp.state} and its conversation is closed; spawn a new fork`);
+    if (this.stopping) throw new Error('the daemon is stopping; no new fork work');
+    const text = message.trim();
+    if (text.length === 0) throw new Error('the message is empty');
+    if (text.length > MAX_MESSAGE_CHARS) throw new Error(`the message is too long (${text.length} characters; at most ${MAX_MESSAGE_CHARS})`);
+    const inbox = f.cp.inbox ?? [];
+    if (inbox.length >= MAX_INBOX) throw new Error(`fork ${id} already has ${inbox.length} messages waiting`);
+    if (f.cp.state !== 'idle') {
+      f.cp.inbox = [...inbox, this.note('message', text)];
+      this.persist(f);
+      return { fork: this.info(f), delivery: 'queued' };
+    }
+    const refused = this.o.spawnGate?.(f.cp.level);
+    if (refused) throw new Error(`fork work refused: ${refused}`);
+    const used = estimateMessagesTokens(this.messagesOf(f));
+    const room = (this.o.provider.contextWindow?.(f.cp.model) ?? DEFAULT_CONTEXT_WINDOW) * REUSE_CONTEXT_SHARE;
+    if (used > room) {
+      throw new Error(`fork ${id} has used about ${used} tokens of context, too much to take more work; spawn a new fork and give it what it needs to know`);
+    }
+    const tasks = (f.cp.tasks ?? 1) + 1;
+    f.cp.tasks = tasks;
+    f.cp.taskRounds = 0;
+    f.cp.inbox = [...inbox, this.note('followup', text, ` task="${tasks}" max_rounds="${f.cp.maxTurns}"`)];
+    f.cp.state = 'queued';
+    delete f.cp.idleSince;
+    delete f.cp.endedAt;
+    this.persist(f);
+    this.o.log.info({ fork: id, task: tasks }, 'fork given follow-up work');
+    this.pump();
+    return { fork: this.info(f), delivery: 'resumed' };
+  }
+
+  /** Release idle forks whose time is up, and the longest idle ones beyond `maxIdle`. */
+  sweep(): number {
+    const { idleTtlMs, maxIdle } = this.o.settings;
+    const now = this.o.clock.now();
+    const idle = [...this.forks.values()].filter((f) => f.cp.state === 'idle').sort((a, b) => (a.cp.idleSince ?? '').localeCompare(b.cp.idleSince ?? ''));
+    let released = 0;
+    for (const [i, f] of idle.entries()) {
+      const expired = now - Date.parse(f.cp.idleSince ?? f.cp.updatedAt) >= idleTtlMs;
+      if (!expired && idle.length - i <= maxIdle) continue;
+      this.release(f, expired ? 'idle too long' : 'too many idle forks');
+      released++;
+    }
+    return released;
   }
 
   /**
@@ -323,9 +423,9 @@ export class ForkManager {
     return [...live, ...ended];
   }
 
-  /** Number of forks that are queued, running or paused. */
+  /** Number of forks that are queued, running or paused (an idle one has no work). */
   activeCount(): number {
-    return [...this.forks.values()].filter((f) => !isForkTerminal(f.cp.state)).length;
+    return [...this.forks.values()].filter((f) => !isForkTerminal(f.cp.state) && f.cp.state !== 'idle').length;
   }
 
   transcript(id: string): TranscriptMessage[] | undefined {
@@ -354,6 +454,8 @@ export class ForkManager {
   async stop(graceMs: number): Promise<void> {
     this.stopping = true;
     if (this.resumeTimer) clearTimeout(this.resumeTimer);
+    if (this.sweepTimer) clearInterval(this.sweepTimer);
+    this.sweepTimer = null;
     const running = [...this.forks.values()].filter((f) => f.run);
     for (const f of running) f.pauseRequested = 'shutdown';
     const all = Promise.all(running.map((f) => f.run));
@@ -471,6 +573,25 @@ export class ForkManager {
       this.o.log.info({ fork: f.cp.id, reason: pauseReason, rounds: f.cp.rounds }, 'fork paused');
       return;
     }
+    if (outcome.kind === 'completed' && f.cp.inbox && f.cp.inbox.length > 0 && !this.stopping) {
+      // A message slipped in after its last round: it is not done yet.
+      f.cp.state = 'queued';
+      this.persist(f);
+      this.pump();
+      return;
+    }
+    if (outcome.kind === 'completed' && this.keepsIdle(f)) {
+      // Reported, but kept: the main session can hand it follow-up work until it is released.
+      f.cp.state = 'idle';
+      f.cp.idleSince = now;
+      f.cp.summary = outcome.summary;
+      this.persist(f);
+      this.o.log.info({ fork: f.cp.id, rounds: f.cp.rounds, task: f.cp.tasks ?? 1 }, 'fork idle');
+      this.report(f);
+      this.sweep();
+      this.pump();
+      return;
+    }
     f.cp.state = outcome.kind;
     f.cp.endedAt = now;
     if (outcome.kind === 'completed') f.cp.summary = outcome.summary;
@@ -489,16 +610,52 @@ export class ForkManager {
     this.pump();
   }
 
+  private keepsIdle(f: Fork): boolean {
+    const { idleTtlMs, maxIdle } = this.o.settings;
+    return (f.cp.reusable ?? false) && idleTtlMs > 0 && maxIdle > 0 && !this.stopping;
+  }
+
+  private idleUntil(f: Pick<Fork, 'cp'>): string | undefined {
+    if (f.cp.state !== 'idle' || f.cp.idleSince === undefined) return undefined;
+    return isoInZone(Date.parse(f.cp.idleSince) + this.o.settings.idleTtlMs, this.o.timezone);
+  }
+
+  /** End an idle fork: its result was reported when it went idle, so nothing is reported now. */
+  private release(f: Fork, reason: string): void {
+    if (f.cp.state !== 'idle') return;
+    const now = this.nowIso();
+    f.cp.state = 'completed';
+    f.cp.endedAt = now;
+    delete f.cp.idleSince;
+    delete f.cp.inbox;
+    f.transcript?.appendMark('fork_ended', { state: 'completed', rounds: f.cp.rounds, reason });
+    f.transcript?.close();
+    f.transcript = null;
+    this.o.sessions.setState(f.cp.id, 'completed', { endedAt: now, ...(f.cp.summary !== undefined ? { summary: clip(f.cp.summary, 2000) } : {}) });
+    this.persist(f);
+    this.o.log.info({ fork: f.cp.id, reason, rounds: f.cp.rounds }, 'idle fork released');
+  }
+
+  private note(kind: 'message' | 'followup', text: string, attrs = ''): string {
+    return `<${kind} from="main"${attrs} now="${isoInZone(this.o.clock.now(), this.o.timezone)}">\n${text}\n</${kind}>`;
+  }
+
+  private messagesOf(f: Fork): TranscriptMessage[] {
+    return f.transcript ? f.transcript.messages : readTranscript(this.file(f.cp.id, 'jsonl'), FORK_MISSING_RESULT_TEXT);
+  }
+
   private report(f: Fork): void {
     if (f.cp.reportTo === 'none') return;
     const level = Math.max(2, f.cp.level) as Level;
-    const head = `Fork ${f.cp.id} ${f.cp.state} after ${f.cp.rounds} round(s). Goal: ${clip(f.cp.goal, 300)}`;
-    const body =
-      f.cp.state === 'completed'
-        ? `Result:\n${clip(f.cp.summary ?? '', MAX_REPORT_CHARS)}`
-        : `Error: ${f.cp.error ?? 'unknown'}`;
+    const done = f.cp.state === 'completed' || f.cp.state === 'idle';
+    const task = (f.cp.tasks ?? 1) > 1 ? ` (follow-up ${(f.cp.tasks ?? 1) - 1})` : '';
+    const head = `Fork ${f.cp.id} ${done ? 'completed' : f.cp.state}${task} after ${f.cp.rounds} round(s). Goal: ${clip(f.cp.goal, 300)}`;
+    const until = this.idleUntil(f);
+    const body = done
+      ? `Result:\n${clip(f.cp.summary ?? '', MAX_REPORT_CHARS)}${until ? `\nThe fork stays idle with its conversation until ${until}: fork_send gives it follow-up work.` : ''}`
+      : `Error: ${f.cp.error ?? 'unknown'}`;
     this.o.pushInternal({
-      type: `fork.${f.cp.state}`,
+      type: `fork.${done ? 'completed' : f.cp.state}`,
       level,
       trigger: level <= 3 ? 'flush' : 'piggyback',
       text: `${head}\n${body}`,
@@ -528,10 +685,17 @@ export class ForkManager {
     for (;;) {
       const stop = stopped();
       if (stop) return stop;
+      // A boundary: what the main session sent meanwhile joins the conversation here.
+      if (f.cp.inbox && f.cp.inbox.length > 0) {
+        t.appendMessage({ role: 'user', content: f.cp.inbox.map((text) => ({ type: 'text', text })) });
+        delete f.cp.inbox;
+        this.persist(f);
+      }
       const last = t.lastMessage();
       // Finished just before a restart: the final reply is already in the transcript.
       if (last?.role === 'assistant') return { kind: 'completed', summary: textOf(last.content) || '(no final text)' };
-      if (f.cp.rounds >= f.cp.maxTurns) {
+      const taskRounds = f.cp.taskRounds ?? f.cp.rounds;
+      if (taskRounds >= f.cp.maxTurns) {
         return { kind: 'completed', summary: `Stopped at the limit of ${f.cp.maxTurns} rounds without a final summary.` };
       }
       const toolSet = o.exposure?.forRequest(t.messages, { role: f.cp.model, allowed });
@@ -549,6 +713,7 @@ export class ForkManager {
       const res = await this.callModel(f, req, prefixChanged);
       if ('kind' in res) return res;
       f.cp.rounds++;
+      f.cp.taskRounds = taskRounds + 1;
       t.appendMessage({ role: 'assistant', content: res.content, usage: res.usage, stop: res.stopReason, model: res.model });
       o.bus.emit('model.response', responseTrace(res, { sessionId: f.cp.id, batchId: f.cp.id, round: f.cp.rounds, at: this.nowIso() }));
       this.recordUsage(f, res);
@@ -558,7 +723,11 @@ export class ForkManager {
         return { kind: 'failed', error: 'the model declined to continue' };
       }
       const uses = res.content.filter(isToolUseBlock);
-      if (uses.length === 0) return { kind: 'completed', summary: textOf(res.content) || '(no final text)' };
+      if (uses.length === 0) {
+        // A message that arrived while it was writing its answer: keep going rather than report half of it.
+        if (f.cp.inbox && f.cp.inbox.length > 0) continue;
+        return { kind: 'completed', summary: textOf(res.content) || '(no final text)' };
+      }
       if (res.stopReason === 'max_tokens') {
         this.answerUnrun(t, res.content, 'not run: the tool input was cut off at max_tokens');
         this.persist(f);
@@ -572,7 +741,7 @@ export class ForkManager {
         allowed,
       });
       const content: ContentBlock[] = [...dispatched.results];
-      if (f.cp.rounds === f.cp.maxTurns - 1) content.push({ type: 'text', text: WRAP_UP_TEXT });
+      if (f.cp.taskRounds === f.cp.maxTurns - 1) content.push({ type: 'text', text: WRAP_UP_TEXT });
       t.appendMessage({ role: 'user', content });
       this.persist(f);
     }
@@ -669,11 +838,14 @@ export class ForkManager {
   }
 
   private firstMessage(cp: Checkpoint): string {
+    // A fork's system prompt is shared by all forks, so what this one can look up goes here.
+    const catalog = this.o.exposure?.catalog(cp.model, new Set(cp.tools));
     return [
       `<fork id="${cp.id}" level="${cp.level}" max_rounds="${cp.maxTurns}" now="${isoInZone(this.o.clock.now(), this.o.timezone)}">`,
       `Goal:\n${cp.goal}`,
       ...(cp.context ? [`Context from the main session:\n${cp.context}`] : []),
       '</fork>',
+      ...(catalog ? [catalog] : []),
     ].join('\n\n');
   }
 
@@ -715,6 +887,8 @@ export class ForkManager {
       ...(cp.pauseReason !== undefined ? { pauseReason: cp.pauseReason } : {}),
       ...(cp.summary !== undefined ? { summary: clip(cp.summary, 500) } : {}),
       ...(cp.error !== undefined ? { error: cp.error } : {}),
+      ...(cp.tasks !== undefined && cp.tasks > 1 ? { tasks: cp.tasks } : {}),
+      ...(cp.state === 'idle' && cp.idleSince !== undefined ? { idleUntil: new Date(Date.parse(cp.idleSince) + this.o.settings.idleTtlMs).toISOString() } : {}),
     };
   }
 }

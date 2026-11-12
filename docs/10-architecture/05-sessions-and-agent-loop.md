@@ -43,7 +43,7 @@ stateDiagram-v2
 - **回合上限**：人格声明 `rounds()` → `{ soft, hard }`。达到 soft 时注入 `internal` 事件提示"请收尾"；达到 hard 时结束批（不再调用模型），并记 `internal` 事件。
 - **结束回合的方式**：
   1. 模型返回 `end_turn` 且无 `tool_use`；
-  2. 调用了标记 `endsTurn` 的工具（如 `idle`、`sleep_until`）。这时已经到期的事件**不**并入工具结果，而是留在 pending 里，批结束后立即成为下一批（M6 修正：之前它们会被写进转录却没有模型调用来回答，要等下一个事件才被看到）；
+  2. 调用了标记 `endsTurn` 的工具（如 `idle`、`sleep_until`），或一次调用自己声明结束回合：`chat_send` 带 `final: true` 且发送成功（[ADR-0020](../20-decisions/ADR-0020-fork-reuse-client-tool-search-final-reply.md)；回复之后不再为看回执多调用一次模型，不带 `final` 时照旧继续）。这时已经到期的事件**不**并入工具结果，而是留在 pending 里，批结束后立即成为下一批（M6 修正：之前它们会被写进转录却没有模型调用来回答，要等下一个事件才被看到）；
   3. 被 `interrupt`（批以 `interrupted` 结束；打断事件和 `session.turn_cancelled` 通知组成下一批，见 [04-scheduling-and-preemption.md](04-scheduling-and-preemption.md) §4）；
   4. hard 回合上限。
 
@@ -111,7 +111,13 @@ M1 实现的子集：`goal`、`context`、`tools`、`model`、`level`、`maxTurn
 
 ### 5.2 生命周期
 
-`queued → running → paused → running → completed | cancelled | failed`
+`queued → running → paused → running → idle → (running → idle)* → completed | cancelled | failed`
+
+- **待命（`idle`）与复用**（[ADR-0020](../20-decisions/ADR-0020-fork-reuse-client-tool-search-final-reply.md)）：向主会话汇报的 Fork 写完最终消息后，照常发 `fork.completed`（文本末尾写明它待命到什么时候），然后保留转录待命，不进终态。`reportTo: none` 的 Fork（夜间整理）直接结束。
+  - `fork_send {id, message}` 给待命的 Fork 派下一件工作：消息以 `<followup from="main" task max_rounds now>` 块追加到同一份转录，轮数按这件工作重新计，重新排队运行，完成后再次汇报并回到待命。对还在运行的 Fork，消息进收件箱，在下一个工具边界以 `<message from="main">` 块并入；如果它正好写完了最终消息，就接着处理，不汇报半截结果。
+  - 回收：待命超过 `scheduler.forks.idleTtlMs`（默认 30 分钟），或待命数超过 `scheduler.forks.maxIdle`（默认 4，最久的先回收）→ 关闭转录、状态 `completed`，不再发事件。`fork_cancel`、控制台「回收」立即回收。`idleTtlMs: 0` 关闭待命。
+  - 待命的 Fork 不占 `maxConcurrent`，不计入 `<status forks>`；重启后保留，时间从进入待命时算起。
+  - 转录估算超过上下文窗口一半时拒绝复用（Fork 没有交接），回执让主会话新开一个。
 
 - Fork 固定其派生时的 Provider 端点与模型（主会话每次请求都读当前配置）。
 - 完成/失败时向主会话推送 `internal` 事件 `fork.completed {id, summary}`，summary 由 Fork 自己在最后一回合写出（人格的收尾提示要求它这样做）。
@@ -121,7 +127,7 @@ M1 实现的子集：`goal`、`context`、`tools`、`model`、`level`、`maxTurn
 
 暂停或取消时写入 `/data/sessions/forks/<id>.checkpoint.json`：`{ messages 游标, 已完成工具集合, 剩余预算, 下一步提示 }`。恢复时从转录文件重建上下文并继续；若转录中有未完成的 `tool_use`，补占位回执 `[result missing (fork paused/restarted)]`。
 
-M1 实现：检查点在每回合和每次状态变化后原子写入（临时文件 + rename），内容是派生参数与进度——`{ id, goal, context?, tools, model, level, maxTurns, parentBatch?, reportTo, state, rounds, createdAt, updatedAt, endedAt?, pauseReason?, summary?, error? }`；消息本身只在转录里（转录即游标）。`sessions` 表登记每个 Fork（`kind='fork'`、状态、等级、父批、文件路径、结束摘要）。启动时所有 `queued` / `running` / `paused` 的 Fork 重新排队；转录若以最终 assistant 消息结尾，直接记为完成。
+M1 实现：检查点在每回合和每次状态变化后原子写入（临时文件 + rename），内容是派生参数与进度——`{ id, goal, context?, tools, model, level, maxTurns, parentBatch?, reportTo, state, rounds, createdAt, updatedAt, endedAt?, pauseReason?, summary?, error? }`；消息本身只在转录里（转录即游标）。`sessions` 表登记每个 Fork（`kind='fork'`、状态、等级、父批、文件路径、结束摘要）。启动时所有 `queued` / `running` / `paused` 的 Fork 重新排队；转录若以最终 assistant 消息结尾，直接记为完成。检查点另有 `taskRounds`（当前这件工作用掉的轮数）、`tasks`、`reusable`、`inbox`、`idleSince`；`idle` 的 Fork 启动时原样保留。
 
 ### 5.4 可选：Claude Agent SDK 作为 Fork 执行器
 
@@ -207,7 +213,9 @@ Claude 5 系列的 thinking 块绑定产生它的对话前缀（system、工具�
 | ✓ `sleep_until {until, note?}` | 结束回合并创建一次性 L3 唤醒事件 | endsTurn |
 | ✓ `events_query {source?, type?, states?, since_cursor?, limit?}` | 查询事件存储（含 `store` 模式归档的事件） | 只读、可并行 |
 | ✓ `events_promote {cursor, trigger}` | 把未投递事件（pending 或 `store` 归档的）改为 `flush` 或 `piggyback`；等级不变 | |
-| ✓ `fork_spawn / fork_status / fork_cancel` | Fork 管理（§5） | `fork_status` 只读 |
+| ✓ `fork_spawn / fork_send / fork_status / fork_cancel` | Fork 管理（§5）；`fork_send` 给待命或运行中的 Fork 追加工作 | `fork_status` 只读 |
+| ✓ `mcp_propose / skill_propose / plugin_propose / change_status / change_withdraw` | 提议改 MCP 服务器、Skills、插件；只登记请求，由管理员在控制台审核（[14](14-security-and-permissions.md) §3.1） | `change_status` 只读；Fork 默认不带 |
+| ✓ `mcp_search / mcp_call` | Provider 不能搜索工具时，查找并调用被延迟的 MCP 工具（[12](12-model-providers.md) §5）；只在确有工具被延迟时出现 | `mcp_search` 只读 |
 | `memory_*` | 记忆读写（[11](11-memory-and-persona.md)） | |
 | `skill_load {name}` | 加载 Skill 正文与文件清单（[10](10-skills.md)） | 只读、可并行 |
 | ✓ `schedule_create / schedule_list / schedule_delete` | 操作 `cron` 事件源 | |

@@ -3,6 +3,7 @@ import type { SkillInfo } from '@protea/protocol';
 import { api, enc, post, useAction, useApi } from '../api';
 import { Badge, Button, PageActions, Card, Empty, ErrorText, KV, StateBadge, oneLine, timeAgo } from '../components/ui';
 import { useReloadOn } from '../live';
+import { PendingChangesBanner } from './Changes';
 import { useSession } from '../session';
 import { InstallForm } from './Plugins';
 
@@ -50,6 +51,7 @@ export function Skills() {
           />
         </Card>
       )}
+      <PendingChangesBanner kind="skill" />
       <ErrorText error={r.error ?? act.error} />
       {r.data?.skills.length === 0 && <Empty>没有 Skill</Empty>}
       <ul className="list">

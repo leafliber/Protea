@@ -43,6 +43,7 @@
 | `owner` | `persona/USER.md` | 低 | 同上 |
 | `env:<plugin>` | 插件 `envPrompt()` 模板 + `envPromptVars()` | 低（插件启停时） | 插件生命周期事件 → 回合边界重建 |
 | `env:mcp:<server>` | MCP 服务器配置里的 `envPrompt`（M3） | 低（服务器启停时） | 服务器状态变化 → 回合边界重建 |
+| `mcp-catalog` | 工具暴露计划（[12-model-providers.md](12-model-providers.md) §5）：只在 Provider 不能搜索工具、且有 MCP 工具被延迟时存在；每个服务器的说明与被延迟的工具名 | 低（服务器启停、工具列表变化时） | 延迟计划变化 → 回合边界重建 |
 | `skills-catalog` | Skills 注册表（M3） | 低 | 目录文本变化 → 回合边界重建 |
 | `memory-index` | `memory/INDEX.md` 的发布副本，包在 `<memory_index path="/memories/INDEX.md">` 里（超过 8000 字符截断） | 低（通常每天一次） | 压缩或交接、梦境结束、控制台修改、进程启动时发布；主会话忙时推迟到空闲 |
 

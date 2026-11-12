@@ -51,11 +51,17 @@ import {
   SystemSegments,
   ToolDispatcher,
   ToolExposure,
+  clientSearchTools,
   ToolRegistry,
   ToolStatsRepo,
   Transcript,
   UsageRepo,
   approvalTools,
+  ChangeRequestService,
+  changeTools,
+  mcpChangeAdapter,
+  skillChangeAdapter,
+  pluginChangeAdapter,
   configSources,
   createBackup,
   createDiagnostics,
@@ -606,7 +612,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     overridesDir: path.join(dataDir, 'overrides'),
     log: log.child({ component: 'context' }),
     permissions: () => policy.summary(tools.list(), modes.current()),
-    extraEnv: () => mcp.envSegments(),
+    extraEnv: () => {
+      // Tools held back for a provider without tool search: the model is told what it can look up.
+      const catalog = exposure.catalog('main');
+      return [...mcp.envSegments(), ...(catalog ? [{ id: 'mcp-catalog', text: catalog }] : [])];
+    },
     skills: () => skills.catalog(),
   });
   // Plugin, MCP, skill and policy changes reach the system prefix at the next turn boundary.
@@ -669,7 +679,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     settings: () => config.context.toolSearch,
     usage: (name) => toolStats.calls(name),
     supported: (role) => provider.supportsToolSearch?.(role) ?? false,
+    ownerNote: (owner) => mcp.instructionsOf(owner),
   });
+  for (const spec of clientSearchTools(exposure, tools)) tools.register('core', spec);
+  mcp.setDeferredProbe((name) => exposure.isDeferred(name));
   const forks = new ForkManager({
     dir: path.join(dataDir, 'sessions', 'forks'),
     dataDir,
@@ -750,7 +763,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       plugins: plugins.status(),
       mcp: mcp.status(),
       skills: { listed: skills.listedNames().length, rejected: skills.list().filter((k) => k.errors.length > 0).length },
-      tools: { total: tools.list().length, deferred: provider.supportsToolSearch('main') ? exposure.deferredNames().length : 0 },
+      tools: (() => {
+        const deferred = exposure.deferredNames().length;
+        return { total: tools.list().filter((d) => !d.clientSearch).length, deferred, ...(deferred > 0 ? { search: exposure.modeFor('main') } : {}) };
+      })(),
       context: (() => {
         const t = main.currentTranscript;
         const lim = limits();
@@ -776,6 +792,54 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   tools.register('core', viewImageTool({ blobs, workspace: path.join(dataDir, 'workspace'), maxBytes: () => config.vision.maxImageKb * 1024 }));
   for (const spec of forkTools(forks, { maxTurns: config.scheduler.forks.maxTurns })) tools.register('core', spec);
   for (const spec of approvalTools({ approvals, policy, tools, modes })) tools.register('core', spec);
+  // The assistant proposes changes to its own capabilities; an administrator decides them (ADR-0019).
+  const workspaceDir = path.join(dataDir, 'workspace');
+  const changes = new ChangeRequestService({
+    db,
+    bus,
+    audit,
+    clock,
+    log: log.child({ component: 'changes' }),
+    dir: path.join(dataDir, 'changes'),
+    pushInternal,
+    redact: (text) => secrets.redact(text),
+    secretSet: (name) => secrets.get(name) !== undefined,
+    adapters: {
+      mcp: mcpChangeAdapter({
+        servers: () => config.mcp.servers,
+        put: (id, entry) => putMcpServer(id, entry),
+        setEnabled: (id, enabled) => setMcpEnabled(id, enabled),
+        describe: (id) => {
+          const s = mcp.get(id);
+          if (!s) return 'not configured';
+          return `${s.enabled ? s.state : 'disabled'}${s.state === 'running' ? ` with ${s.tools.length} tools` : ''}${s.error ? ` (${s.error})` : ''}`;
+        },
+      }),
+      skill: skillChangeAdapter({
+        get: (name) => skills.get(name),
+        dirOf: (name) => skills.dirOf(name),
+        install: (dir) => skills.install(dir),
+        uninstall: (name) => skills.uninstall(name),
+        setEnabled: (name, enabled) => setSkillEnabled(name, enabled),
+        workspace: workspaceDir,
+      }),
+      plugin: pluginChangeAdapter({
+        get: (id) => plugins.get(id),
+        dirOf: (id) => plugins.dirOf(id),
+        install: (dir, o) => plugins.install(dir, o),
+        uninstall: async (id, o) => {
+          await plugins.uninstall(id, o);
+          await plugins.rescan(settingsOf);
+        },
+        enable: (id) => plugins.enable(id),
+        disable: (id) => plugins.disable(id),
+        config: (id) => config.plugins[id]?.config ?? {},
+        setConfig: (id, cfg) => setPluginConfig(id, cfg),
+        workspace: workspaceDir,
+      }),
+    },
+  });
+  for (const spec of changeTools(changes)) tools.register('core', spec);
   for (const spec of skillTools(skills)) tools.register('core', spec);
   for (const spec of memoryTools({ store: memory, index: memoryIndex, board, clock, timezone: tz, nativeType: config.memory.nativeTool })) tools.register('core', spec);
   await plugins.startAll();
@@ -1038,6 +1102,14 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     persist(['mcp', 'servers', id, 'enabled'], enabled);
     await mcp.apply(config.mcp.servers);
   };
+  const setMcpAlwaysLoad = async (id: string, on: boolean): Promise<void> => {
+    const cur = config.mcp.servers[id];
+    if (!cur) throw new Error(`MCP server ${id} is not configured`);
+    const { alwaysLoad: _was, ...rest } = cur;
+    config.mcp = { ...config.mcp, servers: { ...config.mcp.servers, [id]: on ? { ...rest, alwaysLoad: true } : rest } };
+    persist(['mcp', 'servers', id, 'alwaysLoad'], on ? true : undefined);
+    await mcp.apply(config.mcp.servers);
+  };
   const setSkillEnabled = (name: string, enabled: boolean): void => {
     const disabled = new Set(config.skills.disabled);
     if (enabled) disabled.delete(name);
@@ -1290,11 +1362,13 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     forks,
     plugins,
     approvals,
+    changes,
     rescanPlugins: () => plugins.rescan(settingsOf),
     setPluginConfig,
     mcp,
     putMcpServer,
     setMcpEnabled,
+    setMcpAlwaysLoad,
     skills,
     setSkillEnabled,
     status,

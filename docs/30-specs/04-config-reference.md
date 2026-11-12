@@ -42,7 +42,9 @@ scheduler:
     maxQueued: 8                       # 排队数达到上限且无空位时拒绝派生
     yieldLevel: 1                      # 主会话运行该等级或更紧急的批时 Fork 让路；null = 从不让路
     yieldTimeoutMs: 30000              # L3/L4 Fork 未及时到达边界 → 取消其模型调用（恢复时重发）
-    maxTurns: 20                       # Fork 模型回合数的默认值与上限
+    maxTurns: 20                       # Fork 模型回合数的默认值与上限（每件工作单独计）
+    idleTtlMs: 1800000                 # Fork 汇报后待命多久可以接着派活（fork_send）；到时没有新工作就回收；0 = 汇报即结束
+    maxIdle: 4                         # 最多保留几个待命的 Fork，超出时回收待命最久的
 
 budget:                                # 热更新（M5）；强制执行在 M6
   dailyUsd: null                       # 滚动 24 h 总预算（美元）；null = 不限
@@ -173,7 +175,7 @@ mcp:                                   # MCP 服务器（docs/10-architecture/09
       url: https://api.githubcopilot.com/mcp/
       auth: { type: oauth }            # 或 { type: bearer, token: "${secret:GITHUB_MCP_TOKEN}" }
   # 每个服务器还可设：enabled、transport（stdio | streamable-http | sse）、env、cwd、headers、
-  # tools: { allow, deny }、toolTimeoutMs（60000）、envPrompt、descriptionOverrides、subscribe、
+  # tools: { allow, deny }、toolTimeoutMs（60000）、envPrompt、alwaysLoad（true = 工具永不延迟加载）、descriptionOverrides、subscribe、
   # memoryMb（这个服务器进程树的内存上限，默认用 pluginHost.limits.memoryMb）、
   # roots（声明给服务器的根目录，相对数据目录，默认 [workspace]）
   pingIntervalMs: 30000                # 连续 3 次 ping 失败 → 重启；0 关闭
@@ -185,8 +187,9 @@ skills:
 
 context:
   toolSearch:
-    mode: auto                         # auto：工具总数超过 threshold 时延迟加载 MCP 工具；always；never
+    mode: auto                         # auto：工具总数超过 threshold，或 MCP 工具定义超过 thresholdTokens 时延迟加载 MCP 工具；always；never
     threshold: 40
+    thresholdTokens: 8000              # MCP 工具定义的估算 token；0 = 不按大小判断
     keepPerServer: 3                   # 每个 MCP 服务器调用最多的几个工具保持加载
   handoff:                             # 容量交接（M4，docs/10-architecture/05-sessions-and-agent-loop.md §8）
     softTokens: 80000                  # 批开始时估算超过它就交接

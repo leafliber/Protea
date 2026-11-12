@@ -8,6 +8,8 @@ import {
   isTrigger,
   type ApprovalGrantInfo,
   type ApprovalInfo,
+  type ChangeRequestDetail,
+  type ChangeRequestInfo,
   type ChatDraftUpdate,
   type ChatReplyParts,
   type ContentBlock,
@@ -28,7 +30,7 @@ import { backupCommand, diagCommand, dropPrivileges, healthcheckCommand, migrate
 import { devPlugin } from './dev-plugin.js';
 import { accountsCommand } from './accounts.js';
 import { opsCommand } from './ops.js';
-import { bold, dim, formatApproval, formatEvent, formatFork, formatMcp, formatMcpTool, formatPlugin, formatSkill, formatStatus, green, red, yellow } from './format.js';
+import { bold, dim, formatApproval, formatChange, formatEvent, formatFork, formatMcp, formatMcpTool, formatPlugin, formatSkill, formatStatus, green, red, yellow } from './format.js';
 
 const HELP = `protea — Protea personal assistant runtime
 
@@ -111,6 +113,10 @@ Usage:
   protea approvals approve|deny <id> [--for 1h]  decide an approval request; --for also allows its tool family for that long
   protea approvals grants                       list time-limited grants
   protea approvals revoke <grant>               end a grant early
+  protea changes [ls] [--state S]               list what the assistant proposed for its MCP servers, skills and plugins
+  protea changes show <id>                      print a change request: reason, both versions, staged files
+  protea changes approve|reject <id> [--reason TEXT]
+                                                decide a change request (approving applies it at once); --reason is a note for the assistant
   protea mcp preset browser [--no-sandbox]      add the bundled browser (image target "browser")
   protea sandbox serve [--socket P] [--workspace P] [--home P]   run the sandbox agent (the sandbox container's command)
   protea sandbox run <command>                  run a command in the sandbox from here (operators; a session of its own)
@@ -691,6 +697,36 @@ function parseDuration(text: string): number {
   return Number(m[1]) * (/^h/i.test(m[2] ?? '') ? 3_600_000 : 60_000);
 }
 
+/** Change requests: the assistant proposes, an administrator decides (ADR-0019). */
+async function changes(sub: string | undefined, id: string | undefined): Promise<number> {
+  const o = client();
+  if (sub === undefined || sub === 'ls') {
+    const q = values.state ? `?state=${encodeURIComponent(values.state)}` : '';
+    const { changes: all } = await api<{ changes: ChangeRequestInfo[] }>(o, 'GET', `/api/changes${q}`);
+    if (all.length === 0) console.log(dim('no change requests'));
+    for (const c of all) console.log(formatChange(c));
+    return 0;
+  }
+  if (!id) throw new Error(`changes ${sub} needs an id`);
+  const at = `/api/changes/${encodeURIComponent(id)}`;
+  if (sub === 'show') {
+    const c = await api<ChangeRequestDetail>(o, 'GET', at);
+    console.log(formatChange(c));
+    console.log(`${dim('reason:')} ${c.reason}`);
+    if (c.source) console.log(`${dim('source:')} ${c.source}`);
+    for (const w of c.warnings) console.log(yellow(`! ${w}`));
+    for (const sec of c.secrets ?? []) console.log(`${dim('secret:')} ${sec.name} ${sec.set ? green('set') : red('not set')}`);
+    if (c.stale) console.log(red('the target changed since this was proposed: approving applies nothing'));
+    if (c.before !== null) console.log(`${bold('— before —')}\n${c.before}`);
+    if (c.after !== null) console.log(`${bold('— after —')}\n${c.after}`);
+    for (const f of c.files ?? []) console.log(`${dim('file:')} ${f.path} ${dim(`${f.size} bytes`)}`);
+    return 0;
+  }
+  if (sub !== 'approve' && sub !== 'reject') throw new Error(`unknown changes command: ${sub}`);
+  console.log(formatChange(await api<ChangeRequestDetail>(o, 'POST', `${at}/decide`, { decision: sub, ...(values.reason !== undefined ? { note: values.reason } : {}) })));
+  return 0;
+}
+
 async function approvals(sub: string | undefined, id: string | undefined): Promise<number> {
   const o = client();
   if (sub === undefined || sub === 'ls') {
@@ -817,6 +853,8 @@ async function main(): Promise<number> {
       return skills(sub, rest);
     case 'approvals':
       return approvals(sub, rest[0]);
+    case 'changes':
+      return changes(sub, rest[0]);
     case 'mode':
       return permissionMode(sub);
     case 'sandbox': {

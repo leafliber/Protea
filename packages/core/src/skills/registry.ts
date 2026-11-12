@@ -239,6 +239,11 @@ export class SkillRegistry {
     return { ...e.info, ...(parsed !== null ? { body: parsed } : {}), files: this.files(e.dir) };
   }
 
+  /** The directory a skill is read from (none for an MCP prompt or a rejected skill). */
+  dirOf(name: string): string | undefined {
+    return this.entries.get(name)?.dir;
+  }
+
   /** `skill_load`: the body (or the rendered MCP prompt) as a tool result. */
   async load(name: string, opts: { sessionId: string; callId: string; arguments?: Record<string, string>; signal: AbortSignal }): Promise<ToolOutcome> {
     const e = this.entries.get(name);

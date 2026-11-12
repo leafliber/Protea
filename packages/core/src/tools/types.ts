@@ -23,6 +23,8 @@ export interface ToolContext {
   sessionId: string;
   batchId: string;
   batchLevel: Level;
+  /** The tools this session may call (a fork's list); absent when every tool is allowed. */
+  allowed?: ReadonlySet<string>;
 }
 
 export interface ToolOutcome {
@@ -44,6 +46,17 @@ export interface ToolSpec<I = unknown> {
   deferrable?: boolean;
   /** The schema comes from elsewhere (an MCP server): if it does not compile, skip local validation. */
   externalSchema?: boolean;
+  /**
+   * Part of the client-side tool search (`mcp_search`, `mcp_call`): sent to the model only while
+   * some tools are held back for a provider that cannot search them itself, and callable by any
+   * session that has such a tool.
+   */
+  clientSearch?: boolean;
+  /**
+   * The call is really a call of another tool: the dispatcher runs that tool, under its own
+   * name, schema, permission policy and audit, and answers this call with its result.
+   */
+  redirect?(input: I): { name: string; input: unknown } | { error: string };
   /**
    * Counted against this outbound limit (a connector's id) whoever owns the tool: `chat_send`
    * counts against the platform it sends to.

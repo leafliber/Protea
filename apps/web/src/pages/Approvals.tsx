@@ -3,7 +3,8 @@ import type { ApprovalGrantInfo, ApprovalInfo, PermissionMode, PermissionModeInf
 import { post, qs, useAction, useApi } from '../api';
 import { Badge, Button, Card, Empty, ErrorText, StateBadge, Tabs, dateTime, oneLine, timeAgo } from '../components/ui';
 import { useReloadOn } from '../live';
-import { useSession } from '../session';
+import { go, useSession } from '../session';
+import { ChangeRequests, usePendingChanges } from './Changes';
 
 interface AuditRow {
   id: number;
@@ -155,9 +156,15 @@ function Grants({ canWrite }: { canWrite: boolean }) {
   );
 }
 
-export function Approvals() {
+type ApprovalTab = 'pending' | 'changes' | 'history' | 'grants' | 'audit';
+const APPROVAL_TABS: readonly ApprovalTab[] = ['pending', 'changes', 'history', 'grants', 'audit'];
+
+export function Approvals({ params }: { params: URLSearchParams }) {
   const { canWrite } = useSession();
-  const [tab, setTab] = useState<'pending' | 'history' | 'grants' | 'audit'>('pending');
+  const asked = params.get('tab') as ApprovalTab | null;
+  const tab: ApprovalTab = asked !== null && APPROVAL_TABS.includes(asked) ? asked : 'pending';
+  const setTab = (t: ApprovalTab) => go('approvals', t === 'pending' ? {} : { tab: t });
+  const pendingChanges = usePendingChanges().length;
   const r = useApi<{ approvals: ApprovalInfo[] }>(`/api/approvals${tab === 'pending' ? '?state=pending' : ''}`);
   useReloadOn('approval', r.reload, 200);
   const act = useAction();
@@ -168,6 +175,13 @@ export function Approvals() {
       <Tabs
         tabs={[
           ['pending', '待审批'],
+          [
+            'changes',
+            <>
+              能力变更
+              {pendingChanges > 0 && <span className="tab-count">{pendingChanges}</span>}
+            </>,
+          ],
           ['history', '全部'],
           ['grants', '时限授权'],
           ['audit', '审计'],
@@ -177,6 +191,8 @@ export function Approvals() {
       />
       {tab === 'audit' ? (
         <Audit />
+      ) : tab === 'changes' ? (
+        <ChangeRequests selected={params.get('id')} />
       ) : tab === 'grants' ? (
         <Grants canWrite={canWrite} />
       ) : (

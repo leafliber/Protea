@@ -79,6 +79,8 @@ interface Entry {
   prompts: Prompt[];
   resources: boolean;
   server?: { name: string; version: string };
+  /** What the server says about itself in `initialize` (clipped). */
+  instructions?: string;
   pid?: number;
   crashes: number;
   restarts: number;
@@ -97,6 +99,8 @@ interface Entry {
 const RESOURCE_OWNER = 'mcp';
 const STDERR_TAIL = 20;
 const MAX_PAGES = 50;
+/** How much of a server's `instructions` is kept. */
+const MAX_INSTRUCTIONS_CHARS = 2000;
 const LOG_LEVELS = { debug: 'debug', info: 'info', notice: 'info', warning: 'warn', error: 'error', critical: 'error', alert: 'error', emergency: 'error' } as const;
 
 /** Tool input schemas from servers may name a draft or carry ids that clash across tools. */
@@ -177,6 +181,7 @@ function isConnectionClosed(err: unknown): boolean {
  * request, which is always built at a turn boundary.
  */
 export class McpManager implements PromptSource {
+  private deferredProbe: ((toolName: string) => boolean) | null = null;
   private readonly entries = new Map<string, Entry>();
   /** Removed servers still stopping; a server re-added under the same id starts after that. */
   private readonly retiring = new Map<string, Entry>();
@@ -302,6 +307,17 @@ export class McpManager implements PromptSource {
     return this.statusOf(e);
   }
 
+  /** What a running server says about itself (`initialize` instructions), by tool owner (`mcp:<id>`). */
+  instructionsOf(owner: string): string | undefined {
+    const e = this.entries.get(owner.startsWith('mcp:') ? owner.slice(4) : owner);
+    return e?.state === 'running' ? e.instructions : undefined;
+  }
+
+  /** Lets the status say how many of a server's tools are deferred (decided by the tool exposure). */
+  setDeferredProbe(probe: ((toolName: string) => boolean) | null): void {
+    this.deferredProbe = probe;
+  }
+
   /** `env:mcp:<id>` segments of running servers that have an operator-written envPrompt. */
   envSegments(): SystemSegment[] {
     return [...this.entries.values()]
@@ -417,6 +433,8 @@ export class McpManager implements PromptSource {
 
   private statusOf(e: Entry): McpServerStatus {
     const avg = e.latencies.length ? Math.round(e.latencies.reduce((a, b) => a + b, 0) / e.latencies.length) : undefined;
+    const probe = this.deferredProbe;
+    const deferred = probe && e.state === 'running' ? e.tools.filter((t) => !t.filtered && probe(t.name)).length : 0;
     return {
       id: e.id,
       transport: e.settings.transport,
@@ -435,6 +453,9 @@ export class McpManager implements PromptSource {
       ...(e.authorizeUrl && e.state === 'auth_required' ? { authorizeUrl: e.authorizeUrl } : {}),
       ...(avg !== undefined ? { avgLatencyMs: avg } : {}),
       ...(serverWarnings(e.settings.args).length > 0 ? { warnings: serverWarnings(e.settings.args) } : {}),
+      ...(e.instructions ? { instructions: e.instructions } : {}),
+      ...(e.settings.alwaysLoad ? { alwaysLoad: true } : {}),
+      ...(deferred > 0 ? { deferredTools: deferred } : {}),
     };
   }
 
@@ -551,6 +572,9 @@ export class McpManager implements PromptSource {
     if (transport instanceof StdioClientTransport && transport.pid !== null) e.pid = transport.pid;
     const info = client.getServerVersion();
     if (info) e.server = { name: info.name, version: info.version };
+    const instructions = client.getInstructions()?.trim();
+    if (instructions) e.instructions = instructions.slice(0, MAX_INSTRUCTIONS_CHARS);
+    else delete e.instructions;
     const caps = client.getServerCapabilities() ?? {};
     try {
       await this.refreshTools(e);
@@ -658,7 +682,7 @@ export class McpManager implements PromptSource {
         inputSchema: cleanSchema(t.inputSchema),
         flags: readOnly ? { readOnly: true, interruptible: true } : { sideEffect: true, interruptible: true },
         timeoutMs: e.settings.toolTimeoutMs,
-        deferrable: true,
+        deferrable: e.settings.alwaysLoad !== true,
         externalSchema: true,
         handler: (input, ctx) => this.callTool(e, t.name, input, ctx.signal),
       };

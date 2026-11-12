@@ -34,7 +34,7 @@ function registry(): ToolRegistry {
 }
 
 function exposure(tools: ToolRegistry, s: Partial<ToolSearchSettings> = {}, usage: Record<string, number> = {}, supported = true) {
-  const settings: ToolSearchSettings = { mode: 'auto', threshold: 40, keepPerServer: 3, ...s };
+  const settings: ToolSearchSettings = { mode: 'auto', threshold: 40, thresholdTokens: 0, keepPerServer: 3, ...s };
   return new ToolExposure({ tools, settings: () => settings, usage: (n) => usage[n] ?? 0, supported: () => supported });
 }
 
@@ -62,11 +62,11 @@ describe('tool search exposure', () => {
     expect(set.tools.map((t) => t.name).slice(0, 12)).toEqual([...Array.from({ length: 10 }, (_, i) => `core_${i}`), 'tg_send', 'mcp__a__t00']);
   });
 
-  it('loads everything below the threshold, with mode never, or when the provider cannot search', () => {
+  it('loads everything below the threshold or with mode never', () => {
     const tools = registry();
     expect(exposure(tools, { threshold: 100 }).forRequest([], { role: 'main' })).toMatchObject({ toolSearch: false });
     expect(deferred(exposure(tools, { mode: 'never' }).forRequest([], { role: 'main' }))).toEqual([]);
-    expect(deferred(exposure(tools, {}, {}, false).forRequest([], { role: 'main' }))).toEqual([]);
+    expect(exposure(tools, { mode: 'never' }, {}, false).forRequest([], { role: 'main' }).tools).toHaveLength(51);
     expect(deferred(exposure(tools, { mode: 'always', threshold: 1000 }).forRequest([], { role: 'main' }))).toHaveLength(34);
   });
 
@@ -182,7 +182,7 @@ async function runSession(withMcp: boolean): Promise<{ ratio: number; calls: Pro
       }
     },
   ]);
-  const h = makeHarness({ provider, toolSearch: { mode: 'auto', threshold: 40, keepPerServer: 3 } });
+  const h = makeHarness({ provider, toolSearch: { mode: 'auto', threshold: 40, thresholdTokens: 0, keepPerServer: 3 } });
   const mcp = new McpManager({
     tools: h.tools,
     bus: h.bus,

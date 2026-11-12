@@ -100,9 +100,11 @@ export class ToolDispatcher {
   async runAll(uses: readonly ToolUseBlock[], ctx: DispatchContext): Promise<DispatchResult> {
     const results: OneResult[] = new Array(uses.length);
     const inflight: Promise<void>[] = [];
-    for (const [i, use] of uses.entries()) {
+    for (const [i, written] of uses.entries()) {
+      // A redirecting tool (mcp_call) stands for another: from here on the call is that tool's.
+      const { use, refused } = this.resolve(written);
       inflight.push(
-        this.traced(use, ctx).then((r) => {
+        this.traced(use, ctx, refused).then((r) => {
           results[i] = r;
         }),
       );
@@ -110,6 +112,17 @@ export class ToolDispatcher {
     }
     await Promise.all(inflight);
     return { results: results.map((r) => r.block), endsTurn: results.some((r) => r.endsTurn) };
+  }
+
+  /** The call a redirecting tool stands for, or why it stands for none. The tool_use id stays, so the result answers what the model wrote. */
+  private resolve(use: ToolUseBlock): { use: ToolUseBlock; refused?: string } {
+    const def = this.registry.get(use.name);
+    if (!def?.redirect) return { use };
+    const valid = this.registry.validate(use.name, use.input);
+    if (!valid.ok) return { use, refused: `invalid input for ${use.name}: ${valid.errors.join('; ')}` };
+    const target = def.redirect(use.input);
+    if ('error' in target) return { use, refused: target.error };
+    return { use: { ...use, name: target.name, input: target.input } };
   }
 
   private emitTrace(t: ToolCallTrace): void {
@@ -120,13 +133,13 @@ export class ToolDispatcher {
     }
   }
 
-  private async traced(use: ToolUseBlock, ctx: DispatchContext): Promise<OneResult> {
-    if (!this.trace) return this.runOne(use, ctx);
+  private async traced(use: ToolUseBlock, ctx: DispatchContext, refused?: string): Promise<OneResult> {
+    if (!this.trace) return this.runOne(use, ctx, refused);
     const head = { sessionId: ctx.sessionId, batchId: ctx.batchId, callId: use.id, name: use.name };
     const started = Date.now();
     const input = JSON.stringify(use.input ?? null);
     this.emitTrace({ ...head, at: new Date(started).toISOString(), phase: 'start', input: input.length > TRACE_CHARS ? { _truncated: input.slice(0, TRACE_CHARS) } : use.input });
-    const r = await this.runOne(use, ctx);
+    const r = await this.runOne(use, ctx, refused);
     const text = typeof r.block.content === 'string' ? r.block.content : r.block.content.map((b) => (b.type === 'text' ? String(b['text'] ?? '') : `[${b.type}]`)).join('\n');
     const images = typeof r.block.content === 'string' ? [] : blobImagesIn(r.block.content);
     this.emitTrace({
@@ -142,14 +155,16 @@ export class ToolDispatcher {
     return r;
   }
 
-  private async runOne(use: ToolUseBlock, dctx: DispatchContext): Promise<OneResult> {
+  private async runOne(use: ToolUseBlock, dctx: DispatchContext, refused?: string): Promise<OneResult> {
     const fail = (text: string): OneResult => {
       this.log.info({ tool: use.name, callId: use.id, reason: text.slice(0, 200) }, 'tool not run');
       return { block: { type: 'tool_result', tool_use_id: use.id, content: text, is_error: true }, endsTurn: false };
     };
-    const { interrupt, allowed, ...ctx } = dctx;
+    if (refused !== undefined) return fail(refused);
+    const { interrupt, ...ctx } = dctx;
+    const { allowed } = dctx;
     const def = this.registry.get(use.name);
-    if (!def || (allowed && !allowed.has(use.name))) {
+    if (!def || (allowed && !allowed.has(use.name) && !def.clientSearch)) {
       const why = !def ? this.registry.unavailableReason(use.name) : undefined;
       return fail(`tool ${use.name} is not available${why ? ` (${why})` : ''}`);
     }

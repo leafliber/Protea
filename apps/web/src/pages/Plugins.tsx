@@ -4,7 +4,9 @@ import { api, enc, post, qs, useAction, useApi } from '../api';
 import { SchemaForm } from '../components/SchemaForm';
 import { Badge, Button, PageActions, Card, Empty, ErrorText, KV, Modal, StateBadge, Tabs, cx, oneLine } from '../components/ui';
 import { useReloadOn } from '../live';
+import { PendingChangesBanner } from './Changes';
 import { go, useSession } from '../session';
+import { visiblePlugins } from '../view-logic';
 import { LogLines } from './Logs';
 
 export function InstallForm({ kind, onDone }: { kind: 'plugin' | 'skill'; onDone: () => void }) {
@@ -122,6 +124,15 @@ const KIND_HINT: Record<string, string> = {
   tool: '工具插件只提供助理可以调用的工具，不推送事件。',
 };
 const kindLabel = (kind: string): string => KIND_LABEL[kind] ?? kind;
+
+const SHOW_DISABLED_KEY = 'protea.plugins.showDisabled';
+function readShowDisabled(): boolean {
+  try {
+    return localStorage.getItem(SHOW_DISABLED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
 
 type DetailTab = 'login' | 'config' | 'logs' | 'manifest';
 
@@ -241,11 +252,29 @@ export function Plugins({ params }: { params: URLSearchParams }) {
   const kinds = [...KINDS, ...[...new Set(plugins.map((p) => p.kind))].filter((k) => !KINDS.includes(k)).sort()];
   const asked = params.get('kind');
   const kind = asked !== null && kinds.includes(asked) ? asked : 'all';
-  const shown = kind === 'all' ? plugins : plugins.filter((p) => p.kind === kind);
+  const [showDisabled, setShowDisabled] = useState(readShowDisabled);
+  const toggleDisabled = () => {
+    const next = !showDisabled;
+    setShowDisabled(next);
+    try {
+      localStorage.setItem(SHOW_DISABLED_KEY, next ? '1' : '0');
+    } catch {
+      // Storage is unavailable: the choice lasts until the page is reloaded.
+    }
+  };
+  const disabled = plugins.filter((p) => !p.enabled).length;
+  const disabledHere = plugins.filter((p) => !p.enabled && (kind === 'all' || p.kind === kind)).length;
+  const listed = visiblePlugins(plugins, showDisabled);
+  const shown = kind === 'all' ? listed : listed.filter((p) => p.kind === kind);
   const selected = params.get('id');
   /** This page on the tab `k`, with a plugin's dialog open when `id` is given. */
   const open = (k: string, id?: string) => go('plugins', { ...(k !== 'all' ? { kind: k } : {}), ...(id !== undefined ? { id } : {}) });
-  const count = (k: string) => (k === 'all' ? plugins.length : plugins.filter((p) => p.kind === k).length);
+  const count = (k: string) => (k === 'all' ? listed.length : listed.filter((p) => p.kind === k).length);
+  const disabledToggle = disabled > 0 && (
+    <button type="button" className="link-btn small" onClick={toggleDisabled}>
+      {showDisabled ? '隐藏已禁用' : `显示已禁用（${disabled}）`}
+    </button>
+  );
   return (
     <div className="page">
       <PageActions>{canWrite && <Button kind="primary" onClick={() => setShowInstall((x) => !x)}>{showInstall ? '收起' : '安装插件'}</Button>}</PageActions>
@@ -260,6 +289,7 @@ export function Plugins({ params }: { params: URLSearchParams }) {
           />
         </Card>
       )}
+      <PendingChangesBanner kind="plugin" />
       <ErrorText error={list.error} />
       <Tabs
         tabs={['all', ...kinds].map((k): [string, ReactNode] => [
@@ -287,8 +317,16 @@ export function Plugins({ params }: { params: URLSearchParams }) {
           </button>
         ))}
       </div>
-      {list.data && shown.length === 0 && <Empty>{kind === 'all' ? '没有插件' : `没有${kindLabel(kind)}插件`}</Empty>}
-      <div className="muted small">{KIND_HINT[kind] ?? '点一个插件，打开它的配置、日志与清单。'}</div>
+      {list.data && shown.length === 0 && (
+        <Empty>
+          {kind === 'all' ? '没有插件' : `没有${kindLabel(kind)}插件`}
+          {!showDisabled && disabledHere > 0 ? `在用，另有 ${disabledHere} 个已禁用` : ''}
+        </Empty>
+      )}
+      <div className="row muted small">
+        <span className="grow">{KIND_HINT[kind] ?? '点一个插件，打开它的配置、日志与清单。'}</span>
+        {disabledToggle}
+      </div>
       {selected && <PluginModal key={selected} id={selected} onClose={() => open(kind)} onChanged={list.reload} />}
     </div>
   );

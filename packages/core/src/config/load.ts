@@ -98,6 +98,9 @@ function validate(cfg: ProteaConfig, warnings: string[]): void {
   if (!(forks.maxConcurrent >= 1 && forks.maxQueued >= 0 && forks.maxTurns >= 1)) {
     throw new Error('scheduler.forks requires maxConcurrent >= 1, maxQueued >= 0, maxTurns >= 1');
   }
+  if (!(forks.idleTtlMs >= 0 && Number.isInteger(forks.maxIdle) && forks.maxIdle >= 0)) {
+    throw new Error('scheduler.forks requires idleTtlMs >= 0 and a non-negative integer maxIdle');
+  }
   if (forks.yieldLevel !== null && !LEVELS.includes(forks.yieldLevel)) {
     throw new Error('scheduler.forks.yieldLevel must be a level (0-4) or null');
   }
@@ -193,6 +196,7 @@ function validate(cfg: ProteaConfig, warnings: string[]): void {
   const ts = cfg.context.toolSearch;
   if (!['auto', 'always', 'never'].includes(ts.mode)) throw new Error('context.toolSearch.mode must be auto, always or never');
   if (!(Number.isInteger(ts.threshold) && ts.threshold >= 0)) throw new Error('context.toolSearch.threshold must be a non-negative integer');
+  if (!(Number.isInteger(ts.thresholdTokens) && ts.thresholdTokens >= 0)) throw new Error('context.toolSearch.thresholdTokens must be a non-negative integer');
   if (!(Number.isInteger(ts.keepPerServer) && ts.keepPerServer >= 0)) throw new Error('context.toolSearch.keepPerServer must be a non-negative integer');
   const h = cfg.context.handoff;
   const posInt = (v: unknown): boolean => Number.isInteger(v) && (v as number) > 0;

@@ -318,6 +318,11 @@ export class PluginHost {
     return e ? this.statusOf(e) : undefined;
   }
 
+  /** Where a plugin's files are (none for an in-process plugin). */
+  dirOf(id: string): string | undefined {
+    return this.entries.get(id)?.loaded?.dir;
+  }
+
   status(): PluginStatus[] {
     return [...this.entries.values()].sort((a, b) => a.id.localeCompare(b.id)).map((e) => this.statusOf(e));
   }

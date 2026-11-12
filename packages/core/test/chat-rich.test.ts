@@ -68,11 +68,11 @@ describe('what a reply can carry', () => {
     const { tools, platform, hub } = setup();
     platform('telegram', { markdown: 'none', maxChars: 3500 });
     let spec = tools.get(CHAT_SEND);
-    expect(Object.keys((spec?.inputSchema as { properties: object }).properties)).toEqual(['platform', 'text', 'reply_to']);
+    expect(Object.keys((spec?.inputSchema as { properties: object }).properties)).toEqual(['platform', 'text', 'reply_to', 'final']);
     expect(spec?.description).toContain('telegram: plain text, up to 3500 characters a message');
     platform('webchat', FULL);
     spec = tools.get(CHAT_SEND);
-    expect(Object.keys((spec?.inputSchema as { properties: object }).properties)).toEqual(['platform', 'text', 'reply_to', 'images', 'choices', 'widget']);
+    expect(Object.keys((spec?.inputSchema as { properties: object }).properties)).toEqual(['platform', 'text', 'reply_to', 'images', 'choices', 'widget', 'final']);
     expect(spec?.description).toContain('webchat: full Markdown, images, choices, widget');
     expect(hub.list()).toMatchObject([
       { id: 'telegram', images: false, choices: false, widgets: false, drafts: false },
@@ -264,7 +264,7 @@ describe('migration 9', () => {
     const db = new Database(':memory:');
     migrate(db, MIGRATIONS.filter((m) => m.version <= 8));
     db.prepare("INSERT INTO outputs (at, plugin, channel, text) VALUES ('2026-11-10T08:00:00.000Z', 'webchat', 'chat', 'old reply')").run();
-    expect(migrate(db).applied).toEqual(['9_chat-rich-content']);
+    expect(migrate(db).applied).toEqual(['9_chat-rich-content', '10_change-requests']);
     const outputs = new OutputLog(db);
     expect(outputs.chat().items).toEqual([{ key: 'o1', kind: 'reply', platform: 'webchat', at: '2026-11-10T08:00:00.000Z', text: 'old reply', channel: 'chat' }]);
     expect(new WidgetStore(db).get(`w${'a'.repeat(32)}`)).toBeNull();

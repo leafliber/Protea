@@ -259,10 +259,12 @@ export function createMetrics(o: MetricsOptions): Metrics {
     }),
     o.bus.on('session.handoff', (h) => compactions.inc({ kind: h.kind })),
     o.bus.on('fork.changed', (f) => {
-      if (!isForkTerminal(f.state) || forkEnded.has(f.id)) return;
+      // A fork that goes idle has finished its first piece of work: count it then, not when it is released.
+      if (!(isForkTerminal(f.state) || f.state === 'idle') || forkEnded.has(f.id)) return;
       forkEnded.add(f.id);
-      turns.inc({ session_kind: 'fork', end_reason: f.state });
-      if (f.endedAt) turnDuration.observe({ session_kind: 'fork' }, Math.max(0, (Date.parse(f.endedAt) - Date.parse(f.createdAt)) / 1000));
+      turns.inc({ session_kind: 'fork', end_reason: f.state === 'idle' ? 'completed' : f.state });
+      const ended = f.endedAt ? Date.parse(f.endedAt) : o.clock.now();
+      turnDuration.observe({ session_kind: 'fork' }, Math.max(0, (ended - Date.parse(f.createdAt)) / 1000));
     }),
     o.bus.on('scheduler.action', (a) => {
       if (a.kind === 'preempt' || a.kind === 'interrupt') preemptions.inc({ source: a.source, kind: a.kind });

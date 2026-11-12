@@ -12,7 +12,7 @@ Protea 也可以 **作为 MCP 服务器**对外暴露自身（事件推送、记
 
 ## 2. 声明一个 MCP 服务器
 
-在配置里声明（`protea mcp add` 与 `POST /api/mcp/servers` 写的也是这里），改动立即生效：
+在配置里声明（`protea mcp add` 与 `POST /api/mcp/servers` 写的也是这里），改动立即生效。助理不能自己改这里：它用 `mcp_propose` 提议，由管理员在控制台审核后应用（[14-security-and-permissions.md](14-security-and-permissions.md) §3.1）：
 
 ```yaml
 mcp:
@@ -26,6 +26,7 @@ mcp:
       tools: { allow: ["fetch"] }   # 可选：按服务器自己的工具名做白名单 / 黑名单（glob，deny 优先）
       toolTimeoutMs: 60000
       envPrompt: "Use fetch for web pages the owner links to."   # 可选：进入系统前缀的 env:mcp:fetch 段
+      alwaysLoad: false             # 可选：true 时它的工具永不延迟加载（§5）
     github:
       transport: streamable-http    # 或 sse（旧）
       url: https://api.githubcopilot.com/mcp/
@@ -66,7 +67,7 @@ mcp:
 ## 5. 工具表与缓存
 
 - 服务器连接/断开、`notifications/tools/list_changed` 直接更新工具表；模型请求总是在回合边界组装，所以变化在下一回合生效。`list_changed` 合并 `mcp.listChangedDebounceMs`（默认 500 ms）后重读列表。
-- 工具总数超过 `context.toolSearch.threshold`（默认 40）时，MCP 工具标记 `defer_loading: true`，由 Provider 的工具搜索按需加载；每个服务器调用次数最多的 `keepPerServer`（默认 3）个工具保持非延迟（调用次数记在 `tool_stats` 表，排名只在该服务器的工具列表变化时重算）。详见 [12-model-providers.md](12-model-providers.md) §5。
+- 工具总数超过 `context.toolSearch.threshold`（默认 40），或 MCP 工具定义估算超过 `thresholdTokens`（默认 8000 token）时，MCP 工具延迟加载：Provider 能搜索工具时标记 `defer_loading: true` 由它按需加载；不能时（兼容接口、OpenAI 协议）工具不进请求，模型用 `mcp_search` 查定义、用 `mcp_call` 调用，系统前缀的 `mcp-catalog` 段列出每个服务器的说明（它在 `initialize` 里给的 `instructions`）与工具名。`alwaysLoad: true` 的服务器不延迟。每个服务器调用次数最多的 `keepPerServer`（默认 3）个工具保持非延迟（调用次数记在 `tool_stats` 表，排名只在该服务器的工具列表变化时重算）。详见 [12-model-providers.md](12-model-providers.md) §5。
 - Core 不改写描述（P1），但允许操作员用 `descriptionOverrides` 为单个工具替换描述。描述过长的提示在控制台（M5）。
 
 ## 6. 权限与信任

@@ -59,10 +59,11 @@ export function LevelBadge({ level }: { level: number }) {
 }
 
 export function stateTone(state: string): 'good' | 'warn' | 'bad' | 'info' | 'muted' | 'neutral' {
-  if (['running', 'delivered', 'completed', 'approved', 'used', 'listed', 'ready'].includes(state)) return 'good';
-  if (['failed', 'crashed', 'invalid', 'denied', 'auth_required', 'error'].includes(state)) return 'bad';
+  if (['running', 'delivered', 'completed', 'approved', 'used', 'listed', 'ready', 'applied'].includes(state)) return 'good';
+  if (['failed', 'crashed', 'invalid', 'denied', 'auth_required', 'error', 'rejected'].includes(state)) return 'bad';
   if (['pending', 'starting', 'draining', 'paused', 'queued', 'delivering', 'backoff'].includes(state)) return 'warn';
-  if (['withdrawn', 'expired', 'discarded', 'stopped', 'disabled', 'cancelled', 'archived'].includes(state)) return 'muted';
+  if (['withdrawn', 'expired', 'discarded', 'stopped', 'disabled', 'cancelled', 'archived', 'stale'].includes(state)) return 'muted';
+  if (['idle'].includes(state)) return 'info';
   return 'neutral';
 }
 

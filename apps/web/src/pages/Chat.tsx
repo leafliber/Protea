@@ -11,6 +11,8 @@ import { cx } from '../components/ui';
 import { applyDraft, removeBatchDrafts, removeDraft, type ChatDraft } from '../chat-drafts';
 import { live, useChatDrafts, useLive, useLiveState, useReloadOn } from '../live';
 import { consoleHref, useSession } from '../session';
+import { chatActivity } from '../view-logic';
+import { ChangeCards } from './Changes';
 
 const PAGE = 50;
 /** Messages from the same side closer than this read as one group (one avatar, one time stamp). */
@@ -327,6 +329,9 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
 
   const running = phase.phase !== 'idle';
   const active = running && phase.batchId !== undefined && items.some((i) => i.kind === 'owner' && i.batchId === phase.batchId);
+  // After a reply of this batch is on screen, the model round that only checks whether anything is left is not shown.
+  const replied = phase.batchId !== undefined && items.some((i) => i.kind === 'reply' && i.batchId === phase.batchId);
+  const activity = chatActivity({ active, phase: phase.phase, drafts: drafts.length, replied });
 
   // Stay at the newest message while the reader is there; keep the place when older ones load; otherwise flag new ones.
   useLayoutEffect(() => {
@@ -499,7 +504,7 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
 
   const providerMissing = status && !status.provider.ready;
   const statusLine =
-    ws === 'closed' ? { text: '连接中断，正在重连…', tone: 'bad' } : providerMissing ? { text: '还没有配置模型', tone: 'warn' } : active ? { text: PHASE_TEXT[phase.phase] ?? '正在处理…', tone: 'busy' } : running ? { text: '正在处理其他事情', tone: 'busy' } : { text: '在线', tone: 'good' };
+    ws === 'closed' ? { text: '连接中断，正在重连…', tone: 'bad' } : providerMissing ? { text: '还没有配置模型', tone: 'warn' } : active ? { text: activity === 'wrapping' ? '收尾中…' : (PHASE_TEXT[phase.phase] ?? '正在处理…'), tone: 'busy' } : running ? { text: '正在处理其他事情', tone: 'busy' } : { text: '在线', tone: 'good' };
 
   return (
     <div className="chat-app">
@@ -576,7 +581,7 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
               </div>
             </div>
           ))}
-          {active && drafts.length === 0 && (
+          {activity === 'typing' && (
             <div className="cm cm-in cm-first cm-last cm-typing">
               <div className="cm-avatar">
                 <img src="./favicon.svg" alt="" width="26" height="26" />
@@ -618,6 +623,7 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
             </div>
           )}
           <ApprovalCards />
+          <ChangeCards />
           {canWrite ? <Composer busy={running} draft={draft} onDraftUsed={() => setDraft('')} onSend={send} /> : <div className="chat-readonly">只读账号可以查看对话，但不能发消息。</div>}
         </div>
       </footer>

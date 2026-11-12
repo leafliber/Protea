@@ -2220,38 +2220,121 @@ ul.plain {
   background: var(--panel);
 }
 
-/* —— Enlarged picture or diagram —— */
+/* —— Enlarged picture or diagram (components/Lightbox.tsx, rendered into <body>) —— */
 .lightbox {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  background: rgba(10, 10, 14, 0.88);
+  color: #fff;
+}
+
+.lightbox-bar {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
-  background: rgba(10, 10, 14, 0.78);
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 12px;
+}
+
+.lightbox-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.lightbox-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.lightbox-on {
+  border-color: rgba(255, 255, 255, 0.6);
+}
+
+.lightbox-close {
+  margin-left: 10px;
+}
+
+.lightbox-pct {
+  min-width: 52px;
+  text-align: center;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lightbox-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
   cursor: zoom-out;
 }
 
-.lightbox img {
-  max-width: 100%;
-  max-height: 100%;
-  border-radius: 8px;
+.lightbox-content {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform-origin: center;
+  cursor: grab;
 }
 
-.lightbox-svg {
-  width: min(1400px, 100%);
-  max-height: 100%;
-  overflow: auto;
-  background: var(--panel);
-  border-radius: 10px;
-  padding: 20px;
+.lightbox-dragging,
+.lightbox-dragging .lightbox-content {
+  cursor: grabbing;
 }
 
-.lightbox-svg svg {
+.lightbox-loading {
+  visibility: hidden;
+}
+
+.lightbox-content img {
+  display: block;
   width: 100%;
+  height: 100%;
+  border-radius: 4px;
+  -webkit-user-drag: none;
+}
+
+.lightbox-vector {
+  background: var(--panel);
+  border-radius: 6px;
+  box-shadow: 0 0 0 16px var(--panel);
+}
+
+.lightbox-vector svg {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
   max-width: none !important;
-  height: auto;
+}
+
+.lightbox-gone {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.8);
 }
 
 .blob-thumb {
@@ -3047,4 +3130,187 @@ ul.plain {
   padding: 8px;
   background: #fff;
   border-radius: 8px;
+}
+
+/* —— A button that reads as a link (toggles inside a line of text) —— */
+.link-btn {
+  border: none;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+/* —— Line diff (components/Diff.tsx) —— */
+.diff {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.diff-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+  background: var(--panel-2);
+}
+
+.diff-add {
+  color: var(--good);
+  font-weight: 600;
+}
+
+.diff-del {
+  color: var(--bad);
+  font-weight: 600;
+}
+
+.diff-body {
+  margin: 0;
+  padding: 6px 0;
+  max-height: 460px;
+  overflow: auto;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.diff-line {
+  padding: 0 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.diff-line-add {
+  background: color-mix(in srgb, var(--good) 14%, transparent);
+}
+
+.diff-line-del {
+  background: color-mix(in srgb, var(--bad) 14%, transparent);
+}
+
+.diff-sign {
+  display: inline-block;
+  width: 1.4em;
+  color: var(--faint);
+  user-select: none;
+}
+
+.diff-skip {
+  padding: 2px 12px;
+  color: var(--faint);
+  font-size: 12px;
+  background: var(--panel-2);
+}
+
+/* —— Change requests (pages/Changes.tsx) —— */
+.change-row {
+  cursor: pointer;
+}
+
+.change-meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 14px;
+  font-size: 13.5px;
+  margin: 0 0 12px;
+}
+
+.change-meta dt {
+  color: var(--muted);
+}
+
+.change-meta dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+.change-section {
+  margin: 14px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.change-files {
+  display: grid;
+  grid-template-columns: minmax(180px, 280px) 1fr;
+  gap: 10px;
+  align-items: start;
+}
+
+.change-files ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.change-files li button {
+  display: flex;
+  width: 100%;
+  gap: 8px;
+  justify-content: space-between;
+  border: none;
+  background: none;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+
+.change-files li button:hover,
+.change-files li button.on {
+  background: var(--panel-2);
+}
+
+.change-file-body {
+  margin: 0;
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.change-decide {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.change-decide input {
+  flex: 1;
+  min-width: 200px;
+}
+
+.banner-info {
+  background: var(--info-soft, var(--panel-2));
+  color: var(--info, var(--text));
+}
+
+@media (max-width: 720px) {
+  .change-files {
+    grid-template-columns: 1fr;
+  }
 }

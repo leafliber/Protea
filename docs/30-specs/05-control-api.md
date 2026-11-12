@@ -104,6 +104,7 @@
 | POST | `/api/mcp/presets/browser` | 写入并启动内置浏览器（`mcp.servers.browser`）：`{ noSandbox?: boolean }` → 201 `McpServerStatus`；镜像里没有浏览器时 409 |
 | DELETE | `/api/mcp/servers/:id` | 停止、移除工具、从 `config.yaml` 删除 |
 | POST | `/api/mcp/servers/:id/enable` · `/disable` · `/restart` | 返回 `McpServerStatus`；`restart` 从 failed 恢复 |
+| POST | `/api/mcp/servers/:id/always-load` · `/on-demand` | 写 `mcp.servers.<id>.alwaysLoad`：它的工具是否永不延迟加载（服务器随之重启）；返回 `McpServerStatus`（含 `alwaysLoad`、`deferredTools`、`instructions`） |
 | GET | `/api/mcp/servers/:id/tools` | `{ tools: McpToolInfo[] }`（含被 allow/deny 过滤掉的，标 `filtered`） |
 | POST | `/api/mcp/servers/:id/oauth/start` | `{ authorizeUrl?, state }`：开始或继续 OAuth 授权 |
 | GET | `/api/mcp/oauth/callback?code&state` | **不需要令牌**（浏览器回跳，靠 `state` 匹配）；返回一页 HTML；未知 state 400 |
@@ -129,10 +130,14 @@
 | GET | `/api/approvals/grants` | `{ grants: ApprovalGrantInfo[] }`：时限授权，新的在前 |
 | POST | `/api/approvals/grants/:id/revoke` | 提前结束授权，返回 `ApprovalGrantInfo` |
 | POST | `/api/approvals/:id/decide` | `{ decision: approve\|deny, grantMs?, note? }`；`grantMs`：同意时还在这段时间内放行同一组工具（上限 `permissions.grantMaxMs`）；决定者记为 `console:admin`；已决定或已过期 → 409 |
+| GET | `/api/changes?state=&limit=` | `{ changes: ChangeRequestInfo[] }`：助理提议的能力变更，新的在前；state：pending、applied、rejected、failed、stale、expired、withdrawn |
+| GET | `/api/changes/:id` | `ChangeRequestDetail`：`ChangeRequestInfo` 加 `before` / `after`（两版文本，供逐行比较）、`warnings`、`source?`、`files?`、`secrets?: [{ name, set }]`、`stale?` |
+| GET | `/api/changes/:id/file?path=` | `{ text }`：一个暂存文件的内容（仅待审核期间；超过 256 KB 或不是文本时 409） |
+| POST | `/api/changes/:id/decide` | 仅管理员。`{ decision: approve\|reject, note? }`：同意即应用，返回决定后的 `ChangeRequestDetail`（`state` 为 applied、failed、stale 或 rejected）；已决定 409；这是决定变更请求的唯一入口（[ADR-0019](../20-decisions/ADR-0019-capability-change-requests.md)） |
 | GET | `/api/budget` | `{ settings, status: BudgetStatus }`。`status`：`enforced`、`dailyUsd`、`hardDailyUsd`、`spentUsd`（24 h 合计）、`hardCapReached`、`hardCapReleasedUntil?`，`levels.<L>`：`spentUsd`、`tokens`、`limitUsd`、`usedRatio`、`held?`（被预算改了投递方式且仍在等的事件数）、`releasedUntil?` |
 | PATCH | `/api/budget` | `budget` 分节的 Merge Patch（热更新） |
 | POST | `/api/budget/release` | `{ levels?: [2,3,4], hardCap?: boolean, hours?: number }`（默认 L2–L4、设置了硬上限时连同硬上限、24 h；`hours` ≤ 168）：在这段时间内不对这些等级强制执行，被扣住的事件恢复原来的投递方式 → `{ levels, hardCap, untilMs, until, promoted: number[] }`；记 L4 事件 `budget.released`。放行记在 kv，重启后仍有效（M6） |
-| GET | `/api/audit?kind=&tool=&limit=` | `{ audit: AuditRow[] }`，新的在前；kind：`tool_call`、`tool_blocked`、`approval_requested`、`approval_decided`、`approval_expired`、`memory_write`、`control_write` |
+| GET | `/api/audit?kind=&tool=&limit=` | `{ audit: AuditRow[] }`，新的在前；kind：`tool_call`、`tool_blocked`、`approval_requested`、`approval_decided`、`approval_expired`、`memory_write`、`control_write`、`change_requested`、`change_decided` |
 
 ## Webhook
 
@@ -203,7 +208,7 @@
 
 - 连接后服务端先发 `{ topic: 'hello', data: { runId, role } }`。
 - 客户端发 `WsClientMessage`：`{ subscribe: WsTopic[], since?: cursor, logFilter?: { level?, component?, plugin?, q? } }`；每条替换之前的订阅，服务端回 `{ topic: 'subscribed', data: { topics } }`；未知分组回 `{ topic: 'error', data: { message } }`。
-- 分组 `WS_TOPICS`：`events`（`event`、`settled`、`promoted`）、`phase`（`phase`、`batch.*`）、`scheduler`、`output`、`chat`（`chat.draft`，只有对话窗口订阅；载荷见 `@protea/protocol` 的 `ChatDraftUpdate`）、`changes`（`fork`、`plugin`、`approval`、`permission`、`mcp`、`skills`、`handoff`、`persona`）、`usage`（`UsageInfo`）、`logs`（`log`，`LogRecord`）。 `trace`（`model.request`、`model.delta`、`model.response`、`tool.call`，运行流；载荷见 `@protea/protocol` 的 `TraceMessage`）。
+- 分组 `WS_TOPICS`：`events`（`event`、`settled`、`promoted`）、`phase`（`phase`、`batch.*`）、`scheduler`、`output`、`chat`（`chat.draft`，只有对话窗口订阅；载荷见 `@protea/protocol` 的 `ChatDraftUpdate`）、`changes`（`fork`、`plugin`、`approval`、`change`、`permission`、`mcp`、`skills`、`handoff`、`persona`）、`usage`（`UsageInfo`）、`logs`（`log`，`LogRecord`）。 `trace`（`model.request`、`model.delta`、`model.response`、`tool.call`，运行流；载荷见 `@protea/protocol` 的 `TraceMessage`）。
 - 带 `since` 且订阅了 `events` 时，先补发游标之后存储的全部事件，期间的实时消息暂存后放出；同一游标不会发两次。
 - 服务端每 30 s ping，一个周期内没有 pong 的连接被终止；未发出的数据超过 8 MB 时以 1013 关闭。
 
