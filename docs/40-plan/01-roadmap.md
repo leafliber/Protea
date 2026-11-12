@@ -385,6 +385,22 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 
 未验证：真实模型是否会用 `tool_search {source: <插件>}` 找到并调用被延迟的插件工具（并入 T17 第 2 步）。开发实例的 `config.yaml` 若写了 `keepPerServer`，要手动改成 `keepPerOwner`。
 
+### 记忆系统第二次重构（2026-11-12）
+
+按 [12-memory-system-v2.md](12-memory-system-v2.md) 一次完成，依据是本地容器三天的运行记录与 Claude Code、Codex、OpenClaw 的对照；决策见 [ADR-0024](../20-decisions/ADR-0024-resident-memory-and-chunked-search.md)。
+
+- 常驻记忆 `memory/core/owner.md`（2000 字符）与 `core/rules.md`（4000 字符）进系统前缀，助理可写、超限拒绝、保留 20 份历史版本；`persona/USER.md` 删除。
+- 笔记索引由 Core 从 `summary` 生成，删除 `INDEX.md`；`notes/` 的写入必须带 `summary`。
+- `memory` 工具改为 `read / write / append / edit / move / delete`；删除 `memory_recent`、`memory.nativeTool` 与工具规格的 `providerType`。
+- 检索按块索引、返回行号范围，按命中词数再按 BM25 排序，引号与 `+词` 必须出现，单字可命中长词中间的字；新增使用记录 `memory_access`（迁移 12）。
+- 写 `core/` 的来源管控：工具规格新增 `askWhen`，批里有主人以外的外部事件、或梦境以外的 Fork 写入时由主人批准。
+- 压缩笔记 `effort: low`、上限 16000、带上 `core/` 内容并新增 `Durable, not yet saved`；闲时失败按 10、20、40 分钟退避并依次换 `fork`、`main`，全失败后发 L3 事件。
+- 梦境得到增量输入（变化的文件、常驻用量、检查结果、使用统计），由 Core 验收（最终总结、至少一次写入、`core/` 不超限）；默认 `main` 模型、40 回合；`ForkInfo.unfinished`。
+- `daemon.timezone` 未设置时启动告警、控制台首页提示。
+- 控制台"记忆"页新增"概况"：常驻文件用量与历史恢复、生成的索引、待整理、使用情况、整理结果；`/api/memory/overview`、`/api/memory/history`。
+
+未验证：真实模型下助理是否会当场写 `core/rules.md`、梦境能否通过验收、压缩在 GLM 上是否不再失败（并入 T11）。已部署实例要手工迁移：把 `persona/USER.md` 和 `memory/persona/USER.md` 的内容并入 `memory/core/owner.md`，长期约定写进 `core/rules.md`，删除 `memory/INDEX.md`；`config.yaml` 删掉 `memory.nativeTool`，设好 `daemon.timezone`。`/data/persona/OPERATING.md` 不会自动更新，未自定义时换成新的默认文件。
+
 ### 权限模式与 auto 判断模型（2026-11-10）
 
 决策见 [ADR-0015](../20-decisions/ADR-0015-permission-modes-and-auto-review.md)。

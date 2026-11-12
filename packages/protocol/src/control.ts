@@ -443,8 +443,57 @@ export interface DreamStatus {
   startedAt?: string;
   endedAt?: string;
   result?: 'completed' | 'failed' | 'cancelled';
+  /** Why a finished run was not accepted (no final summary, nothing written, a resident file over its limit). */
+  rejected?: string;
   summary?: string;
   failures: number;
+  /** End of the latest accepted run: files changed after it are what the next run looks at. */
+  acceptedAt?: string;
+}
+
+/** Something about a memory file the consolidation should fix. */
+export interface MemoryCheck {
+  path: string;
+  problem: 'over_limit' | 'no_summary' | 'too_long';
+  detail?: string;
+}
+
+/** How the main session used its memory over a period. */
+export interface MemoryRecall {
+  days: number;
+  searches: number;
+  /** Files it read or that a search found, most recent first. */
+  used: Array<{ path: string; reads: number; hits: number; last: string }>;
+  /** Notes it neither read nor found. */
+  unused: string[];
+  /** Searches that found nothing. */
+  misses: Array<{ query: string; times: number; last: string }>;
+}
+
+/** `GET /api/memory/overview`: the resident layer, what the prefix shows of it, and what needs care. */
+export interface MemoryOverview {
+  core: Array<{ path: string; chars: number; limit: number }>;
+  /** The generated index of notes as it is now; null without notes. */
+  index: string | null;
+  /** The system prefix still shows an older version of the resident files or the index (it changes at the next compaction). */
+  stale: boolean;
+  checks: MemoryCheck[];
+  recall: MemoryRecall;
+}
+
+/** A search result of `GET /api/memory/search`: a file and up to three places in it. */
+export interface MemorySearchHit {
+  path: string;
+  summary?: string;
+  matched: string[];
+  terms: number;
+  chunks: Array<{ start: number; end: number; snippet: string }>;
+}
+
+/** `GET /api/memory/history?path=core/…`: earlier versions of a resident file, newest first. */
+export interface MemoryHistoryResponse {
+  path: string;
+  versions: Array<{ name: string; at: string; text: string }>;
 }
 
 export interface StatusResponse {
@@ -474,6 +523,8 @@ export interface StatusResponse {
   context: { transcript: string; handoffs: number; estimatedTokens: number; softTokens: number; hardTokens: number; lastCompaction?: { at: string; kind: HandoffKind; dropped: number; kept: number } };
   /** M4: files in the memory directory, the whiteboard and the daily consolidation; `persona`: whether hooks are loaded (or why not). */
   memory: { files: number; board: { open: number; rev: number }; dream: DreamStatus };
+  /** The daemon's time zone, and whether config.yaml or the environment set it (not only the system default). */
+  timezone: { zone: string; set: boolean };
   persona: { hooks: boolean; problem?: string };
   usage24h: UsageTotals;
   /** M5: delivery paused by the operator (who), and sources in preemption cooldown. */
@@ -496,6 +547,8 @@ export interface ForkInfo {
   endedAt?: string;
   pauseReason?: string;
   summary?: string;
+  /** Completed without a final message of its own: it gave none, or ran out of rounds. */
+  unfinished?: 'no_final_text' | 'round_limit';
   error?: string;
   /** How many pieces of work it was given (the goal, then each follow-up). */
   tasks?: number;

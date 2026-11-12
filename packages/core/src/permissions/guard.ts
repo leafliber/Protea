@@ -77,7 +77,18 @@ export class PermissionGuard implements ToolGuard {
   }
 
   private async decide(def: ToolDef, use: ToolUseBlock, ctx: GuardContext): Promise<GuardDecision> {
-    const { policy, rule, pinned } = this.policy.decide(def);
+    const decided = this.policy.decide(def);
+    let { policy, rule } = decided;
+    let pinned = decided.pinned;
+    // A call that needs the owner because of what it does here (askWhen), whatever the policy says.
+    if (policy !== 'deny') {
+      const why = def.askWhen?.(use.input as never, { sessionId: ctx.sessionId, batchId: ctx.batchId }) ?? null;
+      if (why) {
+        policy = 'ask';
+        rule = why;
+        pinned = true;
+      }
+    }
     const audit = policy !== 'allow' || !!def.flags?.sideEffect;
     if (policy === 'allow') return { action: 'run', policy, rule, audit };
     if (policy === 'deny') {

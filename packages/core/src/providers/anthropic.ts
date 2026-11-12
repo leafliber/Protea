@@ -150,17 +150,13 @@ export class AnthropicProvider implements Provider {
     const system: BetaTextBlockParam[] = req.system.map((s, i, all) =>
       i === all.length - 1 ? { type: 'text', text: s.text, cache_control: cache } : { type: 'text', text: s.text },
     );
-    const tools: BetaToolUnion[] = req.tools.map((t) =>
-      t.providerType
-        ? ({ type: t.providerType, name: t.name } as unknown as BetaToolUnion)
-        : {
-            name: t.name,
-            description: t.description,
-            input_schema: t.inputSchema as BetaTool['input_schema'],
-            eager_input_streaming: true,
-            ...(t.deferLoading ? { defer_loading: true } : {}),
-          },
-    );
+    const tools: BetaToolUnion[] = req.tools.map((t) => ({
+      name: t.name,
+      description: t.description,
+      input_schema: t.inputSchema as BetaTool['input_schema'],
+      eager_input_streaming: true,
+      ...(t.deferLoading ? { defer_loading: true } : {}),
+    }));
     const betas: string[] = [];
     // Deferred definitions stay out of the cached prefix; the search tool itself always loads.
     if (req.toolSearch) tools.push({ ...TOOL_SEARCH_TOOL });
@@ -204,9 +200,7 @@ export class AnthropicProvider implements Provider {
     const system: BetaTextBlockParam[] = req.system.map((s, i, all) =>
       i === all.length - 1 ? { type: 'text', text: s.text, cache_control: { type: 'ephemeral' } } : { type: 'text', text: s.text },
     );
-    const tools: BetaToolUnion[] = req.tools
-      .filter((t) => !t.providerType)
-      .map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema as BetaTool['input_schema'] }));
+    const tools: BetaToolUnion[] = req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema as BetaTool['input_schema'] }));
     const messages = req.messages
       .map((m) => ({ role: m.role, content: m.content.filter((b) => b.type === 'text' || b.type === 'tool_use' || b.type === 'tool_result' || b.type === 'image') }))
       .filter((m) => m.content.length > 0);

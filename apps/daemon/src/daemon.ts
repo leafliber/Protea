@@ -20,10 +20,12 @@ import {
   ForkManager,
   EventStore,
   Handoff,
+  MemoryAccess,
   MemoryIndex,
   MemoryStore,
   Persona,
   RedactingProvider,
+  ResidentMemory,
   TracingProvider,
   traceBus,
   PluginHost,
@@ -567,19 +569,24 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const persona = new Persona(personaDir, log.child({ component: 'persona' }));
   await persona.loadHooks();
 
-  // Memory (docs/10-architecture/11-memory-and-persona.md): files under /data/memory, a full-text index, the INDEX.md segment.
+  // Memory (docs/10-architecture/11-memory-and-persona.md): files under /data/memory, a full-text
+  // index, a record of their use, and the resident layer (core/ and the index of notes) in the prefix.
   const memoryDir = path.join(dataDir, 'memory');
-  if (ensureMemoryDir(memoryDir, path.join(assets, 'personas', 'default', 'memory')).created) log.info({ dir: memoryDir }, 'created the memory directory');
+  if (ensureMemoryDir(memoryDir).created) log.info({ dir: memoryDir }, 'created the memory directory');
   let memoryIndex: MemoryIndex | null = null;
-  const memory = new MemoryStore(memoryDir, (paths) => memoryIndex?.update(paths));
+  const memory = new MemoryStore(memoryDir, (paths) => memoryIndex?.update(paths), { now: () => clock.now() });
   memoryIndex = new MemoryIndex(db, memory, () => new Date(clock.now()).toISOString(), () => clock.now());
+  const memoryAccess = new MemoryAccess(db, () => clock.now());
+  memoryAccess.prune();
   const memoryKv = kvNamespace(kv, 'memory');
   const board = new Board(db, memoryKv, () => config.memory.board, () => new Date(clock.now()).toISOString());
-  // INDEX.md is in the cached system prefix, so a new version goes live only at chosen moments.
-  let publishedIndex = memory.readText('INDEX.md') ?? null;
-  let indexPublishPending = false;
   const synced = memoryIndex.sync();
   if (synced.indexed + synced.removed > 0) log.info(synced, 'memory index updated');
+  // The resident layer is in the cached system prefix, so a new version goes live only at chosen moments.
+  const resident = new ResidentMemory(memory, memoryIndex);
+  let residentPublishPending = false;
+  // Third-party content in a batch: a write to the resident files then needs the owner (askWhen).
+  const fromOthers = db.prepare("SELECT 1 FROM events WHERE batch_id = ? AND origin = 'external' AND COALESCE(sender_role, '') <> 'owner' LIMIT 1");
 
   // Skills (docs/10-architecture/10-skills.md): built-in → data volume → plugins → MCP prompts.
   const skills = new SkillRegistry({
@@ -614,7 +621,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const segments = new SystemSegments({
     persona: () => persona.current,
     hooks: () => persona.hooks,
-    memoryIndex: () => publishedIndex,
+    memory: () => resident.published(),
     plugins,
     timezone: tz,
     overridesDir: path.join(dataDir, 'overrides'),
@@ -637,17 +644,14 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     segments.refresh();
   });
   bus.on('skills.changed', () => segments.refresh());
-  const applyPublishedIndex = (): void => {
-    indexPublishPending = false;
-    const text = memory.readText('INDEX.md') ?? null;
-    if (text === publishedIndex) return;
-    publishedIndex = text;
-    segments.refresh();
+  const applyResident = (): void => {
+    residentPublishPending = false;
+    if (resident.publish()) segments.refresh();
   };
   // Not during a batch: a new prefix would move the thinking floor in the middle of it.
-  const publishIndex = (): void => {
-    if (main.busy) indexPublishPending = true;
-    else applyPublishedIndex();
+  const publishResident = (): void => {
+    if (main.busy) residentPublishPending = true;
+    else applyResident();
   };
   const dispatcher = new ToolDispatcher(tools, log.child({ component: 'tools' }));
   dispatcher.setImageLimit(() => config.vision.maxImagesPerMessage);
@@ -789,6 +793,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
         };
       })(),
       memory: { files: memoryIndex?.size ?? 0, board: { open: board.open().length, rev: board.rev }, dream: dream.status() },
+      timezone: { zone: tz, set: loadedConfig.timezoneSet },
       persona: { hooks: persona.hooks !== null, ...(persona.hooksProblem ? { problem: persona.hooksProblem } : {}) },
       usage24h: usage.totalsSince(clock.now() - 86_400_000),
       scheduler: { paused: scheduler.paused, cooldowns: scheduler.cooldowns() },
@@ -852,7 +857,18 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   });
   for (const spec of changeTools(changes)) tools.register('core', spec);
   for (const spec of skillTools(skills)) tools.register('core', spec);
-  for (const spec of memoryTools({ store: memory, index: memoryIndex, board, clock, timezone: tz, nativeType: config.memory.nativeTool })) tools.register('core', spec);
+  for (const spec of memoryTools({
+    store: memory,
+    index: memoryIndex,
+    access: memoryAccess,
+    board,
+    coreWriteCheck: ({ sessionId, batchId }) => {
+      if (sessionId === 'main') return fromOthers.get(batchId) ? 'the batch holds messages from someone other than the owner' : null;
+      if (sessionId === dream.runningForkId) return null;
+      return 'a background fork is changing the resident memory';
+    },
+  }))
+    tools.register('core', spec);
   await plugins.startAll();
   skills.rescan();
   const mcpReady = mcp.apply(config.mcp.servers).catch((err: unknown) => log.error({ err: errorMessage(err) }, 'MCP servers not applied'));
@@ -903,16 +919,15 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       timezone: tz,
       settings: () => config.context.handoff,
       hooks: () => persona.hooks,
-      cheapEffort: () => effortOf('cheap'),
       redact: (text) => secrets.redact(text),
-      onNotesUsage: (res, level) => {
+      onNotesUsage: (res, level, role) => {
         const now = clock.now();
         const rec = {
           at: new Date(now).toISOString(),
           atMs: now,
           provider: provider.id,
           model: res.model,
-          role: 'cheap' as const,
+          role,
           sessionId: 'main',
           level,
           ...res.usage,
@@ -927,7 +942,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     prefixSalt: () => secretsEpoch(secrets),
     onHandoff: (r) => {
       // The conversation starts over here, so a new prefix costs nothing extra.
-      applyPublishedIndex();
+      applyResident();
       sessions.upsert({
         id: 'main',
         kind: 'main',
@@ -945,12 +960,18 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     forks,
     kv: memoryKv,
     memory,
+    inputs: {
+      usage: () => resident.usage(),
+      checks: () => resident.checks(),
+      recall: (days) => memoryAccess.recall(days, (memoryIndex?.notes() ?? []).map((n) => n.path)),
+      writesBy: (session, sinceMs) => memoryAccess.writesBy(session, sinceMs),
+    },
     bus,
     clock,
     timezone: tz,
     settings: () => config.memory.dream,
     budgetRefusal: () => budget.forkRefusal(4),
-    onCompleted: publishIndex,
+    onCompleted: publishResident,
     notify: gateway,
     log: log.child({ component: 'dream' }),
   });
@@ -979,8 +1000,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     cacheHorizonMs: () => provider.cacheHorizonMs?.('main'),
     clock,
     log: log.child({ component: 'maintenance' }),
+    notify: gateway,
     onTick: () => {
-      if (indexPublishPending && !main.busy) applyPublishedIndex();
+      if (residentPublishPending && !main.busy) applyResident();
     },
     dream,
   });
@@ -1389,11 +1411,14 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     memory: {
       store: memory,
       index: memoryIndex,
+      resident,
+      access: memoryAccess,
       board,
       dream,
       onWrite: (rel) => {
         audit.record({ kind: 'memory_write', summary: `/memories/${rel}`, owner: 'console:admin' });
-        if (rel === 'INDEX.md') publishIndex();
+        // The owner's edits of the resident files and notes show in the prefix at once (when idle).
+        if (rel.startsWith('core/') || rel.startsWith('notes/')) publishResident();
       },
       onBoardWrite: (receipt) => audit.record({ kind: 'memory_write', summary: `board: ${receipt}`, owner: 'console:admin' }),
     },
@@ -1483,7 +1508,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       debounceMs: 300,
       onError: (err) => log.warn({ err: err.message }, 'skills directory watcher error'),
     }),
-    // Persona edits (SOUL.md, OPERATING.md, USER.md, env prompt overrides, hooks) reach the prefix at the next request.
+    // Persona edits (SOUL.md, OPERATING.md, env prompt overrides, hooks) reach the prefix at the next request.
     watchPaths([{ path: personaDir, recursive: true }], () => void reloadPersona(), {
       debounceMs: 300,
       onError: (err) => log.warn({ err: err.message }, 'persona directory watcher error'),

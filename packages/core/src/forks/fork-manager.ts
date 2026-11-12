@@ -42,6 +42,8 @@ export interface ForkRequest {
   model?: ModelRole;
   level: Level;
   maxTurns?: number;
+  /** The runtime's own fork (the memory consolidation): `maxTurns` may exceed scheduler.forks.maxTurns. */
+  uncapped?: boolean;
   parentBatch?: string;
   reportTo?: 'main' | 'none';
   /**
@@ -79,11 +81,18 @@ interface Checkpoint {
   endedAt?: string;
   pauseReason?: string;
   summary?: string;
+  /** Ended without a final message of its own: it gave none, or ran out of rounds. */
+  unfinished?: 'no_final_text' | 'round_limit';
   error?: string;
 }
 
+/** A fork's last reply as its outcome; no text counts as unfinished. */
+function finalOutcome(text: string): RunOutcome {
+  return text ? { kind: 'completed', summary: text } : { kind: 'completed', summary: '(no final text)', unfinished: 'no_final_text' };
+}
+
 type RunOutcome =
-  | { kind: 'completed'; summary: string }
+  | { kind: 'completed'; summary: string; unfinished?: 'no_final_text' | 'round_limit' }
   | { kind: 'failed'; error: string }
   | { kind: 'paused' }
   | { kind: 'cancelled' };
@@ -256,7 +265,7 @@ export class ForkManager {
       tools,
       model: req.model ?? 'fork',
       level: req.level,
-      maxTurns: Math.min(Math.max(1, req.maxTurns ?? settings.maxTurns), settings.maxTurns),
+      maxTurns: req.uncapped ? Math.max(1, req.maxTurns ?? settings.maxTurns) : Math.min(Math.max(1, req.maxTurns ?? settings.maxTurns), settings.maxTurns),
       reportTo: req.reportTo ?? 'main',
       reusable: req.reusable ?? (req.reportTo ?? 'main') === 'main',
       state: 'queued',
@@ -585,6 +594,8 @@ export class ForkManager {
       f.cp.state = 'idle';
       f.cp.idleSince = now;
       f.cp.summary = outcome.summary;
+      if (outcome.unfinished) f.cp.unfinished = outcome.unfinished;
+      else delete f.cp.unfinished;
       this.persist(f);
       this.o.log.info({ fork: f.cp.id, rounds: f.cp.rounds, task: f.cp.tasks ?? 1 }, 'fork idle');
       this.report(f);
@@ -594,7 +605,11 @@ export class ForkManager {
     }
     f.cp.state = outcome.kind;
     f.cp.endedAt = now;
-    if (outcome.kind === 'completed') f.cp.summary = outcome.summary;
+    if (outcome.kind === 'completed') {
+      f.cp.summary = outcome.summary;
+      if (outcome.unfinished) f.cp.unfinished = outcome.unfinished;
+      else delete f.cp.unfinished;
+    }
     if (outcome.kind === 'failed') f.cp.error = outcome.error;
     f.transcript?.appendMark('fork_ended', { state: outcome.kind, rounds: f.cp.rounds });
     f.transcript?.close();
@@ -693,10 +708,10 @@ export class ForkManager {
       }
       const last = t.lastMessage();
       // Finished just before a restart: the final reply is already in the transcript.
-      if (last?.role === 'assistant') return { kind: 'completed', summary: textOf(last.content) || '(no final text)' };
+      if (last?.role === 'assistant') return finalOutcome(textOf(last.content));
       const taskRounds = f.cp.taskRounds ?? f.cp.rounds;
       if (taskRounds >= f.cp.maxTurns) {
-        return { kind: 'completed', summary: `Stopped at the limit of ${f.cp.maxTurns} rounds without a final summary.` };
+        return { kind: 'completed', summary: `Stopped at the limit of ${f.cp.maxTurns} rounds without a final summary.`, unfinished: 'round_limit' };
       }
       const toolSet = o.exposure?.forRequest(t.messages, { role: f.cp.model, allowed });
       const req: Parameters<Provider['generate']>[0] = {
@@ -726,7 +741,7 @@ export class ForkManager {
       if (uses.length === 0) {
         // A message that arrived while it was writing its answer: keep going rather than report half of it.
         if (f.cp.inbox && f.cp.inbox.length > 0) continue;
-        return { kind: 'completed', summary: textOf(res.content) || '(no final text)' };
+        return finalOutcome(textOf(res.content));
       }
       if (res.stopReason === 'max_tokens') {
         this.answerUnrun(t, res.content, 'not run: the tool input was cut off at max_tokens');
@@ -886,6 +901,7 @@ export class ForkManager {
       ...(cp.endedAt !== undefined ? { endedAt: cp.endedAt } : {}),
       ...(cp.pauseReason !== undefined ? { pauseReason: cp.pauseReason } : {}),
       ...(cp.summary !== undefined ? { summary: clip(cp.summary, 500) } : {}),
+      ...(cp.unfinished !== undefined ? { unfinished: cp.unfinished } : {}),
       ...(cp.error !== undefined ? { error: cp.error } : {}),
       ...(cp.tasks !== undefined && cp.tasks > 1 ? { tasks: cp.tasks } : {}),
       ...(cp.state === 'idle' && cp.idleSince !== undefined ? { idleUntil: new Date(Date.parse(cp.idleSince) + this.o.settings.idleTtlMs).toISOString() } : {}),

@@ -8,7 +8,8 @@
 
 ```yaml
 daemon:
-  timezone: Asia/Shanghai              # 默认取 TZ 环境变量或系统时区；无效值回退 UTC 并告警
+  timezone: Asia/Shanghai              # 主人的时区：日志分日、每日记忆整理、提示里的时间都按它。默认取 TZ 环境变量或系统时区；
+                                       # 配置和 PROTEA_DAEMON__TIMEZONE 都没有设置时启动告警、控制台首页提示；无效值回退 UTC 并告警
   language: zh
   shutdown: { graceMs: 25000 }         # SIGTERM 后等待当前批的时间，超时中止（可恢复）
 
@@ -201,7 +202,7 @@ context:
     softTokens: 80000                  # 批开始时估算超过它就交接
     hardTokens: null                   # 任何请求前超过它就交接；null = 上下文窗口 − maxOutputTokens − max(8000, 5 %)
     keepRatio: 0.333                   # 新对话原样保留的尾部 = keepRatio × softTokens
-    notesMaxTokens: 8000               # 压缩笔记请求的输出上限（cheap 模型，含思考；笔记长度由提示词限制）
+    notesMaxTokens: 16000              # 压缩笔记请求的输出上限（含思考；请求固定 effort low，笔记长度由提示词限制）
     notesInputTokens: 150000           # 交给笔记模型的历史上限，超出先丢最早的部分
   compaction:                          # 服务端压缩（M4，Anthropic beta compact-2026-01-12），交接前的第一道
     enabled: false
@@ -215,16 +216,17 @@ context:
     coldAfterMs: 1800000               # Provider 不声明缓存寿命时，空闲多久算缓存已过期
     keepTokens: 8000                   # 原样保留的最近内容
     minDroppableTokens: 16000          # 可丢弃的内容少于它就不压缩
-    minIntervalMs: 600000              # 两次尝试的最短间隔（失败也计入）
+    minIntervalMs: 600000              # 两次尝试的最短间隔（失败也计入；连续失败后加倍，最多四倍）
+                                       # 每连续失败 3 次换更大的笔记模型：cheap → fork → main；都失败后等对话变长
 
-memory:
-  nativeTool: false                    # true：声明官方 memory_20250818（API 会自动加入"先查看记忆目录"的指令）
+memory:                                # 常驻文件 core/owner.md（2000 字符）与 core/rules.md（4000）的上限是固定的
   board: { maxItems: 60, maxChars: 6000 }   # 白板上限
   dream:                               # 每日记忆整理（需要重启生效）
     enabled: true
     at: "03:30"                        # 每天最早的开始时间（守护进程时区）
     minIdleMs: 1800000                 # 主会话至少空闲这么久
-    model: fork                        # main | fork | cheap
+    model: main                        # main | fork | cheap
+    maxTurns: 40                       # 模型回合上限；不受 scheduler.forks.maxTurns 限制
 
 persona:
   dir: persona                         # 人格目录，相对数据目录

@@ -11,6 +11,7 @@ import type {
   SecretInfo,
   SkillInfo,
   WsServerMessage,
+  MemorySearchHit,
 } from '@protea/protocol';
 import { listRuns, queryLogFile, type LogFilter } from '@protea/core';
 import { api, defaultDataDir, readStdin, type ClientOptions } from './client.js';
@@ -370,9 +371,13 @@ export async function opsCommand(cmd: string, sub: string | undefined, args: str
         return 0;
       }
       if (sub === 'search' && cmd === 'memory') {
-        const { hits } = await api<{ hits: Array<{ path: string; snippet: string }> }>(o, 'GET', `/api/memory/search${query({ q: args.join(' '), limit: str(f, 'limit') })}`);
+        const { hits } = await api<{ hits: MemorySearchHit[] }>(o, 'GET', `/api/memory/search${query({ q: args.join(' '), limit: str(f, 'limit'), scope: str(f, 'scope') })}`);
         if (hits.length === 0) console.log(dim('no matches'));
-        for (const h of hits) console.log(`${bold(h.path)}\n  ${dim(oneLine(h.snippet, 160))}`);
+        for (const h of hits) {
+          const partial = h.matched.length < h.terms ? dim(` (${h.matched.length}/${h.terms}: ${h.matched.join(', ')})`) : '';
+          console.log(`${bold(h.path)}${h.summary ? dim(` — ${oneLine(h.summary, 100)}`) : ''}${partial}`);
+          for (const c of h.chunks) console.log(`  ${dim(`${c.start}-${c.end}`)} ${oneLine(c.snippet, 160)}`);
+        }
         return 0;
       }
       const file = args[0];
@@ -386,7 +391,8 @@ export async function opsCommand(cmd: string, sub: string | undefined, args: str
         if (process.stdin.isTTY) console.error(dim(`type the new contents of ${file}, then Ctrl-D:`));
         const text = await readStdin();
         const r = await api<{ path: string }>(o, 'PUT', `${base}/file${query({ path: file })}`, text, { text: true });
-        console.log(`${green('saved')} ${r.path}${cmd === 'persona' ? dim(' (applies from the next model request)') : ''}`);
+        const live = cmd === 'persona' || r.path.startsWith('core/') || r.path.startsWith('notes/');
+        console.log(`${green('saved')} ${r.path}${live ? dim(' (in the system prompt from the next model request while idle)') : ''}`);
         return 0;
       }
       return null;

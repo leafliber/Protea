@@ -80,4 +80,4 @@ Skill 的脚本通过内核 `shell` 工具在容器内执行（受限用户、�
 |---|---|
 | `protea-self-ops` | 让助理知道如何用 `self_status`、`events_query`、`schedule_*`、`fork_*` 与审批管理自己 |
 | `daily-brief` | 晨报流程模板（与 cron 的 morning-brief 例程配合） |
-| `memory-dream` | 整理记忆目录：把日志和压缩笔记折叠进笔记、合并去重、补关键词、清理白板、重写 INDEX.md；每天由 Core 派生的 Fork 运行（[11-memory-and-persona.md](11-memory-and-persona.md) §8）；`requires-tools: memory memory_search board` |
+| `memory-dream` | 整理记忆目录：把长期约定和主人画像并入 `core/`、把日志和压缩笔记折叠进笔记、补齐 summary 与关键词、合并去重、清理白板；每天由 Core 派生的 Fork 运行（[11-memory-and-persona.md](11-memory-and-persona.md) §8）；`requires-tools: memory memory_search board` |

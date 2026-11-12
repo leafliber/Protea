@@ -125,18 +125,18 @@ describe('daemon', () => {
 
     // The system prefix: persona, runtime notes, plugin environment prompts, then the Skills catalog; kernel and plugin tools.
     const req = provider.calls[0];
-    expect(req?.system.map((s) => s.id)).toEqual(['identity', 'runtime', 'operating', 'owner', 'env:console', 'env:cron', 'env:webchat', 'skills-catalog', 'memory-index']);
+    // A fresh install has no resident memory and no notes yet: no owner, rules or memory-index segment.
+    expect(req?.system.map((s) => s.id)).toEqual(['identity', 'runtime', 'operating', 'env:console', 'env:cron', 'env:webchat', 'skills-catalog']);
     expect(req?.system.find((s) => s.id === 'skills-catalog')?.text).toMatch(
       /- daily-brief: .*\(source: builtin\)\n- memory-dream: .*\(source: builtin\)\n- protea-self-ops: .*\(source: builtin\)$/,
     );
-    expect(req?.system.at(-1)?.text).toMatch(/^<memory_index path="\/memories\/INDEX.md">\n# Memory index\n/);
     expect(req?.tools.map((t) => t.name)).toEqual([
-      'approval_request', 'board', 'change_status', 'change_withdraw', 'events_promote', 'events_query', 'fork_cancel', 'fork_send', 'fork_spawn', 'fork_status', 'idle', 'mcp_propose', 'memory', 'memory_recent', 'memory_search', 'plugin_propose', 'self_status', 'skill_load', 'skill_propose', 'skill_read', 'view_image',
+      'approval_request', 'board', 'change_status', 'change_withdraw', 'events_promote', 'events_query', 'fork_cancel', 'fork_send', 'fork_spawn', 'fork_status', 'idle', 'mcp_propose', 'memory', 'memory_search', 'plugin_propose', 'self_status', 'skill_load', 'skill_propose', 'skill_read', 'view_image',
       'chat_send', 'schedule_create', 'schedule_delete', 'schedule_list', 'schedule_update', 'sleep_until',
     ]);
     expect(req?.toolSearch).toBeUndefined();
     expect(status['forks']).toEqual([]);
-    expect(status).toMatchObject({ mcp: [], skills: { listed: 3, rejected: 0 }, tools: { total: 27, deferred: 0 }, memory: { files: 1 } });
+    expect(status).toMatchObject({ mcp: [], skills: { listed: 3, rejected: 0 }, tools: { total: 26, deferred: 0 }, memory: { files: 0 } });
     // The scripted provider reports no context window: 200k − 64k output − 10k margin.
     expect(status['context']).toMatchObject({ transcript: 'main.0001.jsonl', handoffs: 0, softTokens: 80_000, hardTokens: 126_000 });
     expect((status['budget'] as { enforced: boolean }).enforced).toBe(true);

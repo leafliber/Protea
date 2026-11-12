@@ -14,6 +14,8 @@ export interface LoadedConfig {
   config: ProteaConfig;
   /** Layers that contributed, lowest first. */
   sources: string[];
+  /** daemon.timezone came from config.yaml or the environment, not from the system default. */
+  timezoneSet: boolean;
   warnings: string[];
 }
 
@@ -217,13 +219,13 @@ function validate(cfg: ProteaConfig, warnings: string[]): void {
   if (typeof c.enabled !== 'boolean') throw new Error('context.compaction.enabled must be a boolean');
   if (!posInt(c.triggerTokens) || c.triggerTokens < 50_000) throw new Error('context.compaction.triggerTokens must be an integer of at least 50000');
   if (c.instructions !== null && typeof c.instructions !== 'string') throw new Error('context.compaction.instructions must be text or null');
-  if (typeof cfg.memory.nativeTool !== 'boolean') throw new Error('memory.nativeTool must be a boolean');
   if (!posInt(cfg.memory.board.maxItems) || !posInt(cfg.memory.board.maxChars)) throw new Error('memory.board.maxItems and maxChars must be positive integers');
   const dream = cfg.memory.dream;
   if (typeof dream.enabled !== 'boolean') throw new Error('memory.dream.enabled must be a boolean');
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(dream.at)) throw new Error('memory.dream.at must be a local time such as 03:30');
   if (!posInt(dream.minIdleMs)) throw new Error('memory.dream.minIdleMs must be a positive integer');
   if (dream.model !== 'main' && dream.model !== 'fork' && dream.model !== 'cheap') throw new Error('memory.dream.model must be main, fork or cheap');
+  if (!posInt(dream.maxTurns)) throw new Error('memory.dream.maxTurns must be a positive integer');
   if (typeof cfg.persona.dir !== 'string' || cfg.persona.dir.trim() === '') throw new Error('persona.dir must be a path');
   const legacy = ['anthropic', 'echo'].filter((k) => k in (cfg.providers as unknown as Record<string, unknown>));
   if (legacy.length > 0) warnings.push(`providers.${legacy.join(' and providers.')} (environment): the old layout is ignored; use providers.profiles`);
@@ -237,6 +239,12 @@ function validate(cfg: ProteaConfig, warnings: string[]): void {
   }
 }
 
+function timezoneGiven(doc: unknown): boolean {
+  if (!isPlainObject(doc)) return false;
+  const daemon = doc['daemon'];
+  return isPlainObject(daemon) && typeof daemon['timezone'] === 'string' && daemon['timezone'].trim() !== '';
+}
+
 /**
  * Defaults ← config.yaml ← PROTEA_* environment. `fileDoc` replaces the file's contents
  * (validating a change before it is written); the file is then neither read nor created.
@@ -247,8 +255,10 @@ export function loadConfig(dataDir: string, env: NodeJS.ProcessEnv = process.env
   let config = defaultConfig();
 
   const file = path.join(dataDir, 'config.yaml');
+  let fileDoc: unknown = null;
   if ('fileDoc' in opts) {
     const doc = opts.fileDoc;
+    fileDoc = doc;
     if (doc !== null && doc !== undefined) {
       if (!isPlainObject(doc)) throw new Error('config: top level must be a mapping');
       config = deepMerge(config, fileLayer(doc, warnings));
@@ -256,6 +266,7 @@ export function loadConfig(dataDir: string, env: NodeJS.ProcessEnv = process.env
     sources.push(file);
   } else if (fs.existsSync(file)) {
     const doc = YAML.parse(fs.readFileSync(file, 'utf8')) as unknown;
+    fileDoc = doc;
     if (doc !== null && doc !== undefined) {
       if (!isPlainObject(doc)) throw new Error(`${file}: top level must be a mapping`);
       config = deepMerge(config, fileLayer(doc, warnings));
@@ -273,7 +284,11 @@ export function loadConfig(dataDir: string, env: NodeJS.ProcessEnv = process.env
   }
 
   validate(config, warnings);
-  return { config, sources, warnings };
+  const timezoneSet = timezoneGiven(fileDoc) || timezoneGiven(overlay);
+  if (!timezoneSet) {
+    warnings.push(`daemon.timezone is not set; using ${config.daemon.timezone} from the system. Journal dates and the daily memory consolidation follow it: set it to the owner's zone`);
+  }
+  return { config, sources, warnings, timezoneSet };
 }
 
 /** Where each leaf of the effective configuration comes from (arrays count as leaves). */

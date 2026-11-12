@@ -1,23 +1,27 @@
-import { MEMORY_ROOT } from '../memory/store.js';
+import type { ResidentSnapshot } from '../memory/resident.js';
+import { CORE_FILES, MEMORY_ROOT } from '../memory/store.js';
 import type { PersonaFiles, PersonaHooks } from '../persona/persona.js';
 import type { EnvPromptSource } from '../plugins/host.js';
 import type { SystemSegment } from '../providers/types.js';
 import type { Logger } from '../observability/logger.js';
 import { errorMessage } from '../util/errors.js';
+import { escapeStructural } from '../util/escape.js';
 import type { SegmentSource } from './assembler.js';
 import { loadEnvPromptTemplate, renderEnvPrompt } from './env-prompts.js';
 import { forkNotes, runtimeNotes } from './runtime-notes.js';
 
-/** Longest memory index that goes into the prefix as is. */
-export const MAX_INDEX_CHARS = 8_000;
+/** A resident memory file as a prefix segment. */
+function residentSegment(id: string, rel: string, text: string): SystemSegment {
+  return { id, text: `<memory_file path="${MEMORY_ROOT}/${rel}" chars="${text.length}" limit="${CORE_FILES[rel] ?? 0}">\n${escapeStructural(text)}\n</memory_file>` };
+}
 
 export interface SegmentSourceOptions {
   /** The persona files as they are now (reloaded when they change). */
   persona: () => PersonaFiles;
   /** Persona hooks; `systemSegments` may rewrite the main prefix. */
   hooks?: () => PersonaHooks | null;
-  /** The published text of memory/INDEX.md (it changes only at chosen moments, to keep the prefix stable); null when there is none. */
-  memoryIndex?: () => string | null;
+  /** The published resident memory: owner profile, standing rules, index of notes (it changes only at chosen moments, to keep the prefix stable). */
+  memory?: () => ResidentSnapshot;
   plugins: { envSources(): EnvPromptSource[] };
   /** The permission summary (P3: restrictions are stated in advance); null when nothing is restricted. */
   permissions?: () => string | null;
@@ -31,8 +35,9 @@ export interface SegmentSourceOptions {
 }
 
 /**
- * System prefix: identity → runtime → operating → permissions → owner → env:<plugin>… →
- * env:mcp:<server>… → skills-catalog → memory-index.
+ * System prefix: identity → runtime → operating → permissions → env:<plugin>… →
+ * env:mcp:<server>… → skills-catalog → owner → rules → memory-index. The memory segments
+ * come last: they are the ones that change most often.
  * Built once and rebuilt only on explicit refresh (at a turn boundary), so the
  * prefix stays byte-identical between requests.
  */
@@ -52,14 +57,15 @@ export class SystemSegments implements SegmentSource {
     return this.cached;
   }
 
-  /** Prefix for forks: identity → fork runtime → owner. Shared by all forks so it caches. */
+  /** Prefix for forks: identity → fork runtime → owner profile. Shared by all forks so it caches. */
   forkSegments(): SystemSegment[] {
     if (!this.cachedFork) {
       const persona = this.o.persona();
       const segs: SystemSegment[] = [];
       if (persona.soul) segs.push({ id: 'identity', text: persona.soul });
       segs.push({ id: 'runtime', text: forkNotes({ timezone: this.o.timezone }) });
-      if (persona.user) segs.push({ id: 'owner', text: persona.user });
+      const owner = this.o.memory?.().owner;
+      if (owner) segs.push(residentSegment('owner', 'core/owner.md', owner));
       this.cachedFork = segs;
     }
     return this.cachedFork;
@@ -89,7 +95,6 @@ export class SystemSegments implements SegmentSource {
     if (persona.operating) segs.push({ id: 'operating', text: persona.operating });
     const permissions = this.o.permissions?.();
     if (permissions) segs.push({ id: 'permissions', text: permissions });
-    if (persona.user) segs.push({ id: 'owner', text: persona.user });
     for (const p of this.o.plugins.envSources()) {
       try {
         const tpl = loadEnvPromptTemplate(p.id, p.envPromptFile, {
@@ -106,11 +111,10 @@ export class SystemSegments implements SegmentSource {
     for (const seg of this.o.extraEnv?.() ?? []) segs.push(seg);
     const catalog = this.o.skills?.();
     if (catalog) segs.push({ id: 'skills-catalog', text: catalog });
-    const index = this.o.memoryIndex?.()?.trim();
-    if (index) {
-      const body = index.length > MAX_INDEX_CHARS ? `${index.slice(0, MAX_INDEX_CHARS)}\n… [truncated: shorten ${MEMORY_ROOT}/INDEX.md]` : index;
-      segs.push({ id: 'memory-index', text: `<memory_index path="${MEMORY_ROOT}/INDEX.md">\n${body}\n</memory_index>` });
-    }
+    const memory = this.o.memory?.();
+    if (memory?.owner) segs.push(residentSegment('owner', 'core/owner.md', memory.owner));
+    if (memory?.rules) segs.push(residentSegment('rules', 'core/rules.md', memory.rules));
+    if (memory?.index) segs.push({ id: 'memory-index', text: `<memory_index root="${MEMORY_ROOT}">\n${escapeStructural(memory.index)}\n</memory_index>` });
     return segs;
   }
 }

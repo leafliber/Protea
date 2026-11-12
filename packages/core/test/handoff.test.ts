@@ -76,7 +76,6 @@ describe('Handoff.run', () => {
       timezone: 'Asia/Shanghai',
       settings: () => DEFAULT_HANDOFF,
       hooks: () => null,
-      cheapEffort: () => 'low',
     });
     return { dir, sessionsDir, transcript, memory, h };
   }
@@ -96,13 +95,14 @@ describe('Handoff.run', () => {
 
     const r = await run(h, transcript);
     expect(r).toMatchObject({ notesPath: 'handoff/2026-11-03T08-00-00Z.md', dropped: 2, kept: 2, via: 'default' });
-    expect(provider.calls[0]).toMatchObject({ role: 'cheap', effort: 'low', maxOutputTokens: 8_000, tools: [] });
+    expect(provider.calls[0]).toMatchObject({ role: 'cheap', effort: 'low', maxOutputTokens: 16_000, tools: [] });
     expect(JSON.stringify(provider.calls[0]?.messages)).toContain('we agree: tea on Friday');
+    expect(JSON.stringify(provider.calls[0]?.messages)).toContain('<memory_core>\\n(empty)\\n</memory_core>');
     expect(memory.readText('handoff/2026-11-03T08-00-00Z.md')).toBe(
       '# Handoff 2026-11-03T16:00:00+08:00\n\nConversation main.0001.jsonl: 2 message(s) handed off, 2 kept (test).\n\n## Commitments\n- tea on Friday\n',
     );
     // The system prefix is not touched by a handoff.
-    expect(memory.readText('INDEX.md')).toBeUndefined();
+    expect(memory.listFiles().map((f) => f.path)).toEqual(['handoff/2026-11-03T08-00-00Z.md', 'raw/2026-11-03T08-00-00Z.md']);
     expect(memory.readText('raw/2026-11-03T08-00-00Z.md')).toContain('we agree: tea on Friday');
     expect(fs.readFileSync(path.join(sessionsDir, 'main.current'), 'utf8')).toBe('main.0002.jsonl\n');
     expect(fs.readdirSync(sessionsDir).some((f) => f.startsWith('main.0002.jsonl.abandoned-'))).toBe(true);
@@ -113,11 +113,14 @@ describe('Handoff.run', () => {
     expect(next.batchStart('b2')).toBe(1);
     expect(fs.readFileSync(transcript.file, 'utf8')).toMatch(/"kind":"handoff","to":"main.0002.jsonl","notes":"handoff\/2026-11-03T08-00-00Z.md"/);
 
-    // The next handoff passes the previous notes to the notes model.
+    // The next handoff passes the previous notes and the resident memory to the notes model, the one asked for.
+    memory.writeText('core/rules.md', '- tea is on Fridays');
     next.appendMessage({ role: 'user', content: [{ type: 'text', text: 'third' }], batch: 'b3' });
-    const r2 = await run(h, next);
+    const r2 = await h.run(next, { mustKeepFrom: next.length, limits, estimatedTokens: 1, reason: 'test', signal: new AbortController().signal, notesRole: 'fork', notice: () => ({ content: [{ type: 'text', text: 'NOTICE' }] }) });
     expect(r2?.notesPath).toBe('handoff/2026-11-03T08-00-00Z-2.md');
+    expect(provider.calls[1]?.role).toBe('fork');
     expect(JSON.stringify(provider.calls[1]?.messages)).toContain('previous-notes path=\\"/memories/handoff/2026-11-03T08-00-00Z.md\\"');
+    expect(JSON.stringify(provider.calls[1]?.messages)).toContain('<file path=\\"/memories/core/rules.md\\">\\n- tea is on Fridays');
   });
 
   const conversation = (t: Transcript): void => {
@@ -182,7 +185,6 @@ describe('Handoff.run', () => {
       timezone: 'Asia/Shanghai',
       settings: () => DEFAULT_HANDOFF,
       hooks: () => null,
-      cheapEffort: () => 'low',
       redact: (t) => t.replaceAll('hunter2', '[REDACTED:PW]'),
     });
     transcript.appendMessage({ role: 'user', content: [{ type: 'text', text: 'the password is hunter2' }], batch: 'b1', cursors: [1] });
@@ -235,7 +237,6 @@ describe('Handoff.run', () => {
       timezone: 'UTC',
       settings: () => DEFAULT_HANDOFF,
       hooks: () => null,
-      cheapEffort: () => 'low',
       onNotesUsage: (res, level) => used.push([res.model, level]),
     });
     conversation(transcript);

@@ -264,7 +264,7 @@ describe('migration 9', () => {
     const db = new Database(':memory:');
     migrate(db, MIGRATIONS.filter((m) => m.version <= 8));
     db.prepare("INSERT INTO outputs (at, plugin, channel, text) VALUES ('2026-11-10T08:00:00.000Z', 'webchat', 'chat', 'old reply')").run();
-    expect(migrate(db).applied).toEqual(['9_chat-rich-content', '10_change-requests', '11_approval-view']);
+    expect(migrate(db).applied).toEqual(['9_chat-rich-content', '10_change-requests', '11_approval-view', '12_memory-chunks']);
     const outputs = new OutputLog(db);
     expect(outputs.chat().items).toEqual([{ key: 'o1', kind: 'reply', platform: 'webchat', at: '2026-11-10T08:00:00.000Z', text: 'old reply', channel: 'chat' }]);
     expect(new WidgetStore(db).get(`w${'a'.repeat(32)}`)).toBeNull();

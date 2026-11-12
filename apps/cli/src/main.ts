@@ -132,8 +132,9 @@ Usage:
   protea budget                                 spend per level and the hard cap (rolling 24 h), held events
   protea budget release [--levels 2,3,4] [--hard-cap] [--hours 24]
                                                 lift enforcement for a while; held events are delivered again
-  protea memory [ls] | cat <path> | put <path> | search <query…>
-  protea persona [ls] | cat <file> | put <file> SOUL.md, OPERATING.md, USER.md, … (put reads stdin)
+  protea memory [ls] | cat <path> | put <path> | search <query…> [--scope notes|raw|all]
+                                                core/owner.md and core/rules.md are resident (2000 / 4000 characters)
+  protea persona [ls] | cat <file> | put <file> SOUL.md, OPERATING.md, plugins/<id>/ENV_PROMPT.md (put reads stdin)
   protea logs [--level L] [--component C] [--plugin P] [--q TEXT] [--since 15m] [--run ID] [--follow] [--json]
                                                 daemon logs through the API (--follow streams over WebSocket)
   protea logq [same filters] [--run ID | --all] read <data>/runs/*/log.jsonl directly (no daemon needed)

@@ -81,7 +81,7 @@ OpenAI 风格协议的映射（`toChatMessages` / `toResponsesInput`）：
 | 拒答回退 | 默认开启 `betas: ['server-side-fallback-2026-07-01']` + `fallbacks: 'default'`（Haiku 不支持，不发）；`stop_reason: 'refusal'` 仍到达时记 `internal` 事件并结束回合。输出中途回退时，最后一个 `fallback` 块之前的 thinking、`tool_use` 与没有配对结果的 `server_tool_use` 不进入转录（不回传）；费用按 `usage.iterations` 逐次以各自模型的价格计算（M4） |
 | 强制工具 | 不使用 `tool_choice: any/tool`（Opus 5.5 / Sonnet 5.5 / Fable 5.1 返回 400）；需要结构化结果时用 `output_config.format` 或 `strict: true` |
 | 容量 | 估算接近阈值时 `beta.messages.countTokens`；超限走交接；400 `prompt is too long` / 413 归为 `overflow`，交接后重试一次；上下文窗口：Claude 5 系列与 Opus/Sonnet 4.6+ 为 1M，其余 200k。可选 `compact-2026-01-12` 服务端压缩（`context.compaction.enabled`，默认关）作为交接前的第一道：主会话请求带 `context_management.edits: [{ type: 'compact_20260112', trigger: { type: 'input_tokens', value } }]`，compaction 块原样留在转录里回传（M4） |
-| 记忆工具 | 默认作为普通自定义工具；`memory.nativeTool: true` 时声明 `{ type: 'memory_20250818', name: 'memory' }`（工具定义的 `providerType`，M4） |
+| 记忆工具 | 普通自定义工具（`read / write / append / edit / move / delete`）；不再声明官方 `memory_20250818`（ADR-0024） |
 | 输出上限 | `ProviderRequest.maxOutputTokens` 覆盖 `maxOutputTokens`（交接笔记用） |
 | 上下文编辑 | 可选 `context-management-2025-06-27` 的 `clear_tool_uses_20250919` 清理旧工具结果（只对 Fork 默认开启；主会话默认关，因为它改变了"只追加"的字节前缀会影响缓存命中的推理，需实测） |
 | 错误 | 最具体优先：`NotFoundError` → `RateLimitError`（退避、让渡 Fork 容量）→ `APIStatusError` → `APIConnectionError`；进入 `backoff` 阶段 |

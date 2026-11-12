@@ -19,6 +19,9 @@ import {
   type SessionContextResponse,
   type StatusResponse,
   type StreamMessage,
+  type MemoryHistoryResponse,
+  type MemoryOverview,
+  type MemorySearchHit,
 } from '@protea/protocol';
 import { BROWSER_SERVER_ID, PermissionModeError, type BlobStore, type ChangeRequestService, type PermissionModes, type WidgetStore } from '@protea/core';
 import {
@@ -35,8 +38,10 @@ import {
   type HandoffResult,
   type Logger,
   type McpManager,
+  type MemoryAccess,
   type MemoryIndex,
   type MemoryStore,
+  type ResidentMemory,
   type OutputLog,
   type PluginHost,
   type PushResult,
@@ -104,7 +109,16 @@ export interface ControlDeps extends Omit<OpsDeps, 'store' | 'audit'> {
   setSkillEnabled?: (name: string, enabled: boolean) => void;
   /** Hand the main session off now (idle) or at the start of the next batch. */
   handoff?: (reason?: string) => Promise<{ scheduled: true } | { result: HandoffResult | null }>;
-  memory?: { store: MemoryStore; index: MemoryIndex; board?: Board; dream?: DreamRunner; onWrite?: (path: string) => void; onBoardWrite?: (receipt: string) => void };
+  memory?: {
+    store: MemoryStore;
+    index: MemoryIndex;
+    resident?: ResidentMemory;
+    access?: MemoryAccess;
+    board?: Board;
+    dream?: DreamRunner;
+    onWrite?: (path: string) => void;
+    onBoardWrite?: (receipt: string) => void;
+  };
   status: () => StatusResponse;
   ready: () => { ready: boolean; reasons: string[] };
   /** Deliver an operator injection through the console plugin. */
@@ -423,10 +437,6 @@ export function createControlApp(d: ControlDeps): Hono {
   });
 
   // Memory (docs/10-architecture/11-memory-and-persona.md); writes are audited.
-  const memoryPath = (raw: string | undefined): string => {
-    const p = (raw ?? '').trim();
-    return p.startsWith('/memories') ? p : `/memories/${p.replace(/^\/+/, '')}`;
-  };
   app.get('/api/memory/tree', (c) => {
     if (!d.memory) return c.json({ files: [] });
     return c.json({ files: d.memory.store.listFiles().map((f) => ({ path: f.path, size: f.size, mtime: new Date(f.mtimeMs).toISOString() })) });
@@ -434,7 +444,7 @@ export function createControlApp(d: ControlDeps): Hono {
   app.get('/api/memory/file', (c) => {
     if (!d.memory) return c.json({ error: { code: 'not_found', message: 'no memory directory' } }, 404);
     try {
-      const rel = d.memory.store.relative(memoryPath(c.req.query('path')));
+      const rel = d.memory.store.relative(c.req.query('path') ?? '');
       const text = d.memory.store.readText(rel);
       if (text === undefined) return c.json({ error: { code: 'not_found', message: 'no such memory file' } }, 404);
       return c.json({ path: rel, text });
@@ -445,14 +455,14 @@ export function createControlApp(d: ControlDeps): Hono {
   app.put('/api/memory/file', async (c) => {
     if (!d.memory) return c.json({ error: { code: 'not_found', message: 'no memory directory' } }, 404);
     try {
-      const rel = d.memory.store.relative(memoryPath(c.req.query('path')));
+      const rel = d.memory.store.relative(c.req.query('path') ?? '');
       if (rel === '') throw new MemoryError('a file path is required');
       const text = await c.req.text();
       d.memory.store.writeText(rel, text);
       d.memory.onWrite?.(rel);
       return c.json({ ok: true, path: rel });
     } catch (err) {
-      return errorJson(c, 400, 'invalid_path', err);
+      return errorJson(c, 400, 'invalid', err);
     }
   });
   app.get('/api/memory/search', (c) => {
@@ -460,7 +470,31 @@ export function createControlApp(d: ControlDeps): Hono {
     const q = c.req.query('q') ?? '';
     const paths = c.req.queries('paths');
     const limit = Math.min(Math.max(intParam(c, 'limit') ?? 10, 1), 50);
-    return c.json({ hits: d.memory.index.search(q, { ...(paths ? { paths } : {}), limit }) });
+    const scope = c.req.query('scope');
+    const hits: MemorySearchHit[] = d.memory.index.search(q, { ...(paths ? { paths } : {}), limit, ...(scope === 'notes' || scope === 'raw' || scope === 'all' ? { scope } : {}) });
+    return c.json({ hits });
+  });
+  app.get('/api/memory/overview', (c) => {
+    const m = d.memory;
+    if (!m?.resident) return c.json({ error: { code: 'not_found', message: 'no resident memory' } }, 404);
+    const body: MemoryOverview = {
+      core: m.resident.usage(),
+      index: m.resident.current().index,
+      stale: m.resident.stale,
+      checks: m.resident.checks(),
+      recall: m.access ? m.access.recall(intParam(c, 'days') ?? 30, m.index.notes().map((n) => n.path)) : { days: 0, searches: 0, used: [], unused: [], misses: [] },
+    };
+    return c.json(body);
+  });
+  app.get('/api/memory/history', (c) => {
+    if (!d.memory) return c.json({ error: { code: 'not_found', message: 'no memory directory' } }, 404);
+    try {
+      const rel = d.memory.store.relative(c.req.query('path') ?? '');
+      const body: MemoryHistoryResponse = { path: rel, versions: d.memory.store.history(rel) };
+      return c.json(body);
+    } catch (err) {
+      return errorJson(c, 400, 'invalid_path', err);
+    }
   });
   app.get('/api/memory/board', (c) => {
     const board = d.memory?.board;

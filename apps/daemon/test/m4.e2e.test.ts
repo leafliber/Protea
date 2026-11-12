@@ -89,9 +89,9 @@ describe('M4 acceptance', () => {
           // Find the newest handoff notice and read the notes it points to.
           const notice = texts(req).filter((t) => t.includes('type="session.handoff"')).at(-1) ?? '';
           const notes = /\/memories\/handoff\/[^ ;]+\.md/.exec(notice)?.[0];
-          return sized(reply([toolCall('memory', { command: 'view', path: notes ?? '/memories/INDEX.md' })]), req);
+          return sized(reply([toolCall('memory', { command: 'read', path: notes ?? '/memories' })]), req);
         }
-        if (last.includes("Here's the content of /memories/handoff/")) {
+        if (/\/memories\/handoff\/\S+\.md \(\d+ lines\):/.test(last)) {
           const agreed = /我们说好的三件事：[^\n]*/.exec(last)?.[0] ?? '不记得了';
           return sized(reply([toolCall('chat_send', { platform: 'webchat', text: agreed }), toolCall('idle', {})]), req);
         }
@@ -125,8 +125,7 @@ describe('M4 acceptance', () => {
     expect(outputs.at(-1)).toContain('预约牙医');
     expect(outputs.at(-1)).toContain('周五交报告');
 
-    // Bookkeeping: INDEX.md (part of the prefix) left alone, the old transcripts sealed, the pointer moved.
-    expect(d.memory.readText('INDEX.md') ?? '').not.toContain('## Recent handoffs');
+    // Bookkeeping: the old transcripts sealed, the pointer moved.
     const sessions = path.join(d.dataDir, 'sessions');
     expect(fs.readFileSync(path.join(sessions, 'main.current'), 'utf8').trim()).toBe(path.basename(d.transcript.file));
     expect(fs.readFileSync(path.join(sessions, 'main.0001.jsonl'), 'utf8')).toMatch(/"kind":"handoff","to":"main.0002.jsonl"/);
@@ -177,15 +176,16 @@ describe('M4 acceptance', () => {
   it('keeps every secret value out of model requests (invariant I-7)', async () => {
     const secret = 'tok-4f9a1c7e22b8d01';
     const dir = dataDir('context:\n  handoff: { softTokens: 2500, hardTokens: 40000 }\n');
-    // A persona that mentions the secret (system prompt), set up before the first start.
+    // An owner profile that mentions the secret (system prompt), set up before the first start.
     fs.mkdirSync(path.join(dir, 'persona'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'persona', 'SOUL.md'), 'You are Protea.');
-    fs.writeFileSync(path.join(dir, 'persona', 'USER.md'), `The owner's shop token is ${secret}.`);
+    fs.mkdirSync(path.join(dir, 'memory', 'core'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'memory', 'core', 'owner.md'), `The owner's shop token is ${secret}.`);
     const provider = new ScriptedProvider([
       (req) => {
         if (req.role === 'cheap') return sized(reply([{ type: 'text', text: `notes: ${texts(req).join(' ').slice(0, 200)}` }]), req);
         const last = lastUserText(req);
-        if (last.includes('read the note')) return sized(reply([toolCall('memory', { command: 'view', path: '/memories/notes/shop.md' })]), req);
+        if (last.includes('read the note')) return sized(reply([toolCall('memory', { command: 'read', path: '/memories/notes/shop.md' })]), req);
         return sized(reply([toolCall('idle', {})]), req);
       },
     ]);
@@ -204,7 +204,7 @@ describe('M4 acceptance', () => {
     const bodies = provider.calls.map((c) => JSON.stringify(c));
     expect(bodies.some((b) => b.includes(secret))).toBe(false);
     expect(provider.calls.some((c) => c.role === 'cheap')).toBe(true);
-    // USER.md carries the token into every main-session system prompt, redacted each time.
+    // core/owner.md carries the token into every main-session system prompt, redacted each time.
     const main = provider.calls.filter((c) => c.role === 'main');
     expect(main.every((c) => c.system.some((s) => s.text.includes('[REDACTED:SHOP_TOKEN]')))).toBe(true);
     expect(main.some((c) => texts(c).some((t) => t.includes('Shop API token: [REDACTED:SHOP_TOKEN]')))).toBe(true);
@@ -238,7 +238,7 @@ describe('M4 acceptance', () => {
     const search = await api<{ hits: Array<{ path: string }> }>('GET', '/api/memory/search?q=Friday');
     expect(search.json.hits.map((x) => x.path)).toEqual(['/memories/notes/plan.md']);
     const tree = await api<{ files: Array<{ path: string }> }>('GET', '/api/memory/tree');
-    expect(tree.json.files.map((f) => f.path)).toEqual(expect.arrayContaining(['INDEX.md', 'notes/plan.md', h.json.notes]));
+    expect(tree.json.files.map((f) => f.path)).toEqual(expect.arrayContaining(['notes/plan.md', h.json.notes]));
     expect(d.audit.list({ kind: 'memory_write' }).map((r) => r.summary)).toEqual(['/memories/notes/plan.md']);
     // The next batch starts in the new transcript, behind the handoff notice.
     const before = provider.calls.length;
