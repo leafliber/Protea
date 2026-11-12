@@ -317,7 +317,7 @@ node scripts/soak.mjs --url http://127.0.0.1:7788 --token-file protea-token --ho
 
 自动测试用的是内存中的假 Open API，这里验证真实账号。守护进程要能出站访问 `api.dida365.com`（国际版 `api.ticktick.com`）。建议先在滴答清单里建一个测试清单，只在里面操作。
 
-1. 在滴答清单网页版 设置 → 账户 → API Token 创建令牌，`protea secrets set DIDA365_TOKEN` 存入；`protea plugins config dida365 '{"timeZone":"Asia/Shanghai"}'`，再 `protea plugins enable dida365`。让助理"检查一下滴答清单的连接"。预期：`dida_status` 显示账户时区。
+1. 按 README「接入滴答清单」打包并安装插件（`--disabled`），确认 `protea plugins ls` 里它的来源是数据卷。在滴答清单网页版 设置 → 账户 → API Token 创建令牌，`protea secrets set DIDA365_TOKEN` 存入；`protea plugins config dida365 '{"timeZone":"Asia/Shanghai"}'`，再 `protea plugins enable dida365`。让助理"检查一下滴答清单的连接"。预期：`dida_status` 显示账户时区。
 2. 让助理列出清单、今天和本周的任务、搜索一个关键词。预期：和 App 里一致，时间按配置的时区显示，全天任务没有错到前一天。
 3. 让助理在测试清单里建一个带子任务、标签、提醒和重复规则的任务，再改它的标题和优先级。预期：App 里看到同样的内容；**修改后原来的子任务、标签、提醒、重复规则都还在**（确认更新接口对省略字段的处理）。
 4. 让助理去掉这个任务的日期、停止重复。预期：App 里日期和重复都没了；如果还在，记下来（`null` 不被接受）。

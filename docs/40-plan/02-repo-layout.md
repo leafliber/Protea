@@ -64,8 +64,9 @@ Protea/
 │   ├── filewatch/               进程外来源：监视 /data/inbox
 │   ├── rss/                     进程外来源：RSS / Atom 订阅
 │   ├── imap/                    进程外来源：IMAP 邮箱（imapflow + mailparser；测试用假 IMAP 服务器）
-│   ├── dida365/                 进程外来源与工具：滴答清单 Open API（个人令牌；任务到期事件；test/ 含内存中的假 Open API）
 │   └── shell/                   进程外工具：sh_run、sh_job_*、sh_reset；默认经 unix socket 调沙箱容器，backend: local 在主容器内（默认不启用，ADR-0013）
+├── optional-plugins/            可选插件：在工作区里一起测试，不进镜像，用 scripts/pack-plugin.mjs 打包后安装（ADR-0025）
+│   └── dida365/                 进程外来源与工具：滴答清单 Open API（个人令牌；任务到期事件；test/ 含内存中的假 Open API）
 ├── skills/                      内置 Skills（protea-self-ops、daily-brief、memory-dream）
 ├── apps/
 │   ├── daemon/                  组装 Core + 控制平面 + 内置插件；单实例锁；离线回放（replay.ts）；端到端与安全检查清单测试

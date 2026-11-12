@@ -127,7 +127,7 @@ plugins:                             # 每个插件一组：enabled（未列出�
   filewatch:
     enabled: true
     config: { paths: [inbox] }
-  dida365:                             # 滴答清单；需要秘密 DIDA365_TOKEN（设置 → 账户 → API Token）
+  dida365:                             # 滴答清单（可选插件，先安装，ADR-0025）；需要秘密 DIDA365_TOKEN（设置 → 账户 → API Token）
     enabled: true
     config:
       timeZone: Asia/Shanghai          # 读写时间的时区，默认守护进程时区；还有 apiBase、defaultProjectId、toolsets、maxResults、timeoutSec

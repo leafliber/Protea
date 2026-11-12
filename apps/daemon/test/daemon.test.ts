@@ -111,7 +111,6 @@ describe('daemon', () => {
     expect((status['plugins'] as Array<{ id: string; state: string }>).map((p) => `${p.id}:${p.state}`)).toEqual([
       'console:running',
       'cron:running',
-      'dida365:loaded',
       'filewatch:loaded',
       'imap:loaded',
       'qq:loaded',

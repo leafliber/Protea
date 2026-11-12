@@ -191,22 +191,36 @@ PROTEA_DATA_DIR=.dev-data pnpm protea plugins login qq
 
 走滴答清单官方的 Open API（[文档](https://developer.dida365.com/docs#/openapi)），用个人 API Token，不需要注册应用，也不需要入站端口。助理可以查看和管理任务、清单、标签、评论、专注记录、习惯和倒数日。
 
-先在滴答清单网页版点头像 → 设置 → 账户 → API Token，创建并复制令牌，存进秘密库（从标准输入读取），再启用插件：
+它是可选插件，放在 `optional-plugins/dida365`，不在镜像里，要先打包再装进数据卷（[ADR-0025](docs/20-decisions/ADR-0025-optional-plugins.md)）。在仓库里打包，得到 `dist/plugins/dida365`：
 
 ```bash
-PROTEA_DATA_DIR=.dev-data pnpm protea secrets set DIDA365_TOKEN
+node scripts/pack-plugin.mjs optional-plugins/dida365
+```
+
+复制进容器，先装成停用状态（没有令牌时启用会启动失败）：
+
+```bash
+docker cp dist/plugins/dida365 protea:/tmp/dida365 && docker exec protea protea plugins install /tmp/dida365 --disabled
+```
+
+在滴答清单网页版点头像 → 设置 → 账户 → API Token，创建并复制令牌，存进秘密库（从标准输入读取），再启用插件：
+
+```bash
+docker exec -it protea protea secrets set DIDA365_TOKEN
 ```
 
 ```bash
-PROTEA_DATA_DIR=.dev-data pnpm protea plugins enable dida365
+docker exec protea protea plugins enable dida365
 ```
+
+不用 Docker 时把上面的 `docker exec protea protea` 换成 `PROTEA_DATA_DIR=.dev-data pnpm protea`，直接 `install dist/plugins/dida365 --disabled`。升级插件：重新打包，`protea plugins disable dida365`、`protea plugins uninstall dida365 --keep-data`，再装一次。令牌和插件数据保留，`plugins.dida365` 的配置会随卸载删掉，要重新设。
 
 默认按守护进程的时区读写时间，可以用 `timeZone` 指定（例如 `Asia/Shanghai`）。用 TickTick 国际版的话，把 `apiBase` 设成 `https://api.ticktick.com`。只读工具直接执行，新建、修改、完成、删除默认都要你批准；常用的可以放行，例如 `permissions.tools: { dida_task_create: allow, dida_task_complete: allow }`。
 
 想让助理在任务到点时主动跟进，打开到期提醒（默认关闭）：
 
 ```bash
-PROTEA_DATA_DIR=.dev-data pnpm protea plugins config dida365 '{"timeZone":"Asia/Shanghai","reminders":{"enabled":true}}'
+docker exec protea protea plugins config dida365 '{"timeZone":"Asia/Shanghai","reminders":{"enabled":true}}'
 ```
 
 之后插件每 5 分钟查一次未完成的任务：定时任务到点时、全天任务在每天 09:00（`dailyAt`）推一条 `dida365.task_due`，每天同一时间再汇总一次以前没完成的（`dida365.overdue`）。工具很多时可以用 `toolsets` 只保留需要的几组（`tasks`、`projects`、`tags`、`focus`、`habits`、`countdowns`）。

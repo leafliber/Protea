@@ -131,6 +131,15 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/plugin-sdk
 
+  optional-plugins/dida365:
+    dependencies:
+      '@protea/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      '@protea/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+
   packages/control:
     dependencies:
       '@hono/node-server':
@@ -227,15 +236,6 @@ importers:
       croner:
         specifier: ^11.0.0
         version: 11.0.0
-
-  plugins/dida365:
-    dependencies:
-      '@protea/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-      '@protea/protocol':
-        specifier: workspace:*
-        version: link:../../packages/protocol
 
   plugins/filewatch:
     dependencies:

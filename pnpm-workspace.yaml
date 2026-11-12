@@ -1,6 +1,7 @@
 packages:
   - packages/*
   - plugins/*
+  - optional-plugins/*
   - apps/*
   - examples/plugins/*
 

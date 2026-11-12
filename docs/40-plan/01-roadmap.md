@@ -372,7 +372,9 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 - 可选的任务到期事件：轮询未完成任务，到点推 `dida365.task_due`，每天汇总一次 `dida365.overdue`（[08-event-source-plugins.md](../10-architecture/08-event-source-plugins.md) §6.5）。
 - 自动测试用内存中的假 Open API；一致性检查 11 项通过。
 
-未验证：没有用真实账号调用过（T19）。文档没写明的行为都按保守的方式处理，需要实测确认：更新任务时省略的字段是否保留、清除日期（`null`）是否生效、创建任务不带 `projectId` 是否进收集箱、`task/filter` 不带 `status` 时返回什么、看板列与习惯的状态码含义。
+未验证：没有用真实账号调用过（T19）。
+
+2026-11-12 起它是可选插件：移到 `optional-plugins/dida365`，不再随镜像分发，用 `scripts/pack-plugin.mjs` 打包后安装（[ADR-0025](../20-decisions/ADR-0025-optional-plugins.md)）。文档没写明的行为都按保守的方式处理，需要实测确认：更新任务时省略的字段是否保留、清除日期（`null`）是否生效、创建任务不带 `projectId` 是否进收集箱、`task/filter` 不带 `status` 时返回什么、看板列与习惯的状态码含义。
 
 ### 插件工具按需加载与"上线前不做兼容"（2026-11-12）
 
