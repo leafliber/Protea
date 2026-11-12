@@ -79,7 +79,7 @@ Long messages: split at ~3500 characters. Use tg_react for lightweight acknowled
 | `filewatch` | source | L3 | 监视 `/data/inbox` 等目录 | M2 ✓ |
 | `rss` | source | L4 | 定时抓取，按条目去重 | M3 ✓ |
 | `imap` | source | L2 | IDLE/轮询；邮件到达事件 + `mail_fetch` 工具 | M3 ✓ |
-| `dida365` | source+tool | L2 | 滴答清单 Open API：任务、清单、标签、评论、专注、习惯、倒数日的工具；可选的任务到期事件（轮询） | 2026-11-12 |
+| `dida365` | source+tool | L2 | 可选插件（`optional-plugins/`，不在镜像里，ADR-0025）。滴答清单 Open API：任务、清单、标签、评论、专注、习惯、倒数日的工具；可选的任务到期事件（轮询） | 2026-11-12 |
 | `slack` / `discord` | connector | L1 | 社区实现优先 | M7+ |
 | `caldav` | source+tool | L2 | 日历提醒事件 + 查询工具 | M7+ |
 
@@ -130,7 +130,7 @@ Long messages: split at ~3500 characters. Use tg_react for lightweight acknowled
 
 ### 6.5 滴答清单
 
-**dida365**（秘密 `DIDA365_TOKEN`：滴答清单 设置 → 账户 → API Token 创建的个人令牌，作为 Bearer 发送；官方文档 <https://developer.dida365.com/docs#/openapi>）：
+**dida365**（可选插件，在 `optional-plugins/dida365`，用 `scripts/pack-plugin.mjs` 打包后 `protea plugins install`；秘密 `DIDA365_TOKEN`：滴答清单 设置 → 账户 → API Token 创建的个人令牌，作为 Bearer 发送；官方文档 <https://developer.dida365.com/docs#/openapi>）：
 - 不实现 OAuth：个人令牌是文档推荐的个人用法，免去注册应用和回调地址。`apiBase` 默认 `https://api.dida365.com`，TickTick 国际版改成 `https://api.ticktick.com`，接口相同。
 - 工具（前缀 `dida_`，27 个，覆盖文档里除撤销令牌之外的全部接口）：
   - 总是提供：`dida_status`（检查令牌、账户时区、提醒状态）、`dida_delete {type: task|comment|project|project_group|focus}`（能删什么取决于开了哪些工具组）。

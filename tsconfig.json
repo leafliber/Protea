@@ -42,6 +42,8 @@
     "packages/*/test",
     "plugins/*/src",
     "plugins/*/test",
+    "optional-plugins/*/src",
+    "optional-plugins/*/test",
     "apps/*/src",
     "apps/*/test",
     "vitest.config.ts"

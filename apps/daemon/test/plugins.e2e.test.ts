@@ -102,7 +102,6 @@ describe('M2 acceptance: plugins are hot-pluggable while the main session keeps 
     expect((await api<{ plugins: PluginStatus[] }>('GET', '/api/plugins')).json.plugins.map((p) => p.id)).toEqual([
       'console',
       'cron',
-      'dida365',
       'filewatch',
       'imap',
       'qq',

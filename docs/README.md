@@ -80,7 +80,8 @@ docs/
 │   ├── ADR-0021-readable-approval-requests-and-delivery.md
 │   ├── ADR-0022-no-backward-compatibility-before-launch.md
 │   ├── ADR-0023-plugin-tools-on-demand.md
-│   └── ADR-0024-resident-memory-and-chunked-search.md
+│   ├── ADR-0024-resident-memory-and-chunked-search.md
+│   └── ADR-0025-optional-plugins.md
 ├── 30-specs/                          精确规范（Schema、协议、配置、API）
 │   ├── 01-event-envelope-schema.md
 │   ├── 02-plugin-manifest.md

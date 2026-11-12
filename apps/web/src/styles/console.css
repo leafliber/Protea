@@ -57,6 +57,11 @@
   box-shadow: var(--shadow-sm);
 }
 
+/* The label keeps its width: grown like the nav items' labels it pushes the icon to the border. */
+.side-chat .side-text {
+  flex: none;
+}
+
 .side-chat:hover {
   background: var(--panel-2);
   text-decoration: none;

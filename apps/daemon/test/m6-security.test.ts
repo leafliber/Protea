@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { ScriptedProvider, reply, sleep, textReply, toolCall, type ProviderRequest } from '@protea/core';
 import type { EventInput, SchedulerAction } from '@protea/protocol';
 import { CronPlugin } from '@protea/plugin-cron';
-import { createDida365Plugin } from '../../../plugins/dida365/src/plugin.js';
+import { createDida365Plugin } from '../../../optional-plugins/dida365/src/plugin.js';
 import { createFilewatchPlugin } from '../../../plugins/filewatch/src/plugin.js';
 import { createImapPlugin } from '../../../plugins/imap/src/plugin.js';
 import { createQqPlugin } from '../../../plugins/qq/src/plugin.js';
@@ -128,9 +128,9 @@ describe('M6 default policy review', () => {
   /** Side-effect tools that are allowed by default: messages to the owner themself. Everything else with effects asks. */
   const OWNER_FACING = new Set(['chat_send', 'tg_react']);
 
-  it('every side-effect tool of a built-in plugin asks by default, except messages to the owner', () => {
+  it('every side-effect tool of a plugin in the repository asks by default, except messages to the owner', () => {
     const defs: Array<[string, Array<{ name: string; flags?: { sideEffect?: boolean } }>]> = [
-      // All of its tools: every tool set is on by default.
+      // Optional (optional-plugins/, not in the image); all of its tools: every tool set is on by default.
       ['dida365', (createDida365Plugin().tools as (host: unknown) => unknown)({ config: {}, timezone: 'UTC', secret: () => undefined }) as never],
       ['filewatch', createFilewatchPlugin().tools as never],
       ['imap', createImapPlugin().tools as never],
@@ -143,7 +143,7 @@ describe('M6 default policy review', () => {
     ];
     const reviewed: string[] = [];
     for (const [id, tools] of defs) {
-      const manifest = JSON.parse(fs.readFileSync(path.join(REPO, 'plugins', id, 'protea.plugin.json'), 'utf8')) as { tools?: string[]; sideEffectTools?: string[] };
+      const manifest = JSON.parse(fs.readFileSync(path.join(REPO, fs.existsSync(path.join(REPO, 'plugins', id)) ? 'plugins' : 'optional-plugins', id, 'protea.plugin.json'), 'utf8')) as { tools?: string[]; sideEffectTools?: string[] };
       expect(Array.isArray(tools), `${id} lists its tools statically`).toBe(true);
       expect(tools.map((t) => t.name).sort()).toEqual([...(manifest.tools ?? [])].sort());
       for (const t of tools) {
