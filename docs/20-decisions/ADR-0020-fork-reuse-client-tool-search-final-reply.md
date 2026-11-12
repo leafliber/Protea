@@ -2,6 +2,8 @@
 
 状态：Accepted · 日期：2026-11-12 · 相关：[../40-plan/10-capability-changes-lazy-mcp-fork-reuse.md](../40-plan/10-capability-changes-lazy-mcp-fork-reuse.md) · [../10-architecture/05-sessions-and-agent-loop.md](../10-architecture/05-sessions-and-agent-loop.md) §3、§5 · [../10-architecture/12-model-providers.md](../10-architecture/12-model-providers.md) §5 · [../10-architecture/09-mcp-integration.md](../10-architecture/09-mcp-integration.md) §5 · [ADR-0003](ADR-0003-own-agent-loop-over-agent-sdk.md) · [ADR-0008](ADR-0008-append-only-history-and-handoff.md)
 
+> 修订：客户端模式的元工具与系统段已改名并推广到插件工具（`mcp_search` → `tool_search`，`mcp_call` → `tool_call`，`mcp-catalog` → `tool-catalog`，`keepPerServer` → `keepPerOwner`），见 [ADR-0023](ADR-0023-plugin-tools-on-demand.md)。下文保留当时的名字。
+
 三个互不依赖的决定，都是为了少做重复的事：少一轮没有内容的模型调用，少一次从头开始的子任务，少发用不到的工具定义。
 
 ## 背景

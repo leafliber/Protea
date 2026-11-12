@@ -146,6 +146,11 @@ export interface ModelPricing {
 export interface PluginSettings {
   enabled: boolean;
   config: Record<string, unknown>;
+  /**
+   * true: the plugin's tools always load up front; false: they may be deferred behind tool
+   * search. Unset: connectors and in-process plugins always load, the other kinds may be deferred.
+   */
+  alwaysLoad?: boolean;
 }
 
 export interface SkillsSettings {

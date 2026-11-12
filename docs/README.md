@@ -1,6 +1,6 @@
 # Protea 设计文档
 
-> 状态：Draft v0.9（M0–M6 已实现，含 2026-11-05/06 的账号、供应商档案与对话窗口，2026-11-10 的分层记忆、对话与控制台分离、沙箱 shell、浏览器与视觉、权限模式、微信连接器，2026-11-11 的 QQ 连接器、对话富内容、平台能力与小组件沙箱，2026-11-12 的能力变更审核、MCP 客户端按需加载与 Fork 复用；架构文档已随实现转为 Accepted）· 更新：2026-11-12 · 语言：中文（代码标识符与文件名为英文）
+> 状态：Draft v0.9（M0–M6 已实现，含 2026-11-05/06 的账号、供应商档案与对话窗口，2026-11-10 的分层记忆、对话与控制台分离、沙箱 shell、浏览器与视觉、权限模式、微信连接器，2026-11-11 的 QQ 连接器、对话富内容、平台能力与小组件沙箱，2026-11-12 的能力变更审核、MCP 客户端按需加载与 Fork 复用、插件工具按需加载；架构文档已随实现转为 Accepted）· 更新：2026-11-12 · 语言：中文（代码标识符与文件名为英文）
 
 本目录是 Protea 的完整设计与实施计划。文档按"从愿景到落地"的顺序编号，建议首次阅读按下面的顺序。
 
@@ -24,7 +24,7 @@
 | 记忆系统重构的要求与落地 | [40-plan/07-memory-system-redesign.md](40-plan/07-memory-system-redesign.md) |
 | 沙箱 shell、浏览器与视觉支持的落地 | [40-plan/08-sandbox-browser-vision.md](40-plan/08-sandbox-browser-vision.md) |
 | 对话窗口怎么显示表格、流程图、问答、图片与小组件，连接器怎么接入 | [40-plan/09-chat-rich-display.md](40-plan/09-chat-rich-display.md) |
-| 助理怎么提议改自己的能力、MCP 工具怎么按需加载、子 agent 怎么复用 | [40-plan/10-capability-changes-lazy-mcp-fork-reuse.md](40-plan/10-capability-changes-lazy-mcp-fork-reuse.md) |
+| 助理怎么提议改自己的能力、MCP 与插件工具怎么按需加载、子 agent 怎么复用 | [40-plan/10-capability-changes-lazy-mcp-fork-reuse.md](40-plan/10-capability-changes-lazy-mcp-fork-reuse.md) |
 | 定时任务页、授权请求怎么显示和决定、助理怎么选平台、控制台怎么分组 | [40-plan/11-console-approvals-schedules.md](40-plan/11-console-approvals-schedules.md) |
 
 ## 目录结构
@@ -77,7 +77,9 @@ docs/
 │   ├── ADR-0018-rich-chat-content-and-widget-sandbox.md
 │   ├── ADR-0019-capability-change-requests.md
 │   ├── ADR-0020-fork-reuse-client-tool-search-final-reply.md
-│   └── ADR-0021-readable-approval-requests-and-delivery.md
+│   ├── ADR-0021-readable-approval-requests-and-delivery.md
+│   ├── ADR-0022-no-backward-compatibility-before-launch.md
+│   └── ADR-0023-plugin-tools-on-demand.md
 ├── 30-specs/                          精确规范（Schema、协议、配置、API）
 │   ├── 01-event-envelope-schema.md
 │   ├── 02-plugin-manifest.md

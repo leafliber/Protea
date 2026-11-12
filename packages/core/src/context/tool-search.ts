@@ -8,8 +8,8 @@ import type { ToolSearchSettings } from './settings.js';
 export const TOOL_SEARCH_NAMES = new Set(['tool_search_tool_regex', 'tool_search_tool_bm25']);
 
 /** The client-side search: for providers that cannot search deferred tools themselves. */
-export const MCP_SEARCH = 'mcp_search';
-export const MCP_CALL = 'mcp_call';
+export const TOOL_SEARCH = 'tool_search';
+export const TOOL_CALL = 'tool_call';
 
 const SEARCH_DEFAULT = 5;
 const SEARCH_MAX = 20;
@@ -20,8 +20,8 @@ const CATALOG_NOTE_CHARS = 400;
 /**
  * How deferred tools reach the model.
  * - `native`: the provider searches them (`defer_loading` + its tool search tool).
- * - `client`: they are left out of the request; the model finds them with `mcp_search` and
- *   runs them through `mcp_call`. The tool list stays the same for the whole conversation.
+ * - `client`: they are left out of the request; the model finds them with `tool_search` and
+ *   runs them through `tool_call`. The tool list stays the same for the whole conversation.
  */
 export type ToolSearchMode = 'native' | 'client';
 
@@ -38,7 +38,7 @@ export interface ToolExposureOptions {
   usage: (name: string) => number;
   /** The provider can search deferred tools for this role. */
   supported: (role: ModelRole) => boolean;
-  /** What an MCP server says about itself (its `instructions`), by tool owner; shown in the catalog. */
+  /** What a tool owner says about itself (an MCP server's `instructions`); shown in the catalog. */
   ownerNote?: (owner: string) => string | undefined;
 }
 
@@ -53,8 +53,8 @@ function definitionTokens(d: ToolDef): number {
   return estimateTokens(JSON.stringify({ name: d.name, description: d.description, input_schema: d.inputSchema }));
 }
 
-/** `browser` for the owner `mcp:browser`. */
-function serverOf(owner: string): string {
+/** What the model calls a tool owner: `browser` for the MCP server `mcp:browser`, a plugin's id for a plugin. */
+function sourceOf(owner: string): string {
   return owner.startsWith('mcp:') ? owner.slice(4) : owner;
 }
 
@@ -67,10 +67,11 @@ function words(text: string): string[] {
 
 /**
  * Decides which tool definitions load up front (docs/10-architecture/12-model-providers.md §5).
- * Kernel and plugin tools always load; MCP tools are deferred once there are many tools or
- * their definitions are large, except each server's most-used few. The plan only changes when
- * the tool set or the settings change, so the loaded set — part of the cached prefix — stays
- * byte-stable.
+ * Kernel tools always load, and so do the tools of owners set to always load (by default
+ * connectors and in-process plugins). The other plugins' and the MCP servers' tools are
+ * deferred once there are many tools or their definitions are large, except each owner's
+ * most-used few. The plan only changes when the tool set or the settings change, so the loaded
+ * set — part of the cached prefix — stays byte-stable.
  */
 export class ToolExposure {
   private planKey = '';
@@ -149,35 +150,38 @@ export class ToolExposure {
   }
 
   /**
-   * What a client-mode session is told about the tools held back: per server, what it is for
-   * and the names it offers. Null when nothing is held back for this role.
+   * What a client-mode session is told about the tools held back: per MCP server or plugin,
+   * what it is for and the names it offers. Null when nothing is held back for this role.
    */
   catalog(role: ModelRole, allowed?: ReadonlySet<string>): string | null {
     if (this.modeFor(role) !== 'client') return null;
     const held = this.held(allowed);
     if (held.size === 0) return null;
     const lines = [
-      '# MCP tools on demand',
+      '# Tools on demand',
       '',
-      `The tools below are not in your tool list, to keep it short. ${MCP_SEARCH} returns the description and input schema of the ones that match; ${MCP_CALL} runs one by its full name. Look a tool up before you first call it in a conversation.`,
+      `The tools below are not in your tool list, to keep it short. ${TOOL_SEARCH} returns the description and input schema of the ones that match; ${TOOL_CALL} runs one by its full name. Look a tool up before you first call it in a conversation.`,
       '',
     ];
     for (const [owner, defs] of held) {
-      const server = serverOf(owner);
+      const source = sourceOf(owner);
       const note = this.o.ownerNote?.(owner)?.replace(/\s+/g, ' ').trim();
-      const prefix = `mcp__${server}__`;
-      const names = defs.map((d) => (d.name.startsWith(prefix) ? d.name.slice(prefix.length) : d.name));
-      lines.push(`- ${server} (${defs.length} tools, full name ${prefix}<tool>)${note ? `: ${note.length > CATALOG_NOTE_CHARS ? `${note.slice(0, CATALOG_NOTE_CHARS)}…` : note}` : ''}`);
+      const count = `${defs.length} tool${defs.length === 1 ? '' : 's'}`;
+      // An MCP tool's full name carries its server; a plugin's tools are listed by their full names.
+      const prefix = owner.startsWith('mcp:') ? `mcp__${source}__` : '';
+      const names = defs.map((d) => (prefix && d.name.startsWith(prefix) ? d.name.slice(prefix.length) : d.name));
+      const what = prefix ? `MCP server, ${count}, full name ${prefix}<tool>` : `plugin, ${count}`;
+      lines.push(`- ${source} (${what})${note ? `: ${note.length > CATALOG_NOTE_CHARS ? `${note.slice(0, CATALOG_NOTE_CHARS)}…` : note}` : ''}`);
       lines.push(`  ${names.join(', ')}`);
     }
     return lines.join('\n');
   }
 
-  /** Deferred tools matching the words of `query` (best first), or all of one server's. */
-  search(q: { query?: string; server?: string; limit?: number; allowed?: ReadonlySet<string> }): { hits: ToolSearchHit[]; more: string[]; servers: string[] } {
+  /** Deferred tools matching the words of `query` (best first), or all of one source's (an MCP server or a plugin). */
+  search(q: { query?: string; source?: string; limit?: number; allowed?: ReadonlySet<string> }): { hits: ToolSearchHit[]; more: string[]; sources: string[] } {
     const held = this.held(q.allowed);
-    const servers = [...held.keys()].map(serverOf);
-    let pool = [...held.entries()].flatMap(([owner, defs]) => (q.server === undefined || serverOf(owner) === q.server ? defs : []));
+    const sources = [...new Set([...held.keys()].map(sourceOf))].sort();
+    let pool = [...held.entries()].flatMap(([owner, defs]) => (q.source === undefined || sourceOf(owner) === q.source ? defs : []));
     const terms = words(q.query ?? '');
     if (terms.length > 0) {
       const scored = pool
@@ -196,13 +200,13 @@ export class ToolExposure {
     return {
       hits: pool.slice(0, limit).map((d) => ({ name: d.name, owner: d.owner, description: d.description, inputSchema: this.o.tools.schemaFor(d) })),
       more: pool.slice(limit).map((d) => d.name),
-      servers,
+      sources,
     };
   }
 
   private plan(all: readonly ToolDef[]): Set<string> {
     const s = this.o.settings();
-    const key = `${this.o.tools.revision}|${s.mode}|${s.threshold}|${s.thresholdTokens}|${s.keepPerServer}`;
+    const key = `${this.o.tools.revision}|${s.mode}|${s.threshold}|${s.thresholdTokens}|${s.keepPerOwner}`;
     if (key === this.planKey) return this.deferred;
     this.planKey = key;
     const deferred = new Set<string>();
@@ -215,7 +219,7 @@ export class ToolExposure {
       const byOwner = new Map<string, ToolDef[]>();
       for (const d of deferrable) byOwner.set(d.owner, [...(byOwner.get(d.owner) ?? []), d]);
       for (const [owner, group] of byOwner) {
-        const pinned = this.pinned(owner, group, s.keepPerServer);
+        const pinned = this.pinned(owner, group, s.keepPerOwner);
         for (const d of group) if (!pinned.has(d.name)) deferred.add(d.name);
       }
     }
@@ -235,52 +239,52 @@ export class ToolExposure {
 }
 
 /**
- * `mcp_search` and `mcp_call`: how a model on a provider without tool search reaches the tools
- * held back. Nothing about them changes during a conversation, so the cached prefix holds;
- * what a search returns is appended to the history like any tool result.
+ * `tool_search` and `tool_call`: how a model on a provider without tool search reaches the tools
+ * held back (MCP servers' and plugins'). Nothing about them changes during a conversation, so
+ * the cached prefix holds; what a search returns is appended to the history like any tool result.
  */
 export function clientSearchTools(exposure: ToolExposure, tools: ToolRegistry): ToolSpec<never>[] {
-  const search: ToolSpec<{ query?: string; server?: string; limit?: number }> = {
-    name: MCP_SEARCH,
+  const search: ToolSpec<{ query?: string; source?: string; limit?: number }> = {
+    name: TOOL_SEARCH,
     description:
-      'Find MCP tools that are not in your tool list. Returns the full name, description and input schema of the tools matching the query ' +
-      `(words from a tool's name or what it does), or of one server's tools. Run a result with ${MCP_CALL}.`,
+      'Find tools that are not in your tool list. Returns the full name, description and input schema of the tools matching the query ' +
+      `(words from a tool's name or what it does), or of one source's tools (an MCP server or a plugin). Run a result with ${TOOL_CALL}.`,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         query: { type: 'string', maxLength: 300, description: 'Words to match against tool names and descriptions.' },
-        server: { type: 'string', maxLength: 64, description: 'Only this MCP server. Without a query, lists its tools.' },
+        source: { type: 'string', maxLength: 64, description: 'Only this MCP server or plugin. Without a query, lists its tools.' },
         limit: { type: 'integer', minimum: 1, maximum: SEARCH_MAX, default: SEARCH_DEFAULT, description: 'How many tools to return with their schema.' },
       },
     },
     flags: { readOnly: true },
     clientSearch: true,
     handler: (input, ctx) => {
-      if (!input.query?.trim() && input.server === undefined) return { text: 'give a query, a server, or both', failed: true };
+      if (!input.query?.trim() && input.source === undefined) return { text: 'give a query, a source, or both', failed: true };
       const r = exposure.search({ ...input, ...(ctx.allowed ? { allowed: ctx.allowed } : {}) });
-      if (input.server !== undefined && !r.servers.includes(input.server)) {
-        return { text: `no tools are held back for the server ${input.server}; servers with such tools: ${r.servers.join(', ') || 'none'}`, failed: true };
+      if (input.source !== undefined && !r.sources.includes(input.source)) {
+        return { text: `no tools are held back for ${input.source}; sources with such tools: ${r.sources.join(', ') || 'none'}`, failed: true };
       }
-      if (r.hits.length === 0) return `no tool matches. Servers with tools on demand: ${r.servers.join(', ') || 'none'}. Try other words, or list one server's tools.`;
+      if (r.hits.length === 0) return `no tool matches. Sources with tools on demand: ${r.sources.join(', ') || 'none'}. Try other words, or list one source's tools.`;
       const blocks = r.hits.map((h) => {
         const description = h.description.length > RESULT_DESCRIPTION_CHARS ? `${h.description.slice(0, RESULT_DESCRIPTION_CHARS)}…` : h.description;
         return `## ${h.name}\n${description}\ninput schema: ${JSON.stringify(h.inputSchema)}`;
       });
       const more = r.more.length > 0 ? `\n\nAlso matching, without schema (search again to get it): ${r.more.join(', ')}` : '';
-      return `${r.hits.length} tool${r.hits.length === 1 ? '' : 's'}. Run one with ${MCP_CALL} { name, arguments }.\n\n${blocks.join('\n\n')}${more}`;
+      return `${r.hits.length} tool${r.hits.length === 1 ? '' : 's'}. Run one with ${TOOL_CALL} { name, arguments }.\n\n${blocks.join('\n\n')}${more}`;
     },
   };
 
   const call: ToolSpec<{ name: string; arguments?: Record<string, unknown> }> = {
-    name: MCP_CALL,
-    description: `Run an MCP tool that is not in your tool list, by the full name ${MCP_SEARCH} gave. The same permissions apply as if you had called the tool directly.`,
+    name: TOOL_CALL,
+    description: `Run a tool that is not in your tool list, by the full name ${TOOL_SEARCH} gave. The same permissions apply as if you had called the tool directly.`,
     inputSchema: {
       type: 'object',
       required: ['name'],
       additionalProperties: false,
       properties: {
-        name: { type: 'string', minLength: 1, maxLength: 64, description: 'Full tool name, e.g. mcp__server__tool.' },
+        name: { type: 'string', minLength: 1, maxLength: 64, description: 'Full tool name, as the search gave it.' },
         arguments: { type: 'object', description: "The tool's input, following its input schema." },
       },
     },
@@ -289,13 +293,13 @@ export function clientSearchTools(exposure: ToolExposure, tools: ToolRegistry): 
       const target = tools.get(input.name);
       if (!target) {
         const why = tools.unavailableReason(input.name);
-        return { error: `there is no tool ${input.name}${why ? ` (${why})` : ''}; use ${MCP_SEARCH} to find the name` };
+        return { error: `there is no tool ${input.name}${why ? ` (${why})` : ''}; use ${TOOL_SEARCH} to find the name` };
       }
-      if (!target.deferrable) return { error: `${input.name} is not an MCP tool: call it directly` };
+      if (!target.deferrable) return { error: `${input.name} is in your tool list: call it directly` };
       return { name: target.name, input: input.arguments ?? {} };
     },
     // Never reached: the dispatcher runs the tool the call redirects to.
-    handler: () => ({ text: `${MCP_CALL} was not redirected`, failed: true }),
+    handler: () => ({ text: `${TOOL_CALL} was not redirected`, failed: true }),
   };
 
   return [search, call] as unknown as ToolSpec<never>[];

@@ -139,6 +139,19 @@ export class ToolRegistry {
     return removed;
   }
 
+  /** Whether one owner's tools may be deferred behind tool search; true when that changed anything. */
+  setDeferrable(owner: string, deferrable: boolean): boolean {
+    let changed = false;
+    for (const [name, def] of this.tools) {
+      if (def.owner !== owner || (def.deferrable === true) === deferrable) continue;
+      const { deferrable: _was, ...rest } = def;
+      this.tools.set(name, deferrable ? { ...rest, deferrable: true } : rest);
+      changed = true;
+    }
+    if (changed) this.version++;
+    return changed;
+  }
+
   private compile(spec: ToolSpec<never> | ToolSpec): ValidateFunction {
     try {
       return this.ajv.compile(spec.inputSchema);

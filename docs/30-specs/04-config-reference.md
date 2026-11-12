@@ -108,6 +108,7 @@ providers:                             # 模型供应商（12-model-providers.md
 # PROVIDER_ANTHROPIC_API_KEY；只有旧密钥文件、没有 providers 配置的数据卷也会得到一个 anthropic 档案。
 
 plugins:                             # 每个插件一组：enabled（未列出的插件默认 false）+ config（按插件的 configSchema 校验）
+                                     # + 可选 alwaysLoad：true 工具始终加载，false 可按需加载；不写时连接器与内置进程内插件始终加载，tool / source 插件可按需加载
   console: { enabled: true, config: {} }
   cron:
     enabled: true
@@ -192,10 +193,10 @@ skills:
 
 context:
   toolSearch:
-    mode: auto                         # auto：工具总数超过 threshold，或 MCP 工具定义超过 thresholdTokens 时延迟加载 MCP 工具；always；never
+    mode: auto                         # auto：工具总数超过 threshold，或可延迟工具的定义超过 thresholdTokens 时延迟加载它们；always；never
     threshold: 40
-    thresholdTokens: 8000              # MCP 工具定义的估算 token；0 = 不按大小判断
-    keepPerServer: 3                   # 每个 MCP 服务器调用最多的几个工具保持加载
+    thresholdTokens: 8000              # 可延迟工具（MCP 工具、没设为始终加载的插件工具）定义的估算 token；0 = 不按大小判断
+    keepPerOwner: 3                    # 每个来源（MCP 服务器或插件）调用最多的几个工具保持加载
   handoff:                             # 容量交接（M4，docs/10-architecture/05-sessions-and-agent-loop.md §8）
     softTokens: 80000                  # 批开始时估算超过它就交接
     hardTokens: null                   # 任何请求前超过它就交接；null = 上下文窗口 − maxOutputTokens − max(8000, 5 %)
@@ -284,6 +285,7 @@ plugins:
 | `permissions` | 立即；系统前缀的权限摘要在下一个回合边界更新 |
 | `plugins.<id>.enabled` | 立即启用/禁用 |
 | `plugins.<id>.config` | 热键：`config/changed`；`x-hot: false` 的键：重载该插件；进程内插件：重载 |
+| `plugins.<id>.alwaysLoad` | 下一次模型请求生效，插件不重启 |
 | `mcp.servers.<id>` | 新增 → 启动；删除 → 停止并移除工具；改动 → 重启该服务器 |
 | `skills` | 立即重扫，目录在下一个回合边界更新 |
 | `context.toolSearch`、`context.handoff`、`context.compaction` | 下一次模型请求生效 |

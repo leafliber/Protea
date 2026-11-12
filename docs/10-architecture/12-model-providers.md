@@ -1,6 +1,6 @@
 # 模型提供方
 
-> 状态：Accepted（M0–M6；供应商档案 2026-11-05）· 更新：2026-11-08
+> 状态：Accepted（M0–M6；供应商档案 2026-11-05）· 更新：2026-11-12
 
 ## 1. 抽象
 
@@ -57,7 +57,7 @@ OpenAI 风格协议的映射（`toChatMessages` / `toResponsesInput`）：
 - 回复里的文本与工具调用转回规范块；参数不是 JSON 对象时变成 `{ _raw }`，由执行前的 schema 校验拒绝（模型看到错误后重试）。
 - 停止原因：`tool_calls` → `tool_use`、`length` / `max_output_tokens` → `max_tokens`、`content_filter` → `refusal`，其余 `end_turn`。
 - 用量：`prompt_tokens` 含缓存部分，所以输入 = prompt − cached，缓存读 = cached；服务端不报用量时按长度估算（预算与交接仍有依据）。费用只在档案配置了 `pricing` 时计算。
-- 不声明工具搜索（`supportsToolSearch` 为假）：延迟的 MCP 工具走客户端模式（§5），请求里只有加载的工具与 `mcp_search` / `mcp_call`；不做精确计数（交接按估算）、`req.compaction` 被忽略。上下文窗口取 `contextWindow`，默认 128000。
+- 不声明工具搜索（`supportsToolSearch` 为假）：延迟的工具走客户端模式（§5），请求里只有加载的工具与 `tool_search` / `tool_call`；不做精确计数（交接按估算）、`req.compaction` 被忽略。上下文窗口取 `contextWindow`，默认 128000。
 - 错误：401/403 → `config`，404 → `fatal`，429 与 5xx/408/409、连接错误、超时 → `retryable`（先按 `maxRetries` 退避重试，尊重 `Retry-After`），400/413/422 且消息像"超出上下文" → `overflow`。
 
 **视觉**（[ADR-0014](../20-decisions/ADR-0014-images-as-blob-references.md)）：档案的 `vision` 说明模型能否看图（布尔值或按角色；Anthropic 默认开，OpenAI 协议默认关）。转录只存 blob 引用，`ImageResolvingProvider` 是最内层的包装（脱敏 → 录制 → 解析图片 → 请求）：能看图的角色得到字节，其他角色得到一行占位文字，已过期的图片也是占位。同一段历史每次解析结果相同，前缀缓存不受影响。
@@ -90,15 +90,16 @@ OpenAI 风格协议的映射（`toChatMessages` / `toResponsesInput`）：
 
 ## 5. 工具搜索与缓存的配合
 
-工具搜索把"加载工具定义"变成追加动作，因此 MCP 服务器增删造成的工具表变化对缓存前缀的影响被限制在"非延迟工具集合"内。策略：
+工具搜索把"加载工具定义"变成追加动作，因此 MCP 服务器与插件增删造成的工具表变化对缓存前缀的影响被限制在"非延迟工具集合"内。策略：
 
-- 启用条件（`mode: auto`）：工具总数超过 `context.toolSearch.threshold`（40），**或** MCP 工具定义的估算 token 超过 `thresholdTokens`（8000）。`mcp.servers.<id>.alwaysLoad: true` 的服务器不参与延迟。
-- 非延迟集合 = 内核工具 + 所有插件工具 + 每个 MCP 服务器调用频次前 k（`context.toolSearch.keepPerServer`，默认 3）的工具。只有 MCP 工具会被延迟（M3）。
-- 频次来自 `tool_stats` 表；某个服务器的前 k 名只在它的工具列表变化时重算，其他服务器的增删不会让它变化，避免前缀因调用次数波动而失效。
+- 可延迟的工具（`ToolSpec.deferrable`）：MCP 工具，`mcp.servers.<id>.alwaysLoad: true` 的服务器除外；插件工具，插件按 `plugins.<id>.alwaysLoad` 决定，不写时连接器与进程内插件始终加载、`tool` 与 `source` 插件可以延迟（[ADR-0023](../20-decisions/ADR-0023-plugin-tools-on-demand.md)，[07](07-plugin-system.md) §7.1）。内核工具从不延迟。
+- 启用条件（`mode: auto`）：工具总数超过 `context.toolSearch.threshold`（40），**或** 可延迟工具定义的估算 token 超过 `thresholdTokens`（8000）。
+- 非延迟集合 = 内核工具 + 不可延迟的工具 + 每个来源（一个 MCP 服务器或一个插件）调用频次前 k（`context.toolSearch.keepPerOwner`，默认 3）的工具。
+- 频次来自 `tool_stats` 表；某个来源的前 k 名只在它的工具列表变化时重算，其他来源的增删不会让它变化，避免前缀因调用次数波动而失效。
 - 该集合的变化仍只在回合边界应用，并触发一次缓存失效（可接受）。延迟工具的增删不进入缓存前缀。
 - 请求形态（Anthropic）：延迟的工具带 `defer_loading: true`，`tools` 末尾追加 `{ type: "tool_search_tool_regex_20251119", name: "tool_search_tool_regex" }`，无需 beta 头。模型的搜索结果（`server_tool_use` 与 `tool_search_tool_result` 块）原样留在历史里。
 - 历史里一旦出现过工具搜索，之后的请求都保持声明搜索工具；搜索结果引用过、但已经消失的工具（服务器被移除）以占位定义保留（`defer_loading: true`，描述为"No longer available …"），否则 API 会因找不到被引用的工具而拒绝请求。
-- **客户端模式**（[ADR-0020](../20-decisions/ADR-0020-fork-reuse-client-tool-search-final-reply.md)）：角色的 Provider 不能搜索时（Anthropic 兼容接口、两种 OpenAI 协议、旧模型），延迟的工具不进 `tools`，多出两个固定工具：`mcp_search {query?, server?, limit?}` 返回匹配工具的全名、描述与完整输入 schema（默认 5 个，最多 20）；`mcp_call {name, arguments}` 按全名调用。`mcp_call` 在分发入口被改写成真实工具的调用，校验、权限、审批、审计、统计与 Fork 的工具清单都按真实工具走。系统前缀多一段 `mcp-catalog`：每个服务器的说明（MCP `initialize` 的 `instructions`，截到 400 字）与被延迟的工具名。`tools` 在整个对话里不变，schema 作为工具回执追加进历史，所以任何 Provider 的前缀缓存都不受搜索与调用影响；两个元工具只在确有工具被延迟时出现，随延迟计划变化一次。
+- **客户端模式**（[ADR-0020](../20-decisions/ADR-0020-fork-reuse-client-tool-search-final-reply.md)）：角色的 Provider 不能搜索时（Anthropic 兼容接口、两种 OpenAI 协议、旧模型），延迟的工具不进 `tools`，多出两个固定工具：`tool_search {query?, source?, limit?}` 返回匹配工具的全名、描述与完整输入 schema（默认 5 个，最多 20），`source` 是一个 MCP 服务器或插件的 id；`tool_call {name, arguments}` 按全名调用。`tool_call` 在分发入口被改写成真实工具的调用，校验、权限、审批、审计、统计与 Fork 的工具清单都按真实工具走；对不可延迟的工具它拒绝并让模型直接调用。系统前缀多一段 `tool-catalog`：每个来源一行（MCP 服务器附它的说明，即 `initialize` 的 `instructions`，截到 400 字）与被延迟的工具名。`tools` 在整个对话里不变，schema 作为工具回执追加进历史，所以任何 Provider 的前缀缓存都不受搜索与调用影响；两个元工具只在确有工具被延迟时出现，随延迟计划变化一次。
 - `Provider.supportsToolSearch(role)` 报告能力：Anthropic Provider 对 Claude 4.5 及以后的模型为真；echo 与不支持的模型走客户端模式。Fork 的请求同样适用，只是工具集合是该 Fork 允许的子集；客户端模式下 Fork 能查到、调到的只有它清单里的延迟工具，清单写在它的首条消息里。
 - 验收用的缓存模拟见 `packages/core/test/tool-search.test.ts`：按"工具 → system → messages 的最长公共前缀、延迟工具不进前缀"计算，100 次推送、78 个 MCP 工具时为无 MCP 时的 98%。
 

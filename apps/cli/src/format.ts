@@ -32,7 +32,7 @@ export function formatFork(f: ForkInfo): string {
 export function formatPlugin(p: PluginStatus): string {
   const state =
     p.state === 'running' ? green(p.state) : p.state === 'failed' || p.state === 'invalid' || p.state === 'crashed' ? red(p.state) : yellow(p.state);
-  const meta = [p.origin, p.version ? `v${p.version}` : '', p.enabled ? 'enabled' : 'disabled', p.tools.length ? `${p.tools.length} tools` : '', p.pid ? `pid ${p.pid}` : '', p.restarts ? `${p.restarts} restarts` : '']
+  const meta = [p.origin, p.version ? `v${p.version}` : '', p.enabled ? 'enabled' : 'disabled', p.tools.length ? `${p.tools.length} tools${p.alwaysLoad ? '' : p.deferredTools ? ` (${p.deferredTools} on demand)` : ' (may load on demand)'}` : '', p.pid ? `pid ${p.pid}` : '', p.restarts ? `${p.restarts} restarts` : '']
     .filter(Boolean)
     .join(' · ');
   return `${bold(p.id.padEnd(12))} ${state.padEnd(10)} ${dim(meta)}${p.error ? `\n${' '.repeat(13)}${red(oneLine(p.error, 160))}` : ''}`;

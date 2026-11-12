@@ -453,7 +453,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       owner.update(ownerIdentities(identities));
     },
     onEnabledChanged: (id, enabled) => {
-      config.plugins[id] = { config: config.plugins[id]?.config ?? {}, enabled };
+      config.plugins[id] = { ...config.plugins[id], config: config.plugins[id]?.config ?? {}, enabled };
       persist(['plugins', id, 'enabled'], enabled);
     },
     onUninstalled: (id) => {
@@ -464,11 +464,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const consolePlugin = new ConsolePlugin();
   const webchatPlugin = new WebchatPlugin();
   const builtinSettings = (id: string): PluginSettings => config.plugins[id] ?? { enabled: true, config: {} };
-  plugins.register(consolePlugin, builtinSettings('console').config, builtinSettings('console').enabled);
-  plugins.register(webchatPlugin, builtinSettings('webchat').config, builtinSettings('webchat').enabled);
+  plugins.register(consolePlugin, builtinSettings('console').config, builtinSettings('console').enabled, builtinSettings('console').alwaysLoad);
+  plugins.register(webchatPlugin, builtinSettings('webchat').config, builtinSettings('webchat').enabled, builtinSettings('webchat').alwaysLoad);
   const cronPlugin = new CronPlugin();
   cronPlugin.onChange = (id) => bus.emit('schedule.changed', { id });
-  plugins.register(cronPlugin, builtinSettings('cron').config, builtinSettings('cron').enabled);
+  plugins.register(cronPlugin, builtinSettings('cron').config, builtinSettings('cron').enabled, builtinSettings('cron').alwaysLoad);
   await plugins.rescan(settingsOf);
 
   // Permissions, approvals and audit (docs/10-architecture/14-security-and-permissions.md).
@@ -623,7 +623,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     extraEnv: () => {
       // Tools held back for a provider without tool search: the model is told what it can look up.
       const catalog = exposure.catalog('main');
-      return [...mcp.envSegments(), ...(catalog ? [{ id: 'mcp-catalog', text: catalog }] : [])];
+      return [...mcp.envSegments(), ...(catalog ? [{ id: 'tool-catalog', text: catalog }] : [])];
     },
     skills: () => skills.catalog(),
   });
@@ -681,7 +681,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     toolStats.record(name, ms, failed, new Date(clock.now()).toISOString());
     metrics?.toolCall(name, ms, failed);
   });
-  // Tool search: past context.toolSearch.threshold tools, MCP tools load on demand.
+  // Tool search: past context.toolSearch.threshold tools, MCP tools and the plugins not set to always load are on demand.
   const exposure = new ToolExposure({
     tools,
     settings: () => config.context.toolSearch,
@@ -691,6 +691,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   });
   for (const spec of clientSearchTools(exposure, tools)) tools.register('core', spec);
   mcp.setDeferredProbe((name) => exposure.isDeferred(name));
+  plugins.setDeferredProbe((name) => exposure.isDeferred(name));
   const forks = new ForkManager({
     dir: path.join(dataDir, 'sessions', 'forks'),
     dataDir,
@@ -1092,10 +1093,21 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     if (cold.length > 0) log.warn({ sections: cold }, 'these configuration changes take effect after a restart');
     log.info('configuration reloaded');
   };
+  // A plugin's group in config.yaml always carries `enabled`: a group without it reads as disabled,
+  // which would stop a built-in plugin that was running only by default.
   const setPluginConfig = async (id: string, cfg: Record<string, unknown>): Promise<void> => {
     await plugins.updateConfig(id, cfg);
-    config.plugins[id] = { enabled: plugins.get(id)?.enabled ?? false, config: cfg };
+    const enabled = plugins.get(id)?.enabled ?? false;
+    config.plugins[id] = { ...config.plugins[id], enabled, config: cfg };
+    persist(['plugins', id, 'enabled'], enabled);
     persist(['plugins', id, 'config'], cfg);
+  };
+  const setPluginAlwaysLoad = (id: string, on: boolean): void => {
+    plugins.setAlwaysLoad(id, on);
+    const enabled = plugins.get(id)?.enabled ?? false;
+    config.plugins[id] = { ...config.plugins[id], enabled, config: config.plugins[id]?.config ?? {}, alwaysLoad: on };
+    persist(['plugins', id, 'enabled'], enabled);
+    persist(['plugins', id, 'alwaysLoad'], on);
   };
   const putMcpServer = async (id: string, entry: Record<string, unknown> | null): Promise<void> => {
     const servers: Record<string, McpServerSettings> = { ...config.mcp.servers };
@@ -1395,6 +1407,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     putMcpServer,
     setMcpEnabled,
     setMcpAlwaysLoad,
+    setPluginAlwaysLoad,
     skills,
     setSkillEnabled,
     status,

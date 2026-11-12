@@ -96,6 +96,8 @@ interface Entry {
   origin: PluginOrigin;
   enabled: boolean;
   config: Record<string, unknown>;
+  /** `plugins.<id>.alwaysLoad` as written; unset means the default of the plugin's kind. */
+  alwaysLoad?: boolean;
   state: PluginState;
   error?: string;
   inproc?: InprocPlugin;
@@ -150,6 +152,7 @@ export class PluginHost {
   private readonly settings: PluginHostSettings;
   private approvals: ApprovalService | null = null;
   private modes: PermissionModes | null = null;
+  private deferredProbe: ((toolName: string) => boolean) | null = null;
   private started = false;
   private stopping = false;
   private readonly watchdog: MemoryWatchdog;
@@ -198,9 +201,9 @@ export class PluginHost {
   // —— Registration and discovery ——
 
   /** A plugin compiled into the daemon (console, cron). */
-  register(plugin: InprocPlugin, config: Record<string, unknown> = {}, enabled = true): void {
+  register(plugin: InprocPlugin, config: Record<string, unknown> = {}, enabled = true, alwaysLoad?: boolean): void {
     if (this.entries.has(plugin.id) || plugin.id === CORE_SOURCE) throw new Error(`plugin id "${plugin.id}" is taken`);
-    this.entries.set(plugin.id, this.newEntry(plugin.id, plugin.kind, 'inproc', { enabled, config }, { inproc: plugin }));
+    this.entries.set(plugin.id, this.newEntry(plugin.id, plugin.kind, 'inproc', { enabled, config, ...(alwaysLoad !== undefined ? { alwaysLoad } : {}) }, { inproc: plugin }));
   }
 
   private newEntry(id: string, kind: string, origin: PluginOrigin, s: PluginSettings, extra: Partial<Entry>): Entry {
@@ -210,6 +213,7 @@ export class PluginHost {
       origin,
       enabled: s.enabled,
       config: s.config ?? {},
+      ...(s.alwaysLoad !== undefined ? { alwaysLoad: s.alwaysLoad } : {}),
       state: 'loaded',
       proc: null,
       capabilities: {},
@@ -329,16 +333,49 @@ export class PluginHost {
     return [...this.entries.values()].sort((a, b) => a.id.localeCompare(b.id)).map((e) => this.statusOf(e));
   }
 
+  /**
+   * Whether the plugin's tools always load up front. Unless `plugins.<id>.alwaysLoad` says
+   * otherwise, connectors (their tools are how the assistant answers) and in-process plugins do.
+   */
+  private loadsUpFront(e: Entry): boolean {
+    return e.alwaysLoad ?? (e.kind === 'connector' || e.origin === 'inproc');
+  }
+
+  /** Lets the status say how many of a plugin's tools are deferred (decided by the tool exposure). */
+  setDeferredProbe(probe: ((toolName: string) => boolean) | null): void {
+    this.deferredProbe = probe;
+  }
+
+  /**
+   * `plugins.<id>.alwaysLoad`: whether the plugin's tools are kept out of tool search. The
+   * plugin keeps running; the tool list of the next request changes.
+   */
+  setAlwaysLoad(id: string, on: boolean | undefined): PluginStatus {
+    const e = this.entry(id);
+    if (on === undefined) delete e.alwaysLoad;
+    else e.alwaysLoad = on;
+    if (this.o.tools.setDeferrable(e.id, !this.loadsUpFront(e))) {
+      this.o.log.info({ plugin: id, alwaysLoad: this.loadsUpFront(e) }, 'tool loading changed');
+      this.emit(e);
+    }
+    return this.statusOf(e);
+  }
+
   private statusOf(e: Entry): PluginStatus {
     const version = e.loaded?.manifest?.version;
     const pid = e.proc?.pid;
+    const tools = this.o.tools.namesOf(e.id);
+    const probe = this.deferredProbe;
+    const deferred = probe ? tools.filter((n) => probe(n)).length : 0;
     return {
       id: e.id,
       kind: e.kind,
       state: e.state,
       enabled: e.enabled,
       origin: e.origin,
-      tools: this.o.tools.namesOf(e.id),
+      tools,
+      alwaysLoad: this.loadsUpFront(e),
+      ...(deferred > 0 ? { deferredTools: deferred } : {}),
       ...(version !== undefined ? { version } : {}),
       ...(pid !== undefined ? { pid } : {}),
       ...(pid !== undefined && e.rssBytes !== undefined ? { memoryBytes: e.rssBytes } : {}),
@@ -540,6 +577,7 @@ export class PluginHost {
     if (!e) return;
     const next = s ?? { enabled: e.origin === 'inproc', config: {} };
     if (JSON.stringify(next.config ?? {}) !== JSON.stringify(e.config)) await this.updateConfig(id, next.config ?? {});
+    if (next.alwaysLoad !== e.alwaysLoad) this.setAlwaysLoad(id, next.alwaysLoad);
     if (next.enabled && !e.enabled) await this.enable(id, false);
     if (!next.enabled && e.enabled) await this.disable(id, false);
   }
@@ -616,7 +654,8 @@ export class PluginHost {
     const p = e.inproc as InprocPlugin;
     await p.start(this.contextFor(e));
     try {
-      this.o.tools.registerAll(p.id, p.tools?.() ?? []);
+      const deferrable = !this.loadsUpFront(e);
+      this.o.tools.registerAll(p.id, deferrable ? (p.tools?.() ?? []).map((t) => ({ ...t, deferrable: true })) : (p.tools?.() ?? []));
     } catch (err) {
       await p.stop();
       throw err;
@@ -898,6 +937,7 @@ export class PluginHost {
       ...(d.flags ? { flags: d.flags } : {}),
       ...(d.timeoutMs !== undefined ? { timeoutMs: d.timeoutMs } : {}),
       ...(d.approval && typeof d.approval === 'object' ? { approval: d.approval } : {}),
+      ...(this.loadsUpFront(e) ? {} : { deferrable: true }),
       handler: async (input, ctx) => {
         const proc = e.proc;
         if (!proc || e.state !== 'running') return { text: `plugin ${e.id} is not running`, failed: true };

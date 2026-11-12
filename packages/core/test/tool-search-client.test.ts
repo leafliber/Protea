@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { ToolResultBlock, ToolUseBlock } from '@protea/protocol';
 import {
-  MCP_CALL,
-  MCP_SEARCH,
+  TOOL_CALL,
+  TOOL_SEARCH,
   ToolDispatcher,
   ToolExposure,
   ToolRegistry,
@@ -19,8 +19,11 @@ import {
 const spec = (name: string, extra: Partial<ToolSpec<never>> = {}): ToolSpec<never> =>
   ({ name, description: `Tool ${name}.`, inputSchema: { type: 'object' }, handler: () => 'ok', ...extra }) as ToolSpec<never>;
 
-/** 3 kernel tools and two MCP servers; `a` has 6 tools, `b` has 2. Nothing can search for the model. */
-function setup(s: Partial<ToolSearchSettings> = {}, notes: Record<string, string> = {}) {
+/**
+ * 3 kernel tools and two MCP servers; `a` has 6 tools, `b` has 2. With `plugins`, a plugin `sh`
+ * whose 3 tools may be deferred and a connector `tg` whose tool always loads. Nothing can search for the model.
+ */
+function setup(s: Partial<ToolSearchSettings> = {}, notes: Record<string, string> = {}, o: { plugins?: boolean } = {}) {
   const tools = new ToolRegistry();
   const ran: Array<{ name: string; input: unknown }> = [];
   for (const n of ['idle', 'memory', 'chat_send']) tools.register('core', spec(n));
@@ -41,7 +44,22 @@ function setup(s: Partial<ToolSearchSettings> = {}, notes: Record<string, string
     );
   }
   for (let i = 0; i < 2; i++) tools.register('mcp:b', spec(`mcp__b__u${i}`, { deferrable: true }));
-  const settings: ToolSearchSettings = { mode: 'always', threshold: 40, thresholdTokens: 0, keepPerServer: 1, ...s };
+  if (o.plugins) {
+    for (const n of ['sh_run', 'sh_job_start', 'sh_job_logs']) {
+      tools.register(
+        'sh',
+        spec(n, {
+          deferrable: true,
+          handler: ((input: unknown) => {
+            ran.push({ name: n, input });
+            return `ran ${n}`;
+          }) as never,
+        }),
+      );
+    }
+    tools.register('tg', spec('tg_send_chat'));
+  }
+  const settings: ToolSearchSettings = { mode: 'always', threshold: 40, thresholdTokens: 0, keepPerOwner: 1, ...s };
   const exposure = new ToolExposure({ tools, settings: () => settings, usage: () => 0, supported: () => false, ownerNote: (owner) => notes[owner] });
   for (const t of clientSearchTools(exposure, tools)) tools.register('core', t);
   return { tools, exposure, ran };
@@ -53,20 +71,20 @@ const ctx = { signal: new AbortController().signal, sessionId: 'main', batchId: 
 const text = (b: ToolResultBlock | undefined): string => (typeof b?.content === 'string' ? b.content : JSON.stringify(b?.content));
 
 describe('client-side tool search: a provider that cannot search deferred tools', () => {
-  it('leaves the deferred tools out of the request and offers mcp_search and mcp_call instead', () => {
+  it('leaves the deferred tools out of the request and offers tool_search and tool_call instead', () => {
     const { exposure } = setup();
     const set = exposure.forRequest([], { role: 'main' });
     expect(exposure.modeFor('main')).toBe('client');
     expect(set.toolSearch).toBe(false);
     expect(set.tools.some((t) => t.deferLoading)).toBe(false);
     // Kernel tools, the two search tools, and each server's one kept tool.
-    expect(names(set)).toEqual(['chat_send', 'idle', MCP_CALL, MCP_SEARCH, 'memory', 'mcp__a__t0', 'mcp__b__u0']);
+    expect(names(set)).toEqual(['chat_send', 'idle', 'memory', TOOL_CALL, TOOL_SEARCH, 'mcp__a__t0', 'mcp__b__u0']);
     expect(exposure.deferredNames()).toEqual(['mcp__a__t1', 'mcp__a__t2', 'mcp__a__t3', 'mcp__a__t4', 'mcp__a__t5', 'mcp__b__u1']);
   });
 
   it('does not offer the search tools when nothing is held back', () => {
     const { exposure } = setup({ mode: 'never' });
-    expect(names(exposure.forRequest([], { role: 'main' }))).not.toContain(MCP_SEARCH);
+    expect(names(exposure.forRequest([], { role: 'main' }))).not.toContain(TOOL_SEARCH);
     expect(exposure.forRequest([], { role: 'main' }).tools).toHaveLength(11);
     expect(exposure.catalog('main')).toBeNull();
   });
@@ -85,7 +103,7 @@ describe('client-side tool search: a provider that cannot search deferred tools'
     const before = request([]);
     const after = request([
       { role: 'user', content: [{ type: 'text', text: 'click it' }] },
-      { role: 'assistant', content: [use(MCP_SEARCH, { query: 'click' }), use(MCP_CALL, { name: 'mcp__a__t4', arguments: { q: 'x' } }, 'u2')] },
+      { role: 'assistant', content: [use(TOOL_SEARCH, { query: 'click' }), use(TOOL_CALL, { name: 'mcp__a__t4', arguments: { q: 'x' } }, 'u2')] },
     ]);
     expect(after.tools).toEqual(before.tools);
     expect(prefixFingerprint(after)).toBe(prefixFingerprint(before));
@@ -94,9 +112,10 @@ describe('client-side tool search: a provider that cannot search deferred tools'
   it('tells the model which servers have tools on demand, with what each server says about itself', () => {
     const { exposure } = setup({}, { 'mcp:a': 'Drives a browser.\nUse it for pages that need JavaScript.' });
     const catalog = exposure.catalog('main') ?? '';
-    expect(catalog).toContain('- a (5 tools, full name mcp__a__<tool>): Drives a browser. Use it for pages that need JavaScript.');
+    expect(catalog).toContain('# Tools on demand');
+    expect(catalog).toContain('- a (MCP server, 5 tools, full name mcp__a__<tool>): Drives a browser. Use it for pages that need JavaScript.');
     expect(catalog).toContain('  t1, t2, t3, t4, t5');
-    expect(catalog).toContain('- b (1 tools, full name mcp__b__<tool>)');
+    expect(catalog).toContain('- b (MCP server, 1 tool, full name mcp__b__<tool>)');
     // A fork is told only about the tools it may use.
     expect(exposure.catalog('fork', new Set(['mcp__b__u1']))).not.toContain('- a (');
     expect(exposure.catalog('fork', new Set(['idle']))).toBeNull();
@@ -109,20 +128,20 @@ describe('client-side tool search: a provider that cannot search deferred tools'
     expect(names(exposure.forRequest([], { role: 'main' }))).toContain('mcp__c__always');
   });
 
-  it('mcp_search returns the description and schema of what matches', async () => {
+  it('tool_search returns the description and schema of what matches', async () => {
     const { tools } = setup();
     const d = new ToolDispatcher(tools, silentLogger());
-    const hit = text((await d.runAll([use(MCP_SEARCH, { query: 'click element' })], ctx)).results[0]);
+    const hit = text((await d.runAll([use(TOOL_SEARCH, { query: 'click element' })], ctx)).results[0]);
     expect(hit).toContain('## mcp__a__t4\nClick an element on the page.');
     expect(hit).toContain('input schema: {"type":"object","required":["q"],"properties":{"q":{"type":"string"}},"additionalProperties":false}');
-    const listed = text((await d.runAll([use(MCP_SEARCH, { server: 'a', limit: 2 })], ctx)).results[0]);
+    const listed = text((await d.runAll([use(TOOL_SEARCH, { source: 'a', limit: 2 })], ctx)).results[0]);
     expect(listed).toContain('## mcp__a__t1');
     expect(listed).toContain('Also matching, without schema (search again to get it): mcp__a__t3, mcp__a__t4, mcp__a__t5');
-    expect((await d.runAll([use(MCP_SEARCH, {})], ctx)).results[0]).toMatchObject({ is_error: true });
-    expect(text((await d.runAll([use(MCP_SEARCH, { server: 'zzz' })], ctx)).results[0])).toContain('servers with such tools: a, b');
+    expect((await d.runAll([use(TOOL_SEARCH, {})], ctx)).results[0]).toMatchObject({ is_error: true });
+    expect(text((await d.runAll([use(TOOL_SEARCH, { source: 'zzz' })], ctx)).results[0])).toContain('sources with such tools: a, b');
   });
 
-  it('mcp_call runs the real tool: its schema, its permission check and its audit apply', async () => {
+  it('tool_call runs the real tool: its schema, its permission check and its audit apply', async () => {
     const { tools, ran } = setup();
     const d = new ToolDispatcher(tools, silentLogger());
     const checked: string[] = [];
@@ -140,7 +159,7 @@ describe('client-side tool search: a provider that cannot search deferred tools'
     d.setTrace((t) => traced.push(`${t.phase}:${t.name}`));
     d.observe((name) => observed.push(name));
 
-    const ok = await d.runAll([use(MCP_CALL, { name: 'mcp__a__t4', arguments: { q: 'x' } })], ctx);
+    const ok = await d.runAll([use(TOOL_CALL, { name: 'mcp__a__t4', arguments: { q: 'x' } })], ctx);
     expect(ok.results[0]).toEqual({ type: 'tool_result', tool_use_id: 'u1', content: 'ran mcp__a__t4' });
     expect(ran).toEqual([{ name: 'mcp__a__t4', input: { q: 'x' } }]);
     expect(checked).toEqual(['mcp__a__t4:{"q":"x"}']);
@@ -149,14 +168,14 @@ describe('client-side tool search: a provider that cannot search deferred tools'
     expect(observed).toEqual(['mcp__a__t4']);
 
     // The target's own schema decides what input is valid.
-    expect(text((await d.runAll([use(MCP_CALL, { name: 'mcp__a__t4', arguments: { nope: 1 } })], ctx)).results[0])).toContain('invalid input for mcp__a__t4');
+    expect(text((await d.runAll([use(TOOL_CALL, { name: 'mcp__a__t4', arguments: { nope: 1 } })], ctx)).results[0])).toContain('invalid input for mcp__a__t4');
     // A tool held for approval is held, exactly as if it had been called directly.
-    expect(text((await d.runAll([use(MCP_CALL, { name: 'mcp__a__t5', arguments: { q: 'x' } })], ctx)).results[0])).toBe('pending approval a1');
+    expect(text((await d.runAll([use(TOOL_CALL, { name: 'mcp__a__t5', arguments: { q: 'x' } })], ctx)).results[0])).toBe('pending approval a1');
     expect(ran).toHaveLength(1);
-    // Only MCP tools go through it.
-    expect(text((await d.runAll([use(MCP_CALL, { name: 'chat_send', arguments: {} })], ctx)).results[0])).toContain('chat_send is not an MCP tool: call it directly');
-    expect(text((await d.runAll([use(MCP_CALL, { name: 'mcp__a__gone' })], ctx)).results[0])).toContain('there is no tool mcp__a__gone');
-    expect(text((await d.runAll([use(MCP_CALL, {})], ctx)).results[0])).toContain(`invalid input for ${MCP_CALL}`);
+    // Only the tools that may be held back go through it.
+    expect(text((await d.runAll([use(TOOL_CALL, { name: 'chat_send', arguments: {} })], ctx)).results[0])).toContain('chat_send is in your tool list: call it directly');
+    expect(text((await d.runAll([use(TOOL_CALL, { name: 'mcp__a__gone' })], ctx)).results[0])).toContain('there is no tool mcp__a__gone');
+    expect(text((await d.runAll([use(TOOL_CALL, {})], ctx)).results[0])).toContain(`invalid input for ${TOOL_CALL}`);
   });
 
   it('a fork reaches only the deferred tools on its list', async () => {
@@ -164,11 +183,51 @@ describe('client-side tool search: a provider that cannot search deferred tools'
     const d = new ToolDispatcher(tools, silentLogger());
     const allowed = new Set(['idle', 'mcp__a__t2']);
     // The search tools come with any deferred tool, although the list does not name them.
-    expect(names(exposure.forRequest([], { role: 'fork', allowed }))).toEqual(['idle', MCP_CALL, MCP_SEARCH]);
+    expect(names(exposure.forRequest([], { role: 'fork', allowed }))).toEqual(['idle', TOOL_CALL, TOOL_SEARCH]);
     const fctx = { ...ctx, sessionId: 'f1', allowed };
-    expect(text((await d.runAll([use(MCP_SEARCH, { server: 'a' })], fctx)).results[0])).toMatch(/^1 tool\./);
-    expect(text((await d.runAll([use(MCP_CALL, { name: 'mcp__a__t2', arguments: { q: 'x' } })], fctx)).results[0])).toBe('ran mcp__a__t2');
-    expect(text((await d.runAll([use(MCP_CALL, { name: 'mcp__a__t3', arguments: { q: 'x' } })], fctx)).results[0])).toBe('tool mcp__a__t3 is not available');
+    expect(text((await d.runAll([use(TOOL_SEARCH, { source: 'a' })], fctx)).results[0])).toMatch(/^1 tool\./);
+    expect(text((await d.runAll([use(TOOL_CALL, { name: 'mcp__a__t2', arguments: { q: 'x' } })], fctx)).results[0])).toBe('ran mcp__a__t2');
+    expect(text((await d.runAll([use(TOOL_CALL, { name: 'mcp__a__t3', arguments: { q: 'x' } })], fctx)).results[0])).toBe('tool mcp__a__t3 is not available');
     expect(ran.map((r) => r.name)).toEqual(['mcp__a__t2']);
+  });
+
+  it('holds back plugin tools that may be deferred, and keeps connectors and always-load plugins loaded', () => {
+    const { exposure } = setup({}, {}, { plugins: true });
+    const set = names(exposure.forRequest([], { role: 'main' }));
+    // The connector's tool loads; of sh's three, the most used (here: the first by name) stays.
+    expect(set).toContain('tg_send_chat');
+    expect(set).toContain('sh_job_logs');
+    expect(exposure.deferredNames()).toEqual(expect.arrayContaining(['sh_job_start', 'sh_run']));
+    expect(exposure.deferredNames()).not.toContain('tg_send_chat');
+    const catalog = exposure.catalog('main') ?? '';
+    expect(catalog).toContain('- sh (plugin, 2 tools)\n  sh_job_start, sh_run');
+    expect(catalog).not.toContain('tg');
+  });
+
+  it('a plugin tool is found by its plugin and run through tool_call like an MCP tool', async () => {
+    const { tools, ran } = setup({}, {}, { plugins: true });
+    const d = new ToolDispatcher(tools, silentLogger());
+    const listed = text((await d.runAll([use(TOOL_SEARCH, { source: 'sh' })], ctx)).results[0]);
+    expect(listed).toMatch(/^2 tools\./);
+    expect(listed).toContain('## sh_job_start');
+    expect(listed).toContain('## sh_run');
+    expect(text((await d.runAll([use(TOOL_SEARCH, { query: 'sh_run' })], ctx)).results[0])).toContain('## sh_run');
+    expect(text((await d.runAll([use(TOOL_CALL, { name: 'sh_run', arguments: { cmd: 'ls' } })], ctx)).results[0])).toBe('ran sh_run');
+    expect(ran).toEqual([{ name: 'sh_run', input: { cmd: 'ls' } }]);
+    expect(text((await d.runAll([use(TOOL_CALL, { name: 'tg_send_chat', arguments: {} })], ctx)).results[0])).toContain('tg_send_chat is in your tool list: call it directly');
+  });
+
+  it('switching a plugin to always load brings its tools back into the request', () => {
+    const { tools, exposure } = setup({}, {}, { plugins: true });
+    expect(exposure.deferredNames()).toContain('sh_run');
+    const rev = tools.revision;
+    expect(tools.setDeferrable('sh', false)).toBe(true);
+    expect(tools.revision).toBeGreaterThan(rev);
+    expect(exposure.deferredNames().filter((n) => n.startsWith('sh_'))).toEqual([]);
+    expect(names(exposure.forRequest([], { role: 'main' }))).toEqual(expect.arrayContaining(['sh_run', 'sh_job_start', 'sh_job_logs']));
+    // Nothing changes when nothing would.
+    expect(tools.setDeferrable('sh', false)).toBe(false);
+    expect(tools.setDeferrable('sh', true)).toBe(true);
+    expect(exposure.deferredNames()).toContain('sh_run');
   });
 });

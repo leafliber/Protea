@@ -90,6 +90,7 @@ Usage:
   protea plugins install --git URL [--ref R] [--subdir D] | --tarball URL
   protea plugins logs <id> [--limit N] [--level L]
   protea plugins enable|disable|reload|restart <id>
+  protea plugins always-load|on-demand <id>     keep a plugin's tools out of tool search, or let them be deferred
   protea plugins config <id> <json>             replace a plugin's configuration (validated, saved)
   protea plugins uninstall <id> [--keep-data]   remove a disabled data-volume plugin
   protea plugins login <id>                     sign in to a plugin (shows a QR code; e.g. wechat, qq)
@@ -552,6 +553,8 @@ async function plugins(sub: string | undefined, args: string[]): Promise<number>
     case 'disable':
     case 'reload':
     case 'restart':
+    case 'always-load':
+    case 'on-demand':
       console.log(formatPlugin(await api<PluginStatus>(o, 'POST', `/api/plugins/${encodeURIComponent(id)}/${sub}`)));
       return 0;
     case 'config': {

@@ -1,6 +1,6 @@
 # MCP 集成
 
-> 状态：Accepted（M3）· 更新：2026-11-03
+> 状态：Accepted（M3）· 更新：2026-11-12
 
 > **实现状态（M3）**：MCP 客户端已实现（`packages/core/src/mcp/`：`settings.ts` 配置校验，`manager.ts` 连接、监督与工具注册，`oauth.ts` OAuth 凭据存储，`names.ts` 工具命名）。服务器只能在 `mcp.servers` 里声明；插件目录形式（`kind: mcp`）、Anthropic 服务端连接器、elicitation 与 Protea 作为 MCP 服务器尚未实现。
 
@@ -67,7 +67,7 @@ mcp:
 ## 5. 工具表与缓存
 
 - 服务器连接/断开、`notifications/tools/list_changed` 直接更新工具表；模型请求总是在回合边界组装，所以变化在下一回合生效。`list_changed` 合并 `mcp.listChangedDebounceMs`（默认 500 ms）后重读列表。
-- 工具总数超过 `context.toolSearch.threshold`（默认 40），或 MCP 工具定义估算超过 `thresholdTokens`（默认 8000 token）时，MCP 工具延迟加载：Provider 能搜索工具时标记 `defer_loading: true` 由它按需加载；不能时（兼容接口、OpenAI 协议）工具不进请求，模型用 `mcp_search` 查定义、用 `mcp_call` 调用，系统前缀的 `mcp-catalog` 段列出每个服务器的说明（它在 `initialize` 里给的 `instructions`）与工具名。`alwaysLoad: true` 的服务器不延迟。每个服务器调用次数最多的 `keepPerServer`（默认 3）个工具保持非延迟（调用次数记在 `tool_stats` 表，排名只在该服务器的工具列表变化时重算）。详见 [12-model-providers.md](12-model-providers.md) §5。
+- 工具总数超过 `context.toolSearch.threshold`（默认 40），或 MCP 工具定义估算超过 `thresholdTokens`（默认 8000 token）时，MCP 工具延迟加载：Provider 能搜索工具时标记 `defer_loading: true` 由它按需加载；不能时（兼容接口、OpenAI 协议）工具不进请求，模型用 `tool_search` 查定义、用 `tool_call` 调用，系统前缀的 `tool-catalog` 段列出每个服务器的说明（它在 `initialize` 里给的 `instructions`）与工具名。`alwaysLoad: true` 的服务器不延迟。每个服务器调用次数最多的 `keepPerOwner`（默认 3）个工具保持非延迟（调用次数记在 `tool_stats` 表，排名只在该服务器的工具列表变化时重算）。插件工具按同样的规则延迟（[07-plugin-system.md](07-plugin-system.md) §7.1）。详见 [12-model-providers.md](12-model-providers.md) §5。
 - Core 不改写描述（P1），但允许操作员用 `descriptionOverrides` 为单个工具替换描述。描述过长的提示在控制台（M5）。
 
 ## 6. 权限与信任

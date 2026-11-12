@@ -141,7 +141,7 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 - 服务器的"信任等级"命名为 `trust: low | normal | high`（待决问题 Q1 的结论）：`low` 时没有 `readOnlyHint` 的工具一律 `ask`，`normal` 时只有显式 `destructiveHint` 的工具 `ask`，`high` 不加限制；`readOnlyHint` 工具默认 `allow`。所有没有 `readOnlyHint` 的 MCP 工具都按"有副作用"审计，没有 owner 时被拒绝。
 - 不声明 sampling 与 elicitation 能力（服务器不应发起这两类请求）；elicitation 转审批留到以后。Anthropic 服务端 MCP 连接器（`remote-passthrough`）未实现。
 - 工具表变化没有单独的"待应用队列"：每次模型请求都在回合边界组装，变化自然在下一回合生效；`list_changed` 合并 500 ms。
-- 只有 MCP 工具会被延迟加载（插件工具总是加载）；"常用前 k 个"按新表 `tool_stats` 的调用次数计算，只在该服务器的工具列表变化时重算，避免前缀抖动。历史里出现过工具搜索结果后，工具搜索保持开启，已消失的被引用工具以"不可用"的延迟占位定义保留，避免请求被拒。
+- 只有 MCP 工具会被延迟加载（插件工具总是加载；2026-11-12 起插件工具也可以按需加载，见 [ADR-0023](../20-decisions/ADR-0023-plugin-tools-on-demand.md)）；"常用前 k 个"按新表 `tool_stats` 的调用次数计算，只在该服务器的工具列表变化时重算，避免前缀抖动。历史里出现过工具搜索结果后，工具搜索保持开启，已消失的被引用工具以"不可用"的延迟占位定义保留，避免请求被拒。
 - 工具描述覆盖为 `descriptionOverrides`（按服务器的原工具名）；描述过长的提示留到控制台（M5）。
 - Skills 增加 `skill_read`（读取 Skill 目录内的文件，限制在目录内）；`shell` 工具（`sh_run`）在 M6 实现，默认不启用；启用前 Skill 的脚本无法执行。重复加载的回执改为"已在本会话加载（工具调用 id）"。Protea 扩展 `metadata.requires-tools`：所需工具不存在时不进目录。
 - Skills 只能从本地目录安装；Git URL 留到 M5。例程把 Skill 作为 Fork 目标、描述相似度诊断未实现。
@@ -374,6 +374,17 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 
 未验证：没有用真实账号调用过（T19）。文档没写明的行为都按保守的方式处理，需要实测确认：更新任务时省略的字段是否保留、清除日期（`null`）是否生效、创建任务不带 `projectId` 是否进收集箱、`task/filter` 不带 `status` 时返回什么、看板列与习惯的状态码含义。
 
+### 插件工具按需加载与"上线前不做兼容"（2026-11-12）
+
+决策见 [ADR-0022](../20-decisions/ADR-0022-no-backward-compatibility-before-launch.md)、[ADR-0023](../20-decisions/ADR-0023-plugin-tools-on-demand.md)。
+
+- 插件工具和 MCP 工具一起参与工具搜索：`plugins.<id>.alwaysLoad`，不写时连接器与进程内插件始终加载、`tool` / `source` 插件可以按需加载；每个来源常用的前 3 个照样加载。切换不重启插件：`POST /api/plugins/:id/always-load` · `/on-demand`、`protea plugins always-load|on-demand <id>`、插件页弹窗的按钮；`PluginStatus` 增加 `alwaysLoad`、`deferredTools`。
+- 改名，不留别名：`mcp_search` → `tool_search`（参数 `server` → `source`），`mcp_call` → `tool_call`，系统段 `mcp-catalog` → `tool-catalog`，`context.toolSearch.keepPerServer` → `keepPerOwner`。
+- 修复：通过接口改插件配置或加载方式时，`config.yaml` 里那一组总是写上 `enabled`；之前只写 `config` 会让默认运行的内置插件在下次热加载时被停掉。
+- 开发与文档规范写入"上线前不做向前兼容"（[05-conventions.md](05-conventions.md)「版本」）。
+
+未验证：真实模型是否会用 `tool_search {source: <插件>}` 找到并调用被延迟的插件工具（并入 T17 第 2 步）。开发实例的 `config.yaml` 若写了 `keepPerServer`，要手动改成 `keepPerOwner`。
+
 ### 权限模式与 auto 判断模型（2026-11-10）
 
 决策见 [ADR-0015](../20-decisions/ADR-0015-permission-modes-and-auto-review.md)。
@@ -394,6 +405,7 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 - [ ] 软告警（[15-observability.md](../10-architecture/15-observability.md) §6）：缓存命中率连续低、插件反复重启、预算 90%、拒答连续发生、pending 老化超过两倍 `maxWait`、SQLite 超阈值；控制台横幅 + 可选的 L2 `internal` 事件。
 - [ ] `permissions.conditions`（按批等级、参数、时间窗）与外发白名单 `permissions.egress`。
 - [ ] 镜像发布到镜像仓库（GHCR）并签名（cosign 或来源证明）；CI 在 tag 上发布；README 的"镜像还没有发布"改掉。
+- [ ] 用新的 ADR 取代 [ADR-0022](../20-decisions/ADR-0022-no-backward-compatibility-before-launch.md)（上线前不做向前兼容）：从此破坏性改动要有迁移、别名或弃用期并写进变更记录；同步改 [05-conventions.md](05-conventions.md)「版本」。
 - [ ] 打 `v1.0.0`：`package.json` 版本、镜像标签、变更记录。
 
 **验收**（草案）：
