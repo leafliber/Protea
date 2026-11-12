@@ -34,7 +34,7 @@
 
 ## 后果
 
-- 内置插件目前工具都很少（`shell` 6 个，其余不超过 2 个），默认配置下几乎不会有插件工具被延迟；收益在装了很多第三方插件后出现。
+- 内置插件里工具多的是 `dida365`（`source`，27 个工具）：启用它后工具总数超过 40，按默认配置它的工具除常用的 3 个外都按需加载；嫌搜索多一轮可以设 `plugins.dida365.alwaysLoad: true`，或用它自己的 `toolsets` 关掉用不到的组。其余内置插件工具很少（`shell` 6 个，其余不超过 2 个），实际不受影响。
 - 插件的 `ENV_PROMPT` 本来就点了工具名，被延迟的插件工具不需要额外说明；但插件很多时 `env:<plugin>` 段本身也会变长，这次不处理。
 - 已有开发实例：`config.yaml` 里的 `context.toolSearch.keepPerServer` 不再生效（被忽略，取默认 3），要改成 `keepPerOwner`。旧对话历史里的 `mcp_search` / `mcp_call` 调用对应的工具已不存在，模型会收到"没有这个工具"。
 - 通过接口写回 `config.yaml` 时，插件的那一组总是带上 `enabled`（改配置也一样）：只写了 `alwaysLoad` 或 `config` 的一组会被读成「未启用」，下次热加载时会停掉原本默认运行的内置插件（`cron`、`console`、`webchat`）。

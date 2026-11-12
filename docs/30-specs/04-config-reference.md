@@ -126,6 +126,11 @@ plugins:                             # 每个插件一组：enabled（未列出�
   filewatch:
     enabled: true
     config: { paths: [inbox] }
+  dida365:                             # 滴答清单；需要秘密 DIDA365_TOKEN（设置 → 账户 → API Token）
+    enabled: true
+    config:
+      timeZone: Asia/Shanghai          # 读写时间的时区，默认守护进程时区；还有 apiBase、defaultProjectId、toolsets、maxResults、timeoutSec
+      reminders: { enabled: true, dailyAt: "09:00" }   # 任务到期事件；还有 intervalMin、leadMin、overdue、level、projectIds
 
 pluginHost:                            # 进程外插件的监督
   restartBackoffMs: [1000, 2000, 4000, 8000, 16000, 32000, 60000]   # 第 n 次崩溃后的重启延迟，末项重复

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { ScriptedProvider, reply, sleep, textReply, toolCall, type ProviderRequest } from '@protea/core';
 import type { EventInput, SchedulerAction } from '@protea/protocol';
 import { CronPlugin } from '@protea/plugin-cron';
+import { createDida365Plugin } from '../../../plugins/dida365/src/plugin.js';
 import { createFilewatchPlugin } from '../../../plugins/filewatch/src/plugin.js';
 import { createImapPlugin } from '../../../plugins/imap/src/plugin.js';
 import { createQqPlugin } from '../../../plugins/qq/src/plugin.js';
@@ -129,6 +130,8 @@ describe('M6 default policy review', () => {
 
   it('every side-effect tool of a built-in plugin asks by default, except messages to the owner', () => {
     const defs: Array<[string, Array<{ name: string; flags?: { sideEffect?: boolean } }>]> = [
+      // All of its tools: every tool set is on by default.
+      ['dida365', (createDida365Plugin().tools as (host: unknown) => unknown)({ config: {}, timezone: 'UTC', secret: () => undefined }) as never],
       ['filewatch', createFilewatchPlugin().tools as never],
       ['imap', createImapPlugin().tools as never],
       ['rss', createRssPlugin().tools as never],
@@ -149,7 +152,30 @@ describe('M6 default policy review', () => {
         if (!OWNER_FACING.has(t.name)) expect(manifest.sideEffectTools ?? [], `${t.name} must ask by default`).toContain(t.name);
       }
     }
-    expect(reviewed.sort()).toEqual(['qq_group_reply', 'sh_job_start', 'sh_job_stop', 'sh_reset', 'sh_run', 'tg_react', 'tg_send_chat']);
+    expect(reviewed.sort()).toEqual([
+      'dida_column_save',
+      'dida_comment_add',
+      'dida_delete',
+      'dida_focus_create',
+      'dida_group_save',
+      'dida_habit_checkin',
+      'dida_habit_save',
+      'dida_project_save',
+      'dida_tag_create',
+      'dida_task_assign',
+      'dida_task_batch',
+      'dida_task_complete',
+      'dida_task_create',
+      'dida_task_move',
+      'dida_task_update',
+      'qq_group_reply',
+      'sh_job_start',
+      'sh_job_stop',
+      'sh_reset',
+      'sh_run',
+      'tg_react',
+      'tg_send_chat',
+    ]);
     for (const p of [new CronPlugin()]) {
       for (const t of p.tools()) if (t.flags?.sideEffect) expect(OWNER_FACING.has(t.name) || ((p as { sideEffectTools?: readonly string[] }).sideEffectTools ?? []).includes(t.name), t.name).toBe(true);
     }

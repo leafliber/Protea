@@ -79,6 +79,7 @@ Long messages: split at ~3500 characters. Use tg_react for lightweight acknowled
 | `filewatch` | source | L3 | 监视 `/data/inbox` 等目录 | M2 ✓ |
 | `rss` | source | L4 | 定时抓取，按条目去重 | M3 ✓ |
 | `imap` | source | L2 | IDLE/轮询；邮件到达事件 + `mail_fetch` 工具 | M3 ✓ |
+| `dida365` | source+tool | L2 | 滴答清单 Open API：任务、清单、标签、评论、专注、习惯、倒数日的工具；可选的任务到期事件（轮询） | 2026-11-12 |
 | `slack` / `discord` | connector | L1 | 社区实现优先 | M7+ |
 | `caldav` | source+tool | L2 | 日历提醒事件 + 查询工具 | M7+ |
 
@@ -126,6 +127,21 @@ Long messages: split at ~3500 characters. Use tg_react for lightweight acknowled
 - 工具 `qq_group_reply {message_id, text}`（只在 `groups` 开时提供，默认需要审批）：在群里回复一条投递过的 @消息。
 - 网关拒绝（不可恢复的关闭码，如 4914 机器人下线或仅沙箱可用、4915 被封禁）：不再重连，健康检查报告原因，推一条 L2 的 `qq.connection_refused`，同一次拒绝只推一次。
 - 配置：`appId`、`groups`（均 `x-hot: false`）、`stopWords`；`apiBase`、`tokenBase`、`bindBase`（`x-hot: false`，测试用）。
+
+### 6.5 滴答清单
+
+**dida365**（秘密 `DIDA365_TOKEN`：滴答清单 设置 → 账户 → API Token 创建的个人令牌，作为 Bearer 发送；官方文档 <https://developer.dida365.com/docs#/openapi>）：
+- 不实现 OAuth：个人令牌是文档推荐的个人用法，免去注册应用和回调地址。`apiBase` 默认 `https://api.dida365.com`，TickTick 国际版改成 `https://api.ticktick.com`，接口相同。
+- 工具（前缀 `dida_`，27 个，覆盖文档里除撤销令牌之外的全部接口）：
+  - 总是提供：`dida_status`（检查令牌、账户时区、提醒状态）、`dida_delete {type: task|comment|project|project_group|focus}`（能删什么取决于开了哪些工具组）。
+  - `tasks`：`dida_task_undone`（≤14 天内未完成）、`dida_task_filter`、`dida_task_search`、`dida_task_completed`、`dida_task_get`（可带评论）、`dida_task_create`、`dida_task_update`、`dida_task_complete`（一个走单个接口，多个按 50 个一批）、`dida_task_move`、`dida_task_batch`、`dida_task_assign`（`assignee: null` 取消指派）、`dida_comment_add`。
+  - `projects`：`dida_project_list`（含清单分组）、`dida_project_get`（看板列、未完成任务、成员）、`dida_project_save`、`dida_group_save`、`dida_column_save`；`tags`：`dida_tag_list`、`dida_tag_create`；`focus`：`dida_focus_list`、`dida_focus_create`；`habits`：`dida_habit_list`（分组、打卡记录）、`dida_habit_save`、`dida_habit_checkin`；`countdowns`：`dida_countdown_list`。
+  - 只读工具标 `readOnly`；其余标 `sideEffect` 并列入清单的 `sideEffectTools`，默认要审批，并各自声明 `approval`（中英文标题、最关键的输入与其余字段，[ADR-0021](../20-decisions/ADR-0021-readable-approval-requests-and-delivery.md)），授权请求里能直接看出要新建、修改或删除的是什么。
+- 时间：模型写日期（`2026-11-13`，全天）、墙上时间（`2026-11-13T15:00`，按 `timeZone` 解读，默认守护进程时区）或带偏移的时刻；插件换算成接口的 `yyyy-MM-dd'T'HH:mm:ssZ`（一律写 UTC）。读出的时间按同一时区显示，全天任务按任务自己的时区取日期。优先级用 `none|low|medium|high`（0/1/3/5），状态用 `open|completed|abandoned`（0/2/-1）。
+- 修改任务先读后写：文档没说更新接口会不会清空请求里没有的字段，所以 `dida_task_update` 与 `dida_task_batch` 的 `update` 先取回任务，把可编辑字段全部带上再叠加改动（子任务按 id 保留原有字段）。项目、分组、看板列、习惯的修改只发改动的字段（文档把这些字段都列为可选）。
+- 路径里的 id 逐段转义，不能拼出别的路径。错误回执写明状态码、接口返回的错误和处理提示（401 提示重新生成令牌），令牌不进回执和日志。清单名每 5 分钟缓存一次，只用来给列表加名字，读不到时只显示 id。
+- 到期提醒（`reminders.enabled`，默认关）：Open API 没有推送，插件每 `intervalMin`（默认 5）分钟用 `task/filter` 读未完成任务。定时任务在开始时间（`leadMin` 可提前）报一条 `dida365.task_due`；全天任务在当天 `dailyAt`（默认 09:00）报；`overdue` 开时（默认）每天 `dailyAt` 之后报一条 `dida365.overdue`，列出更早日期仍未完成的任务（最多 20 条）。等级 `level`（默认 3 `debounce`；2 `flush`；4 `piggyback`），`projectIds` 可限定清单。`dedupeKey` 为 `due:<任务 id>:<时刻>` 与 `overdue:<日期>`，重复任务完成后滚到下一次会再报。第一次检查只划线、不补报；之后每次从上次完整检查的时刻接着看，停机或接口故障最多补一天；事件入库后才记为已报，检查整轮成功才前移，崩溃只会重报、不会漏。状态在 kv 的 `reminders`。
+- 配置：`apiBase`、`timeZone`、`defaultProjectId`（新任务的默认清单，默认收集箱）、`toolsets`（`x-hot: false`）、`maxResults`（列表最多返回几条，默认 50）、`timeoutSec`、`reminders { enabled, intervalMin, leadMin, dailyAt, overdue, level, projectIds }`。
 
 ## 7. 编写一个最小事件源（TypeScript）
 
