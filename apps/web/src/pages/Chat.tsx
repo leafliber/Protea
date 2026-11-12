@@ -33,7 +33,7 @@ const PLATFORM = 'webchat';
 
 const PENDING_TEXT: Record<ChatPending, string> = { images: '正在准备图片…', choices: '正在准备选项…', widget: '正在生成小组件…' };
 
-const SOURCE_LABEL: Record<string, string> = { cron: '定时提醒', core: '后台任务', telegram: 'Telegram', wechat: '微信', qq: 'QQ', rss: '订阅更新', imap: '新邮件', webhook: 'Webhook', filewatch: '文件变化', shell: '命令' };
+const SOURCE_LABEL: Record<string, string> = { cron: '定时提醒', core: '后台任务', telegram: 'Telegram', wechat: '微信', qq: 'QQ', rss: '订阅更新', imap: '新邮件', dida365: '滴答清单', webhook: 'Webhook', filewatch: '文件变化', shell: '命令' };
 
 function dayLabel(iso: string): string {
   const d = new Date(iso);
