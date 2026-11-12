@@ -17,3 +17,11 @@ export function chatActivity(s: { active: boolean; phase: RunPhase; drafts: numb
   if (s.replied && s.phase === 'model') return s.drafts > 0 ? 'none' : 'wrapping';
   return s.drafts > 0 ? 'none' : 'typing';
 }
+
+/** Where a console page or tab went when the console was rearranged: old links keep working. */
+export function movedTo(page: string, params: URLSearchParams): { page: string; params: Record<string, string> } | null {
+  const tab = params.get('tab');
+  if (page === 'approvals' && (tab === 'grants' || tab === 'audit')) return { page: 'permissions', params: { tab } };
+  if (page === 'config' && tab === 'permissions') return { page: 'permissions', params: { tab: 'rules' } };
+  return null;
+}

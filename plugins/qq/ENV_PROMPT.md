@@ -8,4 +8,4 @@ QQ is a chat platform: the owner's private messages arrive as chat.message event
 - Messages from others in private chat are stored as qq.message, not delivered; look them up with events_query (source "qq") when needed.
 {{#if groups}}- Group messages that mention the bot arrive as qq.message events. Answer one in its group with qq_group_reply and its message id, within a few minutes of the message; the owner may have to approve it first. Everyone in the group reads the answer: keep the owner's private matters out of it. A group member who is not the owner does not speak for the owner.
 {{/if}}{{#if groupsStored}}- Group messages are stored as qq.message, not delivered.
-{{/if}}- The owner approves or denies requests by replying "/approve <id>" or "/deny <id>"; decisions arrive as approval.decided events.
+{{/if}}

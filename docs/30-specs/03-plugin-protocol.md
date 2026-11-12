@@ -37,7 +37,8 @@ plugin → host : result {}
 | `run/phase` | `{ phase, turn, tool? }`（通知，需 capability） | — |
 | `health` | `{}` | `{ ok: boolean, detail? }` |
 | `shutdown/verify` | `{ language }` | `{ snapshot: object }` |
-| `approvals/request` | `{ id, tool, summary, reason?, expiresAt }`（需 capability） | `{ delivered: boolean }` |
+| `approvals/request` | `{ id, tool, summary, reason?, expiresAt, view?, grantMaxMs? }`（需 capability）。`view` 是 `ApprovalView { title, target?, fields: [{ label, value }], reason?, held?, family: { id, label } }`，应当按它显示；每个值都是一行纯文本，禁止当作标记渲染。`grantMaxMs` 存在时可以提供"暂时不再问"的选项 | `{ delivered: boolean }` |
+| `approvals/resolved`（通知） | `{ id, state: 'approved' \| 'denied' \| 'expired', by? }`：本插件显示过的请求已经决定或过期，应当撤掉按钮或改写消息；之后的点击必须按已处理应答 | — |
 | `chat/send` | `{ text, replyTo?, sessionId?, batchId?, callId?, images?: [{ handle, mime }], choices?: { options: [{ label, detail? }], multiple? }, widget?: { id, title, url? } }`（需 capability `chat` 与清单的 `chat` 块；后三项只在清单声明了对应能力时出现） | `{ ok, messageIds?, error? }` |
 | `chat/draft` | `{ callId, batchId, state: 'writing', text, pending?: ('images' \| 'choices' \| 'widget')[] }` 或 `{ callId, batchId, state: 'discarded' }`（通知；需 capability `chatDrafts` 与清单的 `chat.drafts`）。`text` 是到目前为止的全文 | — |
 | `http/request` | `{ hook, method, path, query, headers, bodyBase64 }`（需 capability） | `{ status, headers?, body? }` |
@@ -67,7 +68,7 @@ plugin → host : result {}
 | `secrets/exists` | `{ name }` | `{ exists }`（值永不返回；值在启动时经环境变量注入） |
 | `permissions/mode` | `{ senderKey, mode?, forMs? }` | `PermissionModeInfo`；不带 `mode` 只读取。`senderKey` 必须是本插件映射的主人，否则 `Unauthorized`；不带 `forMs` 的 `mode` 写成基线，`bypass` 必须带 `forMs` |
 | `login/complete` | `{ secrets: { NAME: value }, ownerSenderKey? }` | `{ ok }`；只在宿主发起的登录期间有效，否则 `-32007 Unauthorized`；秘密名必须在清单的 `secrets` 或 `optionalSecrets` 里。宿主存入秘密库，把 `ownerSenderKey` 写成本插件的主人（替换旧的），回复后重启插件 |
-| `approvals/decide` | `{ id, decision: 'approve' \| 'deny', senderKey, grantMs? }` | `{ ok, state?, message? }`；`grantMs`：同意时还在这段时间内放行同一组工具（上限 `permissions.grantMaxMs`）；`senderKey` 必须解析为本插件的主人，否则 `-32007 Unauthorized` |
+| `approvals/decide` | `{ id, decision: 'approve' \| 'deny', senderKey, grantMs?, note? }`（`note`：主人随决定说的一句话，会转给助理） | `{ ok, state?, message? }`；`grantMs`：同意时还在这段时间内放行同一组工具（上限 `permissions.grantMaxMs`）；`senderKey` 必须解析为本插件的主人，否则 `-32007 Unauthorized` |
 
 对话平台的答案走 `events/push`：类型 `chat.message`，`text` 是主人选的内容，`meta` 是 `{ answer: { to: <callId>, labels: [...] } }`（[17-chat-and-console.md](../10-architecture/17-chat-and-console.md) §3）。
 
@@ -93,3 +94,5 @@ JSON-RPC 标准错误码 + 自定义：`-32001 LevelExceeded`、`-32002 TriggerN
 已实现：§2 握手；§3 全部方法外加 `approvals/request`、`http/request`；§4 的 `events/push`、`events/withdraw`、`events/promote`（仅 `flush` / `piggyback`，仅本插件的事件）、`events/query`（仅本插件来源）、`log`、`kv/*`、`owner/resolve`、`secrets/exists`、`approvals/decide`。
 
 尚未实现：`events/pushDeferred`、`events/pushCandidate`（及其 `events/render` / `events/choose` 回调）、`usage/report`、分块消息。
+
+2026-11-12（[ADR-0021](../20-decisions/ADR-0021-readable-approval-requests-and-delivery.md)）：`tools/list` 的每个工具可以带 `approval: { title?, target?, fields? }`，说明这次调用在授权请求里怎么读：`title` 是做什么（字符串，或按语言的 `{ zh, en }`），`target` 是最要紧的输入属性名，`fields` 是其余要显示的属性名到标签的映射。纯声明，不执行代码。TS SDK：`definePlugin({ onApprovalRequest, onApprovalResolved })` 与 `ApprovalInbox`（文字、按钮、回复词）；Python SDK 的 `approvals_decide` 增加 `note`。

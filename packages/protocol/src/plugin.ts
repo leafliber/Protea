@@ -1,6 +1,6 @@
 /** Out-of-process plugin contract: manifest and protocol messages (docs/30-specs/02, 03). */
 import type { EventInput, Level, TerminalOutcome, Trigger } from './events.js';
-import type { PermissionMode } from './control.js';
+import type { ApprovalView, PermissionMode } from './control.js';
 import type { RunPhase } from './session.js';
 
 export const PLUGIN_API_VERSION = 1;
@@ -144,6 +144,24 @@ export interface ToolDecl {
   inputSchema: Record<string, unknown>;
   flags?: { endsTurn?: boolean; barrierAfter?: boolean; interruptible?: boolean; readOnly?: boolean; sideEffect?: boolean };
   timeoutMs?: number;
+  /** How a call reads in an approval request. */
+  approval?: ApprovalPresentation;
+}
+
+/** A text, or one per language (`{ zh, en }`); `en` is the fallback. */
+export type Localized = string | Record<string, string>;
+
+/**
+ * How a tool's call reads when the owner is asked to approve it. Declarative: names of
+ * input properties, never code.
+ */
+export interface ApprovalPresentation {
+  /** What the call does: "Run a command". */
+  title?: Localized;
+  /** The input property that matters most (the command, the recipient). */
+  target?: string;
+  /** Other input properties to show, in this order, with their labels. */
+  fields?: Record<string, Localized>;
 }
 
 // —— host → plugin ——
@@ -242,10 +260,22 @@ export interface HealthResult {
 export interface ApprovalRequestParams {
   id: string;
   tool: string;
-  /** Redacted, size-limited summary of the input. */
+  /** One readable line about the call (redacted). */
   summary: string;
   reason?: string;
   expiresAt: string;
+  /** The request as a person reads it; render this rather than `summary`. */
+  view?: ApprovalView;
+  /** The owner may also allow the call's tool family for up to this long; absent when grants are off. */
+  grantMaxMs?: number;
+}
+
+/** `approvals/resolved` (notification): a request this plugin showed is no longer open. */
+export interface ApprovalResolvedParams {
+  id: string;
+  state: 'approved' | 'denied' | 'expired';
+  /** Who decided (`<plugin>:<senderKey>` or `console:<role>`); absent when it expired. */
+  by?: string;
 }
 
 /** `chat/send`: deliver this to the owner on the plugin's platform. */
@@ -322,6 +352,8 @@ export interface ApprovalDecideParams {
   senderKey: string;
   /** With an approval: also allow this tool family for this long (capped by permissions.grantMaxMs). */
   grantMs?: number;
+  /** What the owner said with the decision; it reaches the assistant. */
+  note?: string;
 }
 
 /** `permissions/mode`: read the permission mode, or change it with `mode`. */
@@ -370,6 +402,7 @@ export const HOST_TO_PLUGIN = {
   health: 'health',
   shutdownVerify: 'shutdown/verify',
   approvalsRequest: 'approvals/request',
+  approvalsResolved: 'approvals/resolved',
   chatSend: 'chat/send',
   chatDraft: 'chat/draft',
   httpRequest: 'http/request',

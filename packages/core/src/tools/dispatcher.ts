@@ -2,7 +2,7 @@ import { blobImageBlock, blobImagesIn, type ContentBlock, type ToolCallTrace, ty
 import type { Logger } from '../observability/logger.js';
 import type { GuardDecision, ToolGuard } from '../permissions/guard.js';
 import { errorMessage } from '../util/errors.js';
-import type { ToolRegistry } from './registry.js';
+import { splitApprovalMeta, type ApprovalMeta, type ToolRegistry } from './registry.js';
 import type { ToolContext, ToolOutcome } from './types.js';
 
 export const MAX_RESULT_CHARS = 100_000;
@@ -155,7 +155,18 @@ export class ToolDispatcher {
     return r;
   }
 
-  private async runOne(use: ToolUseBlock, dctx: DispatchContext, refused?: string): Promise<OneResult> {
+  private async runOne(written: ToolUseBlock, dctx: DispatchContext, refused?: string): Promise<OneResult> {
+    // `_approval` is for the owner, not for the tool: it is taken off before the input is checked, hashed or run.
+    let use = written;
+    let approval: ApprovalMeta | undefined;
+    const known = this.registry.get(written.name);
+    if (known) {
+      const split = splitApprovalMeta(known, written.input);
+      if (split.meta) {
+        use = { ...written, input: split.input };
+        approval = split.meta;
+      }
+    }
     const fail = (text: string): OneResult => {
       this.log.info({ tool: use.name, callId: use.id, reason: text.slice(0, 200) }, 'tool not run');
       return { block: { type: 'tool_result', tool_use_id: use.id, content: text, is_error: true }, endsTurn: false };
@@ -177,7 +188,7 @@ export class ToolDispatcher {
 
     let decision: GuardDecision | null = null;
     if (this.guard) {
-      const gctx = { sessionId: ctx.sessionId, batchId: ctx.batchId, level: ctx.batchLevel, signal: interrupt ? AbortSignal.any([ctx.signal, interrupt]) : ctx.signal };
+      const gctx = { sessionId: ctx.sessionId, batchId: ctx.batchId, level: ctx.batchLevel, signal: interrupt ? AbortSignal.any([ctx.signal, interrupt]) : ctx.signal, ...(approval ? { approval } : {}) };
       try {
         decision = await this.guard.check(def, use, gctx);
       } catch (err) {

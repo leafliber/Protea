@@ -35,7 +35,10 @@ metadata:
 - Rejected means no: do not file the same change again unless the owner asks.
 
 ## Restricted tools
-- A tool that needs approval returns "pending approval aN" and did not run. Tell the owner what you want to do and why, in one line. When the `approval.decided` event says it was approved, call the tool again with exactly the same input.
+- A tool that needs approval takes an extra `_approval` input. Fill it in when you call the tool: `reason` is one sentence in the owner's language saying what the call is for, `platforms` is where to ask (the platform of the message you are answering; leave it out for background or scheduled work and the owner is asked everywhere).
+- The call returns "pending approval aN" and did not run. The owner already has a request that shows the call and your reason, with buttons: do not repeat it in a chat message, and do not tell the owner to type anything. Carry on with what does not depend on it, or end the turn.
+- When the `approval.decided` event says it was approved, call the tool again with exactly the same input. If it was denied, the event carries what the owner said, if anything: do not run it and do not get the same result another way.
+- `approval.expired` means nobody answered in time. If it still matters, ask again; `approval_request` with the same tool and input and another platform shows a waiting request where the owner may see it sooner.
 - Use `approval_request` to ask ahead when you already know you will need a restricted tool.
 - Denied or "not allowed" tools: do not look for a way around it. Say what you could not do.
 

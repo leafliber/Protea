@@ -253,7 +253,7 @@ describe('wechat connector', () => {
     await waitFor(() => host.decisions.length === 1);
     expect(host.decisions[0]).toMatchObject({ id: 'a12', decision: 'approve', senderKey: `wechat:${OWNER}`, grantMs: 3_600_000 });
     await waitFor(() => il.sent.length === 1);
-    expect(il.sent[0]?.text).toBe('a12 approved (and its tools for 1h).');
+    expect(il.sent[0]?.text).toBe('Approved: a12 (not asking again for 1 hour)');
     il.inject({ from: OWNER, text: '/mode' });
     await waitFor(() => il.sent.length === 2);
     expect(il.sent[1]?.text).toMatch(/^Permission mode: ask/);
@@ -276,7 +276,11 @@ describe('wechat connector', () => {
     il.inject({ from: OWNER, text: 'hi' });
     await waitFor(() => host.events.length === 1);
     expect(await host.request('approvals/request', req)).toEqual({ delivered: true });
-    expect(il.sent.at(-1)?.text).toContain('Reply /approve a1');
+    // WeChat has no buttons: the request says how to answer in words, without an id.
+    expect(il.sent.at(-1)?.text).toBe('[Needs your OK] x_y\ndo it\nReply: approve / deny');
+    il.inject({ from: OWNER, text: 'approve' });
+    await waitFor(() => host.decisions.length === 1);
+    expect(host.decisions[0]).toMatchObject({ id: 'a1', decision: 'approve', senderKey: `wechat:${OWNER}` });
   });
 
   it.each([

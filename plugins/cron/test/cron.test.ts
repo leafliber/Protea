@@ -15,7 +15,7 @@ import {
   type Db,
   type ToolContext,
 } from '@protea/core';
-import { CronPlugin } from '../src/index.js';
+import { CronPlugin, describeCron } from '../src/index.js';
 
 const T0 = Date.UTC(2026, 10, 3, 0, 0, 0); // 08:00 in Asia/Shanghai
 const ctx: ToolContext = { signal: new AbortController().signal, callId: 'c', sessionId: 'main', batchId: 'b', batchLevel: 1 };
@@ -120,7 +120,101 @@ describe('CronPlugin', () => {
     expect((await h.call('schedule_delete', { id: 'cfg:brief' })).text).toMatch(/config.yaml/);
     const created = await h.call('schedule_create', { name: 'standup', cron: '30 9 * * 1-5', note: 'daily standup' });
     const id = /created (\S+)/.exec(created.text)?.[1] as string;
-    expect((await h.call('schedule_list', {})).text).toContain('"standup" cron 30 9 * * 1-5 L3 by assistant — daily standup');
+    expect((await h.call('schedule_list', {})).text).toMatch(/"standup" cron 30 9 \* \* 1-5, L3, next 2026-\d\d-\d\dT09:30:00\+08:00, by you — daily standup/);
     expect((await h.call('schedule_delete', { id })).text).toBe(`deleted ${id}`);
+  });
+
+  it('lets the operator add, pause, change, run and delete schedules, and tells the assistant about its own', async () => {
+    const h = host({ schedules: [{ name: 'brief', cron: '0 7 * * *' }] });
+    const changed: string[] = [];
+    h.cron.onChange = (id) => changed.push(id);
+    await h.plugins.startAll();
+    const notices = () => h.store.query({ type: 'schedule.changed' });
+
+    // The operator's own schedule: no notice to the assistant, and the assistant cannot change it.
+    const mine = h.cron.create({ name: 'weekly report', cron: '30 17 * * 5', note: 'remind me' });
+    expect(mine).toMatchObject({ createdBy: 'operator', kind: 'recurring', enabled: true, readOnly: false, fires: 0, human: 'Fri at 17:30', nextAt: '2026-11-06T17:30:00+08:00' });
+    expect((await h.call('schedule_update', { id: mine.id, enabled: false })).text).toMatch(/made by the operator/);
+    expect((await h.call('schedule_delete', { id: mine.id })).text).toMatch(/made by the operator/);
+    expect(() => h.cron.create({ name: 'late', at: '2026-11-02T08:00' })).toThrow(/in the past/);
+    expect(() => h.cron.update('cfg:brief', { enabled: false }, 'operator')).toThrow(/config.yaml/);
+    expect(h.cron.infoOf('cfg:brief')).toMatchObject({ readOnly: true, createdBy: 'config', human: 'Every day at 07:00' });
+    expect(notices()).toHaveLength(0);
+
+    // The assistant's schedule, paused by the operator: it stops firing and the assistant is told.
+    const created = await h.call('schedule_create', { name: 'standup', cron: '*/15 * * * *', note: 'daily standup' });
+    const id = /created (\S+)/.exec(created.text)?.[1] as string;
+    expect(h.cron.update(id, { enabled: false }, 'operator')).toMatchObject({ enabled: false, createdBy: 'assistant' });
+    expect(h.cron.infoOf(id)?.nextAt).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(31 * 60_000);
+    expect(h.ticks()).toHaveLength(0);
+    expect(notices()).toHaveLength(1);
+    expect(notices()[0]).toMatchObject({ effLevel: 4, origin: 'internal' });
+    expect(notices()[0]?.text).toMatch(/^The operator paused your schedule "standup" \(\S+\) in the console\. It is now: cron \*\/15 \* \* \* \*, L3, paused\.$/);
+    expect((await h.call('schedule_list', {})).text).toMatch(/"standup" cron \*\/15 \* \* \* \*, L3, paused, by you/);
+
+    // Resumed with another rule: it keeps its id and fires on the new rule.
+    expect(h.cron.update(id, { enabled: true, cron: '0 * * * *', name: 'hourly' }, 'operator')).toMatchObject({ id, name: 'hourly', enabled: true, human: 'Every hour on the hour' });
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(h.ticks().map((t) => t.ts)).toEqual(['2026-11-03T09:00:00+08:00']);
+    expect(h.cron.infoOf(id)).toMatchObject({ fires: 1, note: 'daily standup' });
+
+    // Run by hand: a tick now, marked as such, and the timing is untouched.
+    expect(h.cron.runNow('cfg:brief')).toBe(true);
+    const manual = h.ticks().at(-1);
+    expect(manual).toMatchObject({ effTrigger: 'flush', meta: { scheduleId: 'cfg:brief', manual: true } });
+    expect(manual?.text).toContain('run now by the operator');
+    expect(h.cron.infoOf('cfg:brief')).toMatchObject({ fires: 1, nextAt: '2026-11-04T07:00:00+08:00' });
+    expect(h.cron.runNow('nope')).toBe(false);
+
+    // Its own schedule the assistant may change in place.
+    expect((await h.call('schedule_update', { id, note: 'new note', level: 4 })).text).toMatch(/^updated \S+: cron 0 \* \* \* \*, L4, next /);
+    expect(notices()).toHaveLength(2); // the resume above; the assistant's own change tells nobody
+
+    expect(h.cron.removeBy(id, 'operator')).toBe(true);
+    expect(notices().at(-1)?.text).toMatch(/^The operator deleted your schedule "hourly"/);
+    expect(h.cron.removeBy(id, 'operator')).toBe(false);
+    expect(changed).toContain(id);
+    expect(h.cron.preview({ cron: '0 9 * * 1-5' })).toEqual({ human: 'Weekdays at 09:00', next: ['2026-11-04T09:00:00+08:00', '2026-11-05T09:00:00+08:00', '2026-11-06T09:00:00+08:00', '2026-11-09T09:00:00+08:00', '2026-11-10T09:00:00+08:00'] });
+    expect(() => h.cron.preview({ cron: '61 * * * *' })).toThrow(/invalid cron/);
+  });
+
+  it('keeps pauses and run counts across a restart, and reads schedules from before they existed', async () => {
+    const first = host();
+    await first.plugins.startAll();
+    const created = await first.call('schedule_create', { name: 'ping', cron: '*/10 * * * *' });
+    const id = /created (\S+)/.exec(created.text)?.[1] as string;
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    first.cron.update(id, { enabled: false }, 'operator');
+    // A record written by an older version: no `enabled`, no stats.
+    new KvRepo(db).set('plugin:cron', 'schedule:old', { id: 'old', name: 'old one', cron: '0 12 * * *', level: 3, createdBy: 'assistant', createdAt: 'x' });
+    await first.plugins.stopAll();
+
+    const second = host();
+    await second.plugins.startAll();
+    expect(second.cron.infoOf(id)).toMatchObject({ enabled: false, fires: 1 });
+    expect(second.cron.infoOf('old')).toMatchObject({ enabled: true, fires: 0, kind: 'recurring', human: 'Every day at 12:00' });
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(second.ticks()).toHaveLength(1);
+  });
+});
+
+describe('describeCron', () => {
+  it.each([
+    ['*/5 * * * *', '每 5 分钟', 'Every 5 minutes'],
+    ['0 */6 * * *', '每 6 小时', 'Every 6 hours'],
+    ['15 * * * *', '每小时的第 15 分', 'Every hour, at minute 15'],
+    ['0 7 * * *', '每天 07:00', 'Every day at 07:00'],
+    ['30 9 * * 1-5', '每个工作日 09:30', 'Weekdays at 09:30'],
+    ['0 10 * * 6,0', '每个周末 10:00', 'Weekends at 10:00'],
+    ['0 8 * * 1,3', '每周一、周三 08:00', 'Mon, Wed at 08:00'],
+    ['0 9 1 * *', '每月 1 日 09:00', 'Day 1 of every month at 09:00'],
+  ])('reads %s', (expr, zh, en) => {
+    expect(describeCron(expr, 'zh')).toBe(zh);
+    expect(describeCron(expr, 'en')).toBe(en);
+  });
+
+  it('leaves what it cannot put plainly to the expression itself', () => {
+    for (const expr of ['0 9 * 1 *', '0 9 1-7 * 1', '0,30 9 * * *', 'not cron']) expect(describeCron(expr, 'zh')).toBeNull();
   });
 });

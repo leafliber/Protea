@@ -5,6 +5,7 @@ import {
   RPC_ERRORS,
   RpcError,
   type ApprovalRequestParams,
+  type ApprovalResolvedParams,
   type PermissionMode,
   type PermissionModeInfo,
   type BlobGetResult,
@@ -63,7 +64,7 @@ export interface Host<C = Record<string, unknown>> {
   owner: { resolve(senderKey: string): Promise<'owner' | 'unknown'> };
   approvals: {
     /** `grantMs`: with an approval, also allow this tool family for that long. */
-    decide(id: string, decision: 'approve' | 'deny', senderKey: string, opts?: { grantMs?: number }): Promise<{ ok: boolean; state?: string; message?: string }>;
+    decide(id: string, decision: 'approve' | 'deny', senderKey: string, opts?: { grantMs?: number; note?: string }): Promise<{ ok: boolean; state?: string; message?: string }>;
   };
   permissions: {
     /** Read the permission mode, or change it with `mode`; `senderKey` must be the owner. `forMs` makes the change temporary. */
@@ -108,6 +109,8 @@ export interface PluginDefinition<C = Record<string, unknown>> {
   shutdownVerify?(host: Host<C>): Record<string, unknown> | Promise<Record<string, unknown>>;
   /** Deliver an approval request to the owner. Declaring it advertises the `approvals` capability. */
   onApprovalRequest?(host: Host<C>, req: ApprovalRequestParams): Promise<{ delivered: boolean }> | { delivered: boolean };
+  /** A request this plugin showed was decided (here or elsewhere) or expired: take its buttons down. */
+  onApprovalResolved?(host: Host<C>, p: ApprovalResolvedParams): void | Promise<void>;
   /** Makes the plugin a chat platform (with the manifest block `chat`): `chat_send` reaches the owner through it. */
   chat?: {
     /**
@@ -213,7 +216,7 @@ export function servePlugin<C>(peer: RpcPeer, def: PluginDefinition<C>, opts: Se
       resolve: async (senderKey) => (await peer.request<{ role: 'owner' | 'unknown' }>(PLUGIN_TO_HOST.ownerResolve, { senderKey })).role,
     },
     approvals: {
-      decide: (id, decision, senderKey, o) => peer.request(PLUGIN_TO_HOST.approvalsDecide, { id, decision, senderKey, ...(o?.grantMs !== undefined ? { grantMs: o.grantMs } : {}) }),
+      decide: (id, decision, senderKey, o) => peer.request(PLUGIN_TO_HOST.approvalsDecide, { id, decision, senderKey, ...(o?.grantMs !== undefined ? { grantMs: o.grantMs } : {}), ...(o?.note !== undefined ? { note: o.note } : {}) }),
     },
     permissions: {
       mode: (senderKey, o) => peer.request(PLUGIN_TO_HOST.permissionsMode, { senderKey, ...o }),
@@ -335,6 +338,9 @@ export function servePlugin<C>(peer: RpcPeer, def: PluginDefinition<C>, opts: Se
     .handle(HOST_TO_PLUGIN.approvalsRequest, async (params) => {
       if (!def.onApprovalRequest) throw new RpcError(RPC_ERRORS.MethodNotFound, 'approvals are not supported');
       return def.onApprovalRequest(host, params as ApprovalRequestParams);
+    })
+    .handle(HOST_TO_PLUGIN.approvalsResolved, async (params) => {
+      await def.onApprovalResolved?.(host, params as ApprovalResolvedParams);
     })
     .handle(HOST_TO_PLUGIN.httpRequest, async (params) => {
       if (!def.onHttpRequest) throw new RpcError(RPC_ERRORS.MethodNotFound, 'hooks are not supported');

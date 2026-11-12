@@ -9,7 +9,11 @@ const RENDER_MS = 3000;
 const mermaidLib = lazy(async () => (await import('mermaid')).default);
 let seq = 0;
 
-const dark = (): boolean => window.matchMedia?.('(prefers-color-scheme: dark)').matches === true;
+/** The theme the person chose (theme.ts), else the system's. */
+const dark = (): boolean => {
+  const chosen = document.documentElement.dataset['theme'];
+  return chosen ? chosen === 'dark' : window.matchMedia?.('(prefers-color-scheme: dark)').matches === true;
+};
 
 /**
  * Mermaid's SVG with everything that could act taken out: links are unwrapped, and scripts,

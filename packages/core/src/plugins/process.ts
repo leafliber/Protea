@@ -5,6 +5,7 @@ import {
   RpcPeer,
   lineSplitter,
   type ApprovalRequestParams,
+  type ApprovalResolvedParams,
   type ChatDraftParams,
   type ChatSendParams,
   type ChatSendResult,
@@ -190,6 +191,10 @@ export class ProcessPlugin {
 
   approvalRequest(p: ApprovalRequestParams): Promise<{ delivered: boolean }> {
     return this.peer.request(HOST_TO_PLUGIN.approvalsRequest, p, { timeoutMs: 15_000 });
+  }
+
+  approvalResolved(p: ApprovalResolvedParams): void {
+    this.peer.notify(HOST_TO_PLUGIN.approvalsResolved, p);
   }
 
   chatSend(p: ChatSendParams): Promise<ChatSendResult> {

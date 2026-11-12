@@ -57,6 +57,7 @@ import {
   Transcript,
   UsageRepo,
   approvalTools,
+  approvalView,
   ChangeRequestService,
   changeTools,
   mcpChangeAdapter,
@@ -133,7 +134,7 @@ import { authenticate, createControlApp, createWebSocketEndpoint, startControlSe
 import { ConsolePlugin } from '@protea/plugin-console';
 import { WebchatPlugin } from '@protea/plugin-webchat';
 import { CronPlugin } from '@protea/plugin-cron';
-import { PROVIDER_PROTOCOLS, type Level, type ModelRole, type ProviderProtocolName, type ProvidersResponse, type StatusResponse } from '@protea/protocol';
+import { PROVIDER_PROTOCOLS, type Level, type ModelRole, type ProviderProtocolName, type ProvidersResponse, type ScheduleRun, type StatusResponse } from '@protea/protocol';
 import { acquireLock } from './lock.js';
 
 export const VERSION = '0.1.0';
@@ -465,7 +466,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const builtinSettings = (id: string): PluginSettings => config.plugins[id] ?? { enabled: true, config: {} };
   plugins.register(consolePlugin, builtinSettings('console').config, builtinSettings('console').enabled);
   plugins.register(webchatPlugin, builtinSettings('webchat').config, builtinSettings('webchat').enabled);
-  plugins.register(new CronPlugin(), builtinSettings('cron').config, builtinSettings('cron').enabled);
+  const cronPlugin = new CronPlugin();
+  cronPlugin.onChange = (id) => bus.emit('schedule.changed', { id });
+  plugins.register(cronPlugin, builtinSettings('cron').config, builtinSettings('cron').enabled);
   await plugins.rescan(settingsOf);
 
   // Permissions, approvals and audit (docs/10-architecture/14-security-and-permissions.md).
@@ -506,7 +509,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     log: log.child({ component: 'approvals' }),
     ttlMs: () => config.permissions.approvalTtlMs,
     grantMaxMs: () => config.permissions.grantMaxMs,
-    deliver: (a) => plugins.requestApproval(a),
+    deliver: (a, platforms) => plugins.requestApproval(a, platforms),
+    resolved: (a) => plugins.approvalResolved(a),
+    describe: (r) => {
+      const def = tools.get(r.tool) ?? { name: r.tool, owner: r.owner, inputSchema: {} };
+      return approvalView(def, r.input, { language: config.daemon.language, redact: (text) => secrets.redact(text) });
+    },
     pushInternal,
     redact: (text) => secrets.redact(text),
   });
@@ -791,7 +799,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   for (const spec of kernelTools({ store, status })) tools.register('core', spec);
   tools.register('core', viewImageTool({ blobs, workspace: path.join(dataDir, 'workspace'), maxBytes: () => config.vision.maxImageKb * 1024 }));
   for (const spec of forkTools(forks, { maxTurns: config.scheduler.forks.maxTurns })) tools.register('core', spec);
-  for (const spec of approvalTools({ approvals, policy, tools, modes })) tools.register('core', spec);
+  for (const spec of approvalTools({ approvals, policy, tools, modes, platforms: () => plugins.approvalPlatforms() })) tools.register('core', spec);
+  // Tools whose calls need approval take `_approval` (why, and where to ask).
+  tools.setApprovalMeta((d) => policy.decide(d).policy === 'ask');
   // The assistant proposes changes to its own capabilities; an administrator decides them (ADR-0019).
   const workspaceDir = path.join(dataDir, 'workspace');
   const changes = new ChangeRequestService({
@@ -1271,6 +1281,22 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     batches,
     usage,
     scheduler: schedulerOps,
+    schedules: {
+      list: () => cronPlugin.infos(),
+      get: (id) => cronPlugin.infoOf(id),
+      create: (input) => cronPlugin.create(input),
+      update: (id, patch) => cronPlugin.update(id, patch, 'operator'),
+      remove: (id) => cronPlugin.removeBy(id, 'operator'),
+      run: (id) => cronPlugin.runNow(id),
+      preview: (input) => cronPlugin.preview(input),
+      // A firing is its cron.tick event: the dedupe key starts with the schedule's id.
+      runs: (id) =>
+        (
+          db
+            .prepare("SELECT cursor, received_at, state, batch_id, dedupe_key FROM events WHERE source = 'cron' AND type = 'cron.tick' AND dedupe_key LIKE ? ESCAPE '\\' ORDER BY cursor DESC LIMIT 20")
+            .all(`${id.replace(/[\\%_]/g, '\\$&')}@%`) as Array<{ cursor: number; received_at: string; state: ScheduleRun['state']; batch_id: string | null; dedupe_key: string }>
+        ).map((r) => ({ cursor: r.cursor, at: r.received_at, state: r.state, ...(r.batch_id ? { batchId: r.batch_id } : {}), ...(r.dedupe_key.includes('@manual:') ? { manual: true } : {}) })),
+    },
     config: configOps,
     secrets: secretOps,
     permissions: () => ({

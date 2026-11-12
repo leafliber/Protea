@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { IconClose } from './icons';
 
@@ -67,10 +67,56 @@ export function stateTone(state: string): 'good' | 'warn' | 'bad' | 'info' | 'mu
   return 'neutral';
 }
 
+/** States as a person reads them; the raw value stays in the tooltip. */
+const STATE_LABEL: Record<string, string> = {
+  running: '运行中',
+  delivered: '已送达',
+  completed: '已完成',
+  approved: '已同意',
+  used: '已执行',
+  listed: '已列出',
+  ready: '就绪',
+  applied: '已应用',
+  failed: '失败',
+  crashed: '已崩溃',
+  invalid: '无效',
+  denied: '已拒绝',
+  auth_required: '需要登录',
+  error: '出错',
+  rejected: '已拒绝',
+  pending: '待处理',
+  starting: '启动中',
+  draining: '收尾中',
+  paused: '已暂停',
+  queued: '排队中',
+  delivering: '送达中',
+  backoff: '重试中',
+  withdrawn: '已撤回',
+  expired: '已过期',
+  discarded: '已丢弃',
+  stopped: '已停止',
+  disabled: '已停用',
+  cancelled: '已取消',
+  archived: '已归档',
+  stale: '已失效',
+  idle: '空闲',
+  merged: '已合并',
+  dropped: '已丢弃',
+  loaded: '已加载',
+  restarting: '重启中',
+  stopping: '停止中',
+  interrupted: '被打断',
+  preempted: '被抢占',
+};
+
+export function stateLabel(state: string): string {
+  return STATE_LABEL[state] ?? state;
+}
+
 export function StateBadge({ state, title }: { state: string; title?: string }) {
   return (
-    <Badge tone={stateTone(state)} {...(title ? { title } : {})}>
-      {state}
+    <Badge tone={stateTone(state)} title={title ?? state}>
+      {stateLabel(state)}
     </Badge>
   );
 }
@@ -160,7 +206,7 @@ export function Drawer({ title, onClose, children }: { title: ReactNode; onClose
  * A centred dialog over the page. Esc, a press on the backdrop and ✕ all call `onClose`, so the
  * caller can refuse (unsaved changes). `actions` sit in the header, before ✕.
  */
-export function Modal({ title, actions, onClose, children }: { title: ReactNode; actions?: ReactNode; onClose: () => void; children: ReactNode }) {
+export function Modal({ title, actions, onClose, children, small }: { title: ReactNode; actions?: ReactNode; onClose: () => void; children: ReactNode; small?: boolean }) {
   const close = useRef(onClose);
   close.current = onClose;
   const box = useRef<HTMLElement>(null);
@@ -179,7 +225,7 @@ export function Modal({ title, actions, onClose, children }: { title: ReactNode;
   return (
     // mousedown, not click: a text selection dragged out of a field must not close the dialog.
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <section className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} ref={box}>
+      <section className={cx('modal', small && 'modal-small')} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} ref={box}>
         <header className="modal-head">
           <h2 id={titleId}>{title}</h2>
           <button className="icon-btn modal-close" onClick={onClose} aria-label="关闭">
@@ -313,4 +359,255 @@ export const PageActionsContext = createContext<HTMLElement | null>(null);
 export function PageActions({ children }: { children: ReactNode }) {
   const el = useContext(PageActionsContext);
   return el ? createPortal(children, el) : null;
+}
+
+/** "2 小时后", "3 天后"; past instants read as `timeAgo`. */
+export function timeUntil(iso: string | number | undefined | null): string {
+  if (iso === undefined || iso === null || iso === '') return '';
+  const t = typeof iso === 'number' ? iso : Date.parse(iso);
+  if (Number.isNaN(t)) return '';
+  const s = Math.round((t - Date.now()) / 1000);
+  if (s <= 0) return timeAgo(t);
+  if (s < 60) return '不到 1 分钟后';
+  if (s < 3600) return `${Math.round(s / 60)} 分钟后`;
+  if (s < 86400) return `${Math.round(s / 3600)} 小时后`;
+  return `${Math.round(s / 86400)} 天后`;
+}
+
+/** Re-render every `ms`, for text that depends on the current time. */
+export function useTick(ms = 30_000): number {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setN((v) => v + 1), ms);
+    return () => clearInterval(t);
+  }, [ms]);
+  return n;
+}
+
+/** A relative time that keeps itself current; the exact time is in the tooltip. */
+export function RelTime({ at, future }: { at: string | number | null | undefined; future?: boolean }) {
+  useTick();
+  if (at === null || at === undefined || at === '') return <span className="muted">—</span>;
+  return (
+    <time className="nowrap" title={dateTime(at)}>
+      {future ? timeUntil(at) : timeAgo(at)}
+    </time>
+  );
+}
+
+/** Time left until `until`, counting down: "9:41", "2 小时 5 分". */
+export function Countdown({ until, done = '已到期' }: { until: string | number; done?: string }) {
+  useTick(1000);
+  const left = Math.round(((typeof until === 'number' ? until : Date.parse(until)) - Date.now()) / 1000);
+  if (!(left > 0)) return <span className="countdown">{done}</span>;
+  const text = left >= 3600 ? `${Math.floor(left / 3600)} 小时 ${Math.floor((left % 3600) / 60)} 分` : `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+  return <span className={cx('countdown', left < 60 && 'countdown-soon')}>{text}</span>;
+}
+
+/** An on/off control. */
+export function Switch({ checked, onChange, disabled, label }: { checked: boolean; onChange: (on: boolean) => void; disabled?: boolean; label: string }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      className={cx('switch', checked && 'switch-on')}
+      onClick={(e) => {
+        e.stopPropagation();
+        onChange(!checked);
+      }}
+    >
+      <span className="switch-knob" />
+    </button>
+  );
+}
+
+/** A small set of exclusive choices, shown side by side. */
+export function Segmented<T extends string>({ options, value, onChange, label }: { options: Array<[T, ReactNode]>; value: T; onChange: (v: T) => void; label?: string }) {
+  return (
+    <div className="segmented" role="radiogroup" aria-label={label}>
+      {options.map(([id, text]) => (
+        <button key={id} type="button" role="radio" aria-checked={value === id} className={cx('seg', value === id && 'seg-on')} onClick={() => onChange(id)}>
+          {text}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** One number that matters, with what it is and a line of context. */
+export function Stat({ label, value, hint, tone, href }: { label: string; value: ReactNode; hint?: ReactNode; tone?: 'good' | 'warn' | 'bad'; href?: string }) {
+  const body = (
+    <>
+      <div className="stat-label">{label}</div>
+      <div className={cx('stat-value', tone && `stat-${tone}`)}>{value}</div>
+      {hint && <div className="stat-hint">{hint}</div>}
+    </>
+  );
+  return href ? (
+    <a className="stat stat-link" href={href}>
+      {body}
+    </a>
+  ) : (
+    <div className="stat">{body}</div>
+  );
+}
+
+/** Nothing here yet: what this place is for, and what to do next. */
+export function EmptyState({ icon, title, children, action }: { icon?: ReactNode; title: string; children?: ReactNode; action?: ReactNode }) {
+  return (
+    <div className="empty-state">
+      {icon && <div className="empty-icon">{icon}</div>}
+      <div className="empty-title">{title}</div>
+      {children && <div className="empty-text">{children}</div>}
+      {action && <div className="empty-action">{action}</div>}
+    </div>
+  );
+}
+
+/** Placeholder lines while something loads. */
+export function Skeleton({ lines = 3 }: { lines?: number }) {
+  return (
+    <div className="skeleton" aria-busy="true" aria-label="加载中">
+      {Array.from({ length: lines }, (_, i) => (
+        <div key={i} className="skeleton-line" style={{ width: `${90 - ((i * 17) % 40)}%` }} />
+      ))}
+    </div>
+  );
+}
+
+/** A ⋯ button with a small menu of actions. */
+export function Menu({ items, label = '更多操作' }: { items: Array<{ label: string; onSelect: () => void; danger?: boolean; disabled?: boolean } | null | false>; label?: string }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => !box.current?.contains(e.target as Node) && setOpen(false);
+    const key = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    document.addEventListener('mousedown', away);
+    window.addEventListener('keydown', key);
+    return () => {
+      document.removeEventListener('mousedown', away);
+      window.removeEventListener('keydown', key);
+    };
+  }, [open]);
+  return (
+    <div className="menu" ref={box} onClick={(e) => e.stopPropagation()}>
+      <button type="button" className="icon-btn" aria-label={label} title={label} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span className="menu-dots" aria-hidden="true">
+          ⋯
+        </span>
+      </button>
+      {open && (
+        <div className="menu-pop" role="menu">
+          {items.filter(Boolean).map((raw) => {
+            const it = raw as { label: string; onSelect: () => void; danger?: boolean; disabled?: boolean };
+            return (
+              <button
+                key={it.label}
+                type="button"
+                role="menuitem"
+                disabled={it.disabled}
+                className={cx('menu-item', it.danger && 'menu-danger')}
+                onClick={() => {
+                  setOpen(false);
+                  it.onSelect();
+                }}
+              >
+                {it.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface ConfirmOptions {
+  title: string;
+  body?: ReactNode;
+  confirm?: string;
+  danger?: boolean;
+}
+
+interface Feedback {
+  /** Ask before something that cannot be taken back. Resolves to whether the person agreed. */
+  confirm(o: ConfirmOptions): Promise<boolean>;
+  /** Say briefly that something happened (or failed). */
+  toast(text: string, tone?: 'good' | 'bad'): void;
+}
+
+const FeedbackContext = createContext<Feedback>({
+  confirm: (o) => Promise.resolve(window.confirm(o.title)),
+  toast: () => undefined,
+});
+
+/** `confirm` and `toast` for a page: `const { confirm, toast } = useFeedback()`. */
+export const useFeedback = (): Feedback => useContext(FeedbackContext);
+
+/** Hosts the confirmation dialog and the toasts of everything inside it. */
+export function FeedbackProvider({ children }: { children: ReactNode }) {
+  const [ask, setAsk] = useState<(ConfirmOptions & { done: (ok: boolean) => void }) | null>(null);
+  const [toasts, setToasts] = useState<Array<{ id: number; text: string; tone: 'good' | 'bad' }>>([]);
+  const seq = useRef(0);
+  const confirm = useCallback((o: ConfirmOptions) => new Promise<boolean>((done) => setAsk({ ...o, done })), []);
+  const toast = useCallback((text: string, tone: 'good' | 'bad' = 'good') => {
+    const id = ++seq.current;
+    setToasts((t) => [...t.slice(-3), { id, text, tone }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), tone === 'bad' ? 6000 : 3000);
+  }, []);
+  const api = useRef<Feedback>({ confirm, toast });
+  const answer = (ok: boolean) => {
+    ask?.done(ok);
+    setAsk(null);
+  };
+  return (
+    <FeedbackContext.Provider value={api.current}>
+      {children}
+      {ask && (
+        <Modal small title={ask.title} onClose={() => answer(false)}>
+          <div className="confirm">
+            {ask.body && <div className="confirm-body">{ask.body}</div>}
+            <div className="confirm-actions">
+              <Button onClick={() => answer(false)}>取消</Button>
+              <Button kind={ask.danger ? 'danger' : 'primary'} onClick={() => answer(true)}>
+                {ask.confirm ?? '确定'}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {toasts.length > 0 &&
+        createPortal(
+          <div className="toasts" role="status" aria-live="polite">
+            {toasts.map((t) => (
+              <div key={t.id} className={cx('toast', `toast-${t.tone}`)}>
+                {t.text}
+              </div>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </FeedbackContext.Provider>
+  );
+}
+
+/**
+ * Ask, then act: `ask('删除这个账号？', () => remove())`. For the common case where a
+ * confirmation guards one action. Destructive by default, as most such actions are.
+ */
+export function useAsk(): (title: string, then: () => unknown, o?: { danger?: boolean; confirm?: string; body?: ReactNode }) => void {
+  const { confirm } = useFeedback();
+  return useCallback(
+    (title, then, o) => {
+      void confirm({ title, danger: o?.danger ?? true, ...(o?.confirm ? { confirm: o.confirm } : {}), ...(o?.body ? { body: o.body } : {}) }).then((ok) => {
+        if (ok) then();
+      });
+    },
+    [confirm],
+  );
 }

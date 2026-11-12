@@ -81,7 +81,7 @@
 
 内置平台：
 
-- `webchat`（`plugins/webchat`，进程内）：网页对话窗口与 `protea chat`。声明了全部能力（`markdown: full`、图片、选项、小组件、草稿）。输入走 `POST /api/chat/messages`；发送只需成功，中枢存下并发布，窗口据此显示，主人不在线时留在历史里。审批通知也从这里发。
+- `webchat`（`plugins/webchat`，进程内）：网页对话窗口与 `protea chat`。声明了全部能力（`markdown: full`、图片、选项、小组件、草稿）。输入走 `POST /api/chat/messages`；发送只需成功，中枢存下并发布，窗口据此显示，主人不在线时留在历史里。待定的授权请求在窗口里是带按钮的卡片（读 `/api/approvals`）；对话历史里只留两行记录：请求了什么、结果如何。
 - `telegram`（`plugins/telegram`，进程外）：主人私聊是 `chat.message`，`telegram.edited`、他人消息和群消息保持原类型；`tg_send_chat`、`tg_react` 不变。
 - `wechat`（`plugins/wechat`，进程外）：扫码登录，主人私聊是 `chat.message`，其余是 `wechat.message` 且只存储。机器人不能先开口，窗口关闭时 `chat_send` 返回失败回执（[08-event-source-plugins.md](08-event-source-plugins.md) §6.3）。
 - `qq`（`plugins/qq`，进程外）：扫码即创建机器人并登录，主人私聊是 `chat.message`，其余是 `qq.message`。打开 `groups` 后，@机器人的群消息会投递，并可用 `qq_group_reply` 回群（默认需要审批）。和微信一样不能指望先开口，被拒时 `chat_send` 返回失败回执。声明了图片、选项和草稿：选项是按钮（QQ 不让发按钮时改成编号列表），草稿用 QQ 的私聊流式消息；不声明小组件（[08-event-source-plugins.md](08-event-source-plugins.md) §6.4）。
@@ -90,6 +90,19 @@ Protea 自己发给主人的通知（`ChatHub.notifyOwner`）先发到主人最�
 
 ## 4. 控制台
 
+侧边栏按"先回答现在需要我做什么"分组（2026-11-12）：
+
+| 分组 | 页面 |
+|---|---|
+| — | 总览：最上面是"需要你处理"（待确认的操作、能力变更、异常的插件或 MCP、模型未就绪、预算告警、投递暂停），然后是四个数字、正在进行的事和接下来的定时任务 |
+| 待办 | 审批（等你确认 / 能力变更 / 处理记录）、定时任务 |
+| 观察 | 运行流、会话、日志 |
+| 能力 | 插件、MCP、Skills、模型、记忆与人格 |
+| 系统 | 权限（模式、工具规则、暂时不再询问、审计记录）、配置 |
+
+只有等待决定的数量才显示徽标。侧边栏可以收成图标栏。旧地址（`approvals?tab=grants|audit`、`config?tab=permissions`）自动跳到权限页。
+
+- **定时任务**（`#/console/schedules`）：`cron` 插件的全部任务，可以新建、改、暂停、立即运行、删除，看最近的运行；`config.yaml` 里定义的只读。接口见 [05-control-api.md](../30-specs/05-control-api.md)。
 - **运行流**（原事件流页，`#/console/events`）：同一条时间线上按类别显示用户输入、事件、模型请求的上下文摘要、思考（折叠）、正文（流式）、工具调用与结果、发出的消息、批与调度动作。顶部按类别筛选。输入框是运维注入。点批标记或 `?batch=<id>` 打开这一批的完整过程。
 - **上下文**（会话页的标签，仅管理员）：下一次请求的系统段、工具、合并后的消息和 token 组成。
 - **`console` 插件**：只有注入（`POST /api/events`、运行流输入框、`protea events push`），没有回复工具。模型的回应是正文，显示在运行流。

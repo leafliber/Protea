@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { SkillInfo } from '@protea/protocol';
 import { api, enc, post, useAction, useApi } from '../api';
-import { Badge, Button, PageActions, Card, Empty, ErrorText, KV, StateBadge, oneLine, timeAgo } from '../components/ui';
+import { Badge, Button, PageActions, Card, Empty, ErrorText, KV, StateBadge, oneLine, timeAgo, useAsk } from '../components/ui';
 import { useReloadOn } from '../live';
 import { PendingChangesBanner } from './Changes';
 import { useSession } from '../session';
@@ -31,6 +31,7 @@ function SkillBody({ name }: { name: string }) {
 }
 
 export function Skills() {
+  const ask = useAsk();
   const { canWrite } = useSession();
   const r = useApi<{ skills: SkillInfo[] }>('/api/skills');
   useReloadOn('skills', r.reload);
@@ -76,7 +77,7 @@ export function Skills() {
                       </Button>
                     )}
                     {k.origin === 'user' && (
-                      <Button small kind="danger" onClick={() => confirm(`删除 Skill ${k.name}？`) && void act.run(() => api('DELETE', `/api/skills/${enc(k.name)}`)).then(r.reload)}>
+                      <Button small kind="danger" onClick={() => ask(`删除 Skill ${k.name}？`, () => void act.run(() => api('DELETE', `/api/skills/${enc(k.name)}`)).then(r.reload), { confirm: '删除' })}>
                         删除
                       </Button>
                     )}

@@ -13,6 +13,24 @@ export interface GuardContext {
   level?: Level;
   /** Ends a review in progress when the turn is cancelled or interrupted. */
   signal?: AbortSignal;
+  /** What the call said for the owner (`_approval`): why, and where to ask. */
+  approval?: { reason?: string; platforms?: string[] };
+}
+
+/** "in 10 minutes", for a receipt the model reads. */
+export function inWords(ms: number): string {
+  const min = Math.max(1, Math.round(ms / 60_000));
+  if (min < 90) return `in ${min} minute${min === 1 ? '' : 's'}`;
+  const h = Math.round(min / 60);
+  return h < 48 ? `in ${h} hours` : `in ${Math.round(h / 24)} days`;
+}
+
+/** Where a request was shown, for a receipt: "The owner was asked on qq." */
+export function askedOn(a: { deliveredTo?: string[] }, wanted?: readonly string[]): string {
+  const on = a.deliveredTo ?? [];
+  if (on.length === 0) return 'No chat platform could show the request; the owner can still decide it in the console.';
+  const missed = wanted?.filter((p) => !on.includes(p)) ?? [];
+  return `The owner was asked on ${on.join(', ')}${missed.length > 0 ? ` (${missed.join(', ')} could not show it)` : ''}.`;
 }
 
 export type GuardDecision =
@@ -94,7 +112,9 @@ export class PermissionGuard implements ToolGuard {
       input: use.input,
       sessionId: ctx.sessionId,
       batchId: ctx.batchId,
-      ...(held !== undefined ? { reason: `Held by the automatic review: ${held}` } : {}),
+      ...(ctx.approval?.reason !== undefined ? { reason: ctx.approval.reason } : {}),
+      ...(ctx.approval?.platforms !== undefined ? { platforms: ctx.approval.platforms } : {}),
+      ...(held !== undefined ? { held } : {}),
     });
     this.record(def, use, ctx, policy, 'pending_approval', rule, a.id);
     const review = held !== undefined ? ` The automatic review held it (${held}); do not try to reach the same result another way.` : '';
@@ -103,7 +123,7 @@ export class PermissionGuard implements ToolGuard {
       policy,
       rule,
       isError: false,
-      text: `pending approval ${a.id}: ${def.name} needs the owner's approval and did not run.${review} The owner has been asked; an approval.decided event will report the decision (the request expires at ${a.expiresAt}).`,
+      text: `pending approval ${a.id}: ${def.name} did not run.${review} ${askedOn(a, ctx.approval?.platforms)} The request expires ${inWords(Date.parse(a.expiresAt) - Date.parse(a.createdAt))}. Carry on with what does not depend on it, or end the turn; do not call it again until an approval.decided event reports the decision.`,
     };
   }
 

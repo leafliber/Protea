@@ -185,7 +185,7 @@ describe('qq connector', () => {
     const id = qq.c2c({ from: OWNER, text: '/approve a12 1h' });
     await waitFor(() => qq.sent.length === 1);
     expect(host.decisions[0]).toMatchObject({ id: 'a12', decision: 'approve', senderKey: `qq:${OWNER}`, grantMs: 3_600_000 });
-    expect(qq.sent[0]).toMatchObject({ content: 'a12 approved (and its tools for 1h).', msgId: id });
+    expect(qq.sent[0]).toMatchObject({ content: 'Approved: a12 (not asking again for 1 hour)', msgId: id });
     qq.c2c({ from: 'MALLORY', text: '/approve a13' });
     await waitFor(() => host.events.length === 2);
     expect(host.decisions).toHaveLength(1);
@@ -200,7 +200,46 @@ describe('qq connector', () => {
     qq.c2c({ from: OWNER, text: 'hi' });
     await waitFor(() => host.events.length === 1);
     expect(await host.request('approvals/request', req)).toEqual({ delivered: true });
-    expect(qq.sent.at(-1)?.content).toContain('Reply /approve a1');
+    // Buttons, and nothing to type: no command, no id.
+    const sent = qq.sent.at(-1);
+    expect(sent?.content).toBe('[Needs your OK] shell\nshell rm -rf /tmp/x');
+    expect(sent?.keyboard?.content.rows.map((r) => r.buttons.map((b) => b.render_data.label))).toEqual([['Approve', 'Deny']]);
+  });
+
+  it('decides a request from its buttons, for the owner only, and once', async () => {
+    const { qq, host } = await talking();
+    const req = { id: 'a5', tool: 'sh_run', summary: 'x', expiresAt: new Date(Date.now() + 600_000).toISOString(), grantMaxMs: 3_600_000, view: { title: 'Run a command', target: 'npm publish', fields: [], family: { id: 'shell', label: 'the tools of the shell plugin' } } };
+    expect(await host.request('approvals/request', req)).toEqual({ delivered: true });
+    const sent = qq.sent.at(-1);
+    expect(sent?.content).toBe('[Needs your OK] Run a command\nnpm publish\nValid for 10 minutes');
+    const rows = sent?.keyboard?.content.rows ?? [];
+    expect(rows.map((r) => r.buttons.map((b) => b.render_data.label))).toEqual([['Approve', 'Deny'], ["Approve, don't ask for 1 hour"]]);
+    const deny = rows[0]?.buttons[1]?.action.data as string;
+
+    const stranger = qq.press({ from: 'MALLORY', data: deny });
+    await waitFor(() => qq.acks.some((a) => a.id === stranger));
+    expect(qq.acks.find((a) => a.id === stranger)?.code).not.toBe(0);
+    expect(host.decisions).toHaveLength(0);
+
+    const press = qq.press({ from: OWNER, data: deny });
+    await waitFor(() => qq.acks.some((a) => a.id === press));
+    expect(qq.acks.find((a) => a.id === press)?.code).toBe(0);
+    expect(host.decisions).toEqual([{ id: 'a5', decision: 'deny', senderKey: `qq:${OWNER}` }]);
+    // The button's own label shows the outcome: no receipt is spent on it.
+    expect(qq.sent.at(-1)).toBe(sent);
+    expect(host.events).toHaveLength(1);
+  });
+
+  it('falls back to words when QQ will not send buttons', async () => {
+    const { qq, host } = await talking();
+    qq.keyboardResults.push({ status: 403, body: { code: 304082, message: 'no permission for keyboards' } });
+    const req = { id: 'a6', tool: 'sh_run', summary: 'x', expiresAt: new Date(Date.now() + 600_000).toISOString(), view: { title: 'Run a command', target: 'ls', fields: [], family: { id: 'shell', label: 'shell' } } };
+    expect(await host.request('approvals/request', req)).toEqual({ delivered: true });
+    expect(qq.sent.at(-1)?.keyboard).toBeUndefined();
+    expect(qq.sent.at(-1)?.content).toBe('[Needs your OK] Run a command\nls\nValid for 10 minutes\nReply: approve / deny');
+    qq.c2c({ from: OWNER, text: '同意' });
+    await waitFor(() => host.decisions.length === 1);
+    expect(host.decisions[0]).toEqual({ id: 'a6', decision: 'approve', senderKey: `qq:${OWNER}` });
   });
 
   it('brings the owner’s pictures along, and notes what could not be fetched', async () => {

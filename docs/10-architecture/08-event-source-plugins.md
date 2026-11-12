@@ -62,7 +62,6 @@
 You reach the owner through Telegram. {{#if ownerChatId}}The owner's private chat is {{ownerChatId}}.{{/if}}
 Reply with chat_send (platform "telegram") when a message warrants a response; it is fine to stay silent on low-value messages.
 Long messages: split at ~3500 characters. Use tg_react for lightweight acknowledgement instead of a text reply.
-Approvals: the owner replies "/approve <id>" or "/deny <id>"; those replies arrive as approval.decided events.
 ```
 
 ## 6. v1 内置来源清单
@@ -71,7 +70,7 @@ Approvals: the owner replies "/approve <id>" or "/deny <id>"; those replies arri
 |---|---|---|---|---|
 | `console` | source | L1 | 运维注入（控制台运行流、`protea events push`）；没有回复工具 | M0，2026-11-10 收窄 |
 | `webchat` | connector（对话平台） | L1 | 网页对话窗口与 `protea chat` | 2026-11-10 |
-| `cron` | source | L3 | cron 表达式与一次性定时（`sleep_until`、`schedule_create` 的后端）；支持例程派生 | M0 |
+| `cron` | source | L3 | cron 表达式与一次性定时（`sleep_until`、`schedule_create` / `schedule_update` 的后端）；任务可以暂停，控制台的「定时任务」页能新建、修改、立即运行和删除（操作者改动助理建的任务时推一条 L4 的 `schedule.changed`）；支持例程派生 | M0，2026-11-12 扩充 |
 | `internal` | source | L0 | Core 专用：生命周期、预算、抢占通知 | M0 |
 | `webhook` | source | L2 | HTTP 入站（`/hooks/<name>`），签名校验（GitHub/通用 HMAC/token） | M2 ✓ |
 | `telegram` | connector（对话平台） | L1 | Bot API 长轮询（无需入站端口）；owner 由用户 id 映射 | M2 ✓ |

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import type { BlobImageRef, ContextSummary, EventEnvelope, ModelRequestTrace, PushEventResponse, SchedulerAction, WsServerMessage } from '@protea/protocol';
 import { enc, get, post, qs, useAction } from '../api';
-import { Badge, Button, Drawer, Empty, ErrorText, Json, KV, LevelBadge, StateBadge, clock, compact, dateTime, oneLine } from '../components/ui';
+import { Badge, Button, Drawer, Empty, ErrorText, Json, KV, LevelBadge, StateBadge, clock, compact, dateTime, oneLine, useAsk } from '../components/ui';
 import { BatchTrace } from '../components/Trace';
 import { BlobImages } from '../images';
 import { useLive, useTraceStream } from '../live';
@@ -79,6 +79,7 @@ function isAction(e: EventEnvelope): boolean {
 }
 
 function EventDetail({ cursor, onClose }: { cursor: number; onClose: () => void }) {
+  const ask = useAsk();
   const { canWrite } = useSession();
   const [data, setData] = useState<{ event: EventEnvelope; delivery: { outcome: string; batchId: string | null; at: string } | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -121,7 +122,7 @@ function EventDetail({ cursor, onClose }: { cursor: number; onClose: () => void 
               <Button busy={act.busy} onClick={() => void act.run(() => post(`/api/events/${cursor}/promote`, { trigger })).then(load)}>
                 提升
               </Button>
-              <Button kind="danger" busy={act.busy} onClick={() => confirm(`撤回 #${cursor}？它将不会交给模型。`) && void act.run(() => post(`/api/events/${cursor}/withdraw`)).then(load)}>
+              <Button kind="danger" busy={act.busy} onClick={() => ask(`撤回事件 #${cursor}？`, () => void act.run(() => post(`/api/events/${cursor}/withdraw`)).then(load), { body: '撤回后它不会交给助理。', confirm: '撤回' })}>
                 撤回
               </Button>
               <ErrorText error={act.error} />

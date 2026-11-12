@@ -3,6 +3,7 @@ import { servePlugin, type PluginDefinition } from './plugin.js';
 
 export * from './plugin.js';
 export * from './owner-commands.js';
+export * from './approvals.js';
 
 /**
  * Run a plugin over stdio (the out-of-process protocol). stdout carries only protocol

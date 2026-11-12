@@ -165,6 +165,8 @@ CREATE INDEX ix_events_source_received ON events(source, received_at);
 CREATE INDEX ix_events_batch ON events(batch_id) WHERE batch_id IS NOT NULL;
 ```
 
+迁移 11：`approval-view`（2026-11-12，[ADR-0021](../20-decisions/ADR-0021-readable-approval-requests-and-delivery.md)）给 `approvals` 加四列，都可为空：`view_json`（`ApprovalView`，人读的请求）、`input_json`（脱敏后的完整输入，上限 8000 字符）、`delivered_to`（显示过请求的平台，JSON 数组）、`note`（主人随决定说的话）。旧行没有 `view_json`，界面显示 `summary`。`cron` 插件在 `kv`（`plugin:cron`）里除了 `schedule:<id>` 还有 `fired:<id>`（`{ lastFiredAt, fires }`）。
+
 对话历史（`GET /api/chat`）= `chat.message` 事件 + `channel` 为 `chat` / `approvals` 的输出，按平台过滤，按 `(at, 种类, id)` 倒序分页。2026-11-10 对话与控制台分离时，`kv`（`core` / `chat.split`）记下分界 `{ cursor, outputId }`：分界之前的 `console.message` 事件与 `plugin = 'console'` 的输出算作 `webchat`，事件日志不改写。迁移之前发出的回复在第一次启动时从主会话转录（`sessions/main.*.jsonl`）里找回：迁移时间之前、结果不是错误的 `con_send` 调用，各补一行；完成后在 `kv`（`core` / `outputs.backfilled`）记下，只做一次。和 `events` 一样不自动清理。诊断包不导出这张表（里面是回复正文）；备份会带上。`model.error` 内部事件从此在 `meta` 里带 `batchId` 与 `kind`，对话页据此说明某条消息为什么没有回复。
 
 ### 1.7 迁移 7：`memory-layers`（2026-11-10）

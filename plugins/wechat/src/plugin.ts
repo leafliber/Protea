@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { DEFAULT_STOP_WORDS, approvalCommand, definePlugin, isModeCommand, isStopWord, modeCommand, splitMessage, type Host, type PluginDefinition } from '@protea/plugin-sdk';
+import { ApprovalInbox, DEFAULT_STOP_WORDS, definePlugin, isModeCommand, isStopWord, modeCommand, splitMessage, type Host, type PluginDefinition } from '@protea/plugin-sdk';
 import { CHAT_MESSAGE_EVENT, type ChatSendResult, type EventInput } from '@protea/protocol';
 import {
   CDN_BASE_URL,
@@ -126,7 +126,12 @@ export function createWechatPlugin(opts: WechatPluginOptions = {}): PluginDefini
   }
 
   /** Short notices to the owner (answers to commands). A closed window only costs the notice. */
+  /** The approval requests shown here, and what the owner's words mean. WeChat has no buttons: the owner answers in words. */
+  let inbox: ApprovalInbox<WechatConfig> | null = null;
+  const inboxOf = (host: Host<WechatConfig>): ApprovalInbox<WechatConfig> => (inbox ??= new ApprovalInbox(host));
+
   async function tell(host: Host<WechatConfig>, text: string): Promise<void> {
+    inbox?.sentOther();
     const r = await deliver(host, text);
     if (!r.ok) host.log.warn('could not answer the owner on WeChat', { err: r.error });
   }
@@ -191,7 +196,7 @@ export function createWechatPlugin(opts: WechatPluginOptions = {}): PluginDefini
       ownerUserId = from;
       await host.kv.set('ownerUserId', from);
     }
-    const answer = await approvalCommand(host, senderKey, text);
+    const answer = await inboxOf(host).reply(senderKey, text);
     if (answer !== null) return tell(host, answer);
     if (isModeCommand(text)) return tell(host, await modeCommand(host, senderKey, text));
     const isStop = isStopWord(text, host.config.stopWords ?? DEFAULT_STOP_WORDS);
@@ -310,12 +315,25 @@ export function createWechatPlugin(opts: WechatPluginOptions = {}): PluginDefini
       if (token) await notifyStop({ baseUrl, token, timeoutMs: 3000 }).catch(() => undefined);
     },
     chat: {
-      send: (host, req) => deliver(host, req.text),
+      send: (host, req) => {
+        inbox?.sentOther();
+        return deliver(host, req.text);
+      },
     },
     envPromptVars: () => ({ signedIn: token !== null }),
     async onApprovalRequest(host, req) {
-      const text = `Approval ${req.id} requested: ${req.summary}${req.reason ? `\nReason: ${req.reason}` : ''}\nReply /approve ${req.id} or /deny ${req.id} (expires ${req.expiresAt}). /approve ${req.id} 1h also allows these tools for an hour.`;
-      return { delivered: (await deliver(host, text.slice(0, CHUNK))).ok };
+      const box = inboxOf(host);
+      const msg = box.message(req);
+      const r = await deliver(host, `${msg.text.slice(0, CHUNK - 200)}\n${msg.hint}`);
+      if (!r.ok) {
+        box.dropped(req.id);
+        return { delivered: false };
+      }
+      box.shown(req.id, r.messageIds?.[0]);
+      return { delivered: true };
+    },
+    onApprovalResolved(host, p) {
+      inboxOf(host).resolved(p.id);
     },
     health() {
       // Waiting for an operator is not a fault: no warning every 30 s while nobody has scanned yet.

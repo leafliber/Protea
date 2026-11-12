@@ -92,7 +92,7 @@ export class ToolExposure {
     const def = (d: ToolDef): ProviderToolDef => ({
       name: d.name,
       description: d.description,
-      inputSchema: d.inputSchema,
+      inputSchema: this.o.tools.schemaFor(d),
       ...(d.providerType ? { providerType: d.providerType } : {}),
     });
 
@@ -194,7 +194,7 @@ export class ToolExposure {
     }
     const limit = Math.min(SEARCH_MAX, Math.max(1, q.limit ?? SEARCH_DEFAULT));
     return {
-      hits: pool.slice(0, limit).map((d) => ({ name: d.name, owner: d.owner, description: d.description, inputSchema: d.inputSchema })),
+      hits: pool.slice(0, limit).map((d) => ({ name: d.name, owner: d.owner, description: d.description, inputSchema: this.o.tools.schemaFor(d) })),
       more: pool.slice(limit).map((d) => d.name),
       servers,
     };

@@ -5,6 +5,7 @@ import { BlobImages, blobUrl, uploadImage } from '../images';
 import { Choices, type ChoiceState } from '../components/rich/Choices';
 import { Rich } from '../components/rich/Markdown';
 import { Widget } from '../components/rich/Widget';
+import { ApprovalCard } from '../components/ApprovalCard';
 import { UserMenu } from '../components/UserMenu';
 import { IconAlert, IconArrowDown, IconCheck, IconConsole, IconCopy, IconRetry, IconSend } from '../components/icons';
 import { cx } from '../components/ui';
@@ -12,6 +13,7 @@ import { applyDraft, removeBatchDrafts, removeDraft, type ChatDraft } from '../c
 import { live, useChatDrafts, useLive, useLiveState, useReloadOn } from '../live';
 import { consoleHref, useSession } from '../session';
 import { chatActivity } from '../view-logic';
+import { useGrantMax } from './Approvals';
 import { ChangeCards } from './Changes';
 
 const PAGE = 50;
@@ -95,8 +97,9 @@ function outcomeOf(item: ChatItem, batch: ChatBatch | undefined, lastOfBatch: bo
 
 /** Approval notices are written for the CLI: show the request itself. */
 function noticeText(i: ChatItem): string {
+  // Notices from before requests were written for people.
   const m = /^Approval (\S+) requested: ([\s\S]*?)\. Decide with:/.exec(i.text);
-  return m ? `助理请求批准：${m[2]}` : i.text;
+  return m ? `请你确认：${m[2]}` : i.text;
 }
 
 /** `meta.answer` of a live event, when it is well formed. */
@@ -136,45 +139,14 @@ function ApprovalCards() {
   const { canWrite } = useSession();
   const r = useApi<{ approvals: ApprovalInfo[] }>(canWrite ? '/api/approvals?state=pending' : null);
   useReloadOn('approval', r.reload, 200);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const grantMax = useGrantMax();
   const pending = r.data?.approvals?.filter((a) => a.state === 'pending') ?? [];
   if (!canWrite || pending.length === 0) return null;
-  const decide = async (id: string, decision: 'approve' | 'deny', grantMs?: number) => {
-    setBusy(id + decision);
-    setError(null);
-    try {
-      await post(`/api/approvals/${encodeURIComponent(id)}/decide`, { decision, ...(grantMs !== undefined ? { grantMs } : {}) });
-      r.reload();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(null);
-    }
-  };
   return (
     <div className="approvals-stack">
       {pending.map((a) => (
-        <div key={a.id} className="approval-card" role="alert">
-          <div className="approval-body">
-            <div className="approval-title">需要你批准</div>
-            <div className="approval-summary">{a.summary}</div>
-            {a.reason && <div className="muted small">{a.reason}</div>}
-          </div>
-          <div className="approval-actions">
-            <button type="button" className="btn btn-small" disabled={busy !== null} onClick={() => void decide(a.id, 'deny')}>
-              拒绝
-            </button>
-            <button type="button" className="btn btn-small" disabled={busy !== null} title="批准这次，并在 1 小时内放行同一组工具" onClick={() => void decide(a.id, 'approve', 3_600_000)}>
-              批准 1 小时
-            </button>
-            <button type="button" className="btn btn-small btn-primary" disabled={busy !== null} onClick={() => void decide(a.id, 'approve')}>
-              批准
-            </button>
-          </div>
-        </div>
+        <ApprovalCard key={a.id} a={a} canWrite grantMaxMs={grantMax} onDecided={r.reload} compact />
       ))}
-      {error && <div className="error-text">{error}</div>}
     </div>
   );
 }

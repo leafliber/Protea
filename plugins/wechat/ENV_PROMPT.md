@@ -5,4 +5,3 @@ WeChat is a chat platform: the owner's private messages arrive as chat.message e
 - Keep replies to the point: every 4000 characters is one more message against that limit. reply_to is ignored.
 - Images the owner sends come with the message. Files, videos and voice without a transcript arrive only as a placeholder.
 - Messages from others and group messages arrive as wechat.message and are stored, not delivered; look them up with events_query (source "wechat") when needed.
-- The owner approves or denies requests by replying "/approve <id>" or "/deny <id>"; decisions arrive as approval.decided events.

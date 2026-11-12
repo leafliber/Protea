@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import type { BatchInfo, ContentBlock, EventEnvelope, ForkInfo, StatusResponse, TranscriptMessage, UsageInfo } from '@protea/protocol';
 import { enc, post, qs, useAction, useApi } from '../api';
-import { Button, Card, Drawer, Empty, ErrorText, Field, KV, LevelBadge, Ring, StateBadge, Tabs, clock, compact, dateTime, oneLine, timeAgo, usd } from '../components/ui';
+import { Button, Card, Drawer, Empty, ErrorText, Field, KV, LevelBadge, Ring, StateBadge, Tabs, clock, compact, dateTime, oneLine, timeAgo, usd, useAsk } from '../components/ui';
 import { BlockView, ContextView } from '../components/Trace';
 import { useReloadOn } from '../live';
 import { go, useSession } from '../session';
@@ -194,6 +194,7 @@ function SpawnFork({ onDone }: { onDone: () => void }) {
 }
 
 function Forks({ selected }: { selected: string | null }) {
+  const ask = useAsk();
   const { canWrite } = useSession();
   const r = useApi<{ forks: ForkInfo[] }>('/api/sessions/forks');
   useReloadOn('fork', r.reload, 300);
@@ -231,7 +232,7 @@ function Forks({ selected }: { selected: string | null }) {
                       ) : (
                         <Button small onClick={() => forkAction(f.id, 'pause')}>暂停</Button>
                       )}
-                      <Button small kind="danger" onClick={() => confirm('取消这个 Fork？') && forkAction(f.id, 'cancel')}>
+                      <Button small kind="danger" onClick={() => ask('取消这个后台任务？', () => forkAction(f.id, 'cancel'), { body: '它已经做的事不会撤销，但不会再继续。', confirm: '取消任务' })}>
                         取消
                       </Button>
                     </>
@@ -260,6 +261,7 @@ function Forks({ selected }: { selected: string | null }) {
 }
 
 export function Sessions({ status, params }: { status: StatusResponse | undefined; params: URLSearchParams }) {
+  const ask = useAsk();
   const { canWrite } = useSession();
   const tab = (params.get('tab') ?? 'main') as 'main' | 'context' | 'batches' | 'forks';
   const act = useAction();
@@ -302,11 +304,15 @@ export function Sessions({ status, params }: { status: StatusResponse | undefine
                     <Button
                       busy={act.busy}
                       onClick={() =>
-                        confirm('现在交接？较早的对话写成交接笔记，只保留最近一批。') &&
-                        void act.run(async () => {
-                          const r = await post<Record<string, unknown>>('/api/sessions/main/handoff', { reason: 'console' });
-                          setNote(r['scheduled'] ? '正在运行一批，交接在下一批开始时进行' : r['handedOff'] ? `已交接：${String(r['dropped'])} 条写入 /memories/${String(r['notes'])}，保留 ${String(r['kept'])} 条` : '还没有可以交接的内容');
-                        })
+                        ask(
+                          '现在交接主会话？',
+                          () =>
+                            void act.run(async () => {
+                              const r = await post<Record<string, unknown>>('/api/sessions/main/handoff', { reason: 'console' });
+                              setNote(r['scheduled'] ? '正在运行一批，交接在下一批开始时进行' : r['handedOff'] ? `已交接：${String(r['dropped'])} 条写入 /memories/${String(r['notes'])}，保留 ${String(r['kept'])} 条` : '还没有可以交接的内容');
+                            }),
+                          { body: '较早的对话写成交接笔记，只保留最近一批。', confirm: '交接', danger: false },
+                        )
                       }
                     >
                       手动交接

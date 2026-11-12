@@ -134,7 +134,9 @@ describe('M2 acceptance: plugins are hot-pluggable while the main session keeps 
 
     // A side effect that needs approval: requested on Telegram, approved there, then run once.
     tg.inject({ fromId: OWNER, text: 'post to family' });
-    await waitUntil(() => tg.sent.some((m) => m.text.includes('Reply /approve a1')), 'approval request');
+    await waitUntil(() => tg.sent.some((m) => /需要你确认|Needs your OK/.test(m.text)), 'approval request');
+    // The owner reads what will be sent, not the tool's arguments as JSON.
+    expect(tg.sent.find((m) => /需要你确认|Needs your OK/.test(m.text))?.text).toContain('Dinner at 7');
     expect(tg.sent.some((m) => m.chat_id === -100)).toBe(false);
     tg.inject({ fromId: OWNER, text: '/approve a1' });
     await waitUntil(() => tg.sent.some((m) => m.chat_id === -100 && m.text === 'Dinner at 7'), 'approved post');

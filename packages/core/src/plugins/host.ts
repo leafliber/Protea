@@ -8,6 +8,8 @@ import {
   type ApprovalDecideParams,
   type PermissionModeParams,
   type ApprovalInfo,
+  type ApprovalRequestParams,
+  type ApprovalResolvedParams,
   type BlobGetParams,
   type BlobGetResult,
   type BlobPutParams,
@@ -895,6 +897,7 @@ export class PluginHost {
       inputSchema: d.inputSchema,
       ...(d.flags ? { flags: d.flags } : {}),
       ...(d.timeoutMs !== undefined ? { timeoutMs: d.timeoutMs } : {}),
+      ...(d.approval && typeof d.approval === 'object' ? { approval: d.approval } : {}),
       handler: async (input, ctx) => {
         const proc = e.proc;
         if (!proc || e.state !== 'running') return { text: `plugin ${e.id} is not running`, failed: true };
@@ -1019,7 +1022,10 @@ export class PluginHost {
         }
         if (!this.approvals) throw new RpcError(RPC_ERRORS.Internal, 'approvals are not available');
         if (p.decision !== 'approve' && p.decision !== 'deny') throw new RpcError(RPC_ERRORS.InvalidParams, 'decision must be approve or deny');
-        return this.approvals.decide(str(p.id, 'id'), p.decision, `${e.id}:${senderKey}`, p.grantMs !== undefined ? { grantMs: Number(p.grantMs) } : {});
+        return this.approvals.decide(str(p.id, 'id'), p.decision, `${e.id}:${senderKey}`, {
+          ...(p.grantMs !== undefined ? { grantMs: Number(p.grantMs) } : {}),
+          ...(typeof p.note === 'string' && p.note.trim() ? { note: p.note } : {}),
+        });
       },
       [PLUGIN_TO_HOST.loginComplete]: (params) => this.completeLogin(e, params as LoginCompleteParams, log),
       [PLUGIN_TO_HOST.permissionsMode]: async (params) => {
@@ -1062,25 +1068,71 @@ export class PluginHost {
     if (e.pendingSettled.length > MAX_PENDING_SETTLED) e.pendingSettled.splice(0, e.pendingSettled.length - MAX_PENDING_SETTLED);
   }
 
-  /** Send an approval request to every running channel that can deliver it. Returns those that did. */
-  async requestApproval(a: ApprovalInfo): Promise<string[]> {
-    const params = { id: a.id, tool: a.tool, summary: a.summary, expiresAt: a.expiresAt, ...(a.reason !== undefined ? { reason: a.reason } : {}) };
-    const delivered: string[] = [];
-    await Promise.all(
-      [...this.entries.values()].map(async (e) => {
-        if (e.state !== 'running') return;
-        try {
-          if (e.inproc?.onApprovalRequest) {
-            if ((await e.inproc.onApprovalRequest(params)).delivered) delivered.push(e.id);
-          } else if (e.proc && e.capabilities.approvals) {
-            if ((await e.proc.approvalRequest(params)).delivered) delivered.push(e.id);
+  /** The running plugins that can show an approval request. */
+  approvalPlatforms(): string[] {
+    return [...this.entries.values()].filter((e) => e.state === 'running' && (e.inproc?.onApprovalRequest || (e.proc && e.capabilities.approvals))).map((e) => e.id);
+  }
+
+  /**
+   * Show an approval request to the owner. Without `platforms` every running channel that can
+   * show it gets it. With `platforms` only those do; when none of them takes it (not running,
+   * or the platform refused), the others are tried, so a request is never lost to a closed
+   * chat window. Returns the channels that showed it.
+   */
+  async requestApproval(a: ApprovalInfo, platforms?: readonly string[]): Promise<string[]> {
+    const grantMaxMs = this.approvals?.grantMax() ?? 0;
+    const params: ApprovalRequestParams = {
+      id: a.id,
+      tool: a.tool,
+      summary: a.summary,
+      expiresAt: a.expiresAt,
+      ...(a.reason !== undefined ? { reason: a.reason } : {}),
+      ...(a.view ? { view: a.view } : {}),
+      ...(grantMaxMs > 0 ? { grantMaxMs } : {}),
+    };
+    const send = async (ids: readonly string[]): Promise<string[]> => {
+      const delivered: string[] = [];
+      await Promise.all(
+        ids.map(async (id) => {
+          const e = this.entries.get(id);
+          if (!e || e.state !== 'running') return;
+          try {
+            if (e.inproc?.onApprovalRequest) {
+              if ((await e.inproc.onApprovalRequest(params)).delivered) delivered.push(e.id);
+            } else if (e.proc && e.capabilities.approvals) {
+              if ((await e.proc.approvalRequest(params)).delivered) delivered.push(e.id);
+            }
+          } catch (err) {
+            this.o.log.warn({ plugin: e.id, approval: a.id, err: errorMessage(err) }, 'approval request delivery failed');
           }
-        } catch (err) {
-          this.o.log.warn({ plugin: e.id, approval: a.id, err: errorMessage(err) }, 'approval request delivery failed');
-        }
-      }),
-    );
-    return delivered;
+        }),
+      );
+      return delivered;
+    };
+    const all = this.approvalPlatforms();
+    if (!platforms?.length) return send(all);
+    const chosen = all.filter((id) => platforms.includes(id));
+    const delivered = await send(chosen);
+    if (delivered.length > 0) return delivered;
+    // Asked again on new platforms while others already show it: nothing to fall back to.
+    if (a.deliveredTo?.length) return delivered;
+    return send(all.filter((id) => !chosen.includes(id)));
+  }
+
+  /** A request was decided or expired: the channels that showed it take it down. */
+  approvalResolved(a: ApprovalInfo): void {
+    if (a.state !== 'approved' && a.state !== 'denied' && a.state !== 'expired') return;
+    const params: ApprovalResolvedParams = { id: a.id, state: a.state, ...(a.decidedBy !== undefined ? { by: a.decidedBy } : {}) };
+    for (const id of a.deliveredTo ?? []) {
+      const e = this.entries.get(id);
+      if (!e || e.state !== 'running') continue;
+      try {
+        if (e.inproc) e.inproc.onApprovalResolved?.(params);
+        else if (e.proc && e.capabilities.approvals) e.proc.approvalResolved(params);
+      } catch (err) {
+        this.o.log.warn({ plugin: e.id, approval: a.id, err: errorMessage(err) }, 'could not tell a plugin that a request was settled');
+      }
+    }
   }
 
   // —— Sign-in (docs/30-specs/03-plugin-protocol.md §3) ——
@@ -1182,6 +1234,7 @@ export class PluginHost {
       config: e.config,
       dataDir: path.join(this.o.dataDir, 'plugin-data', p.id),
       timezone: this.o.timezone,
+      language: this.o.language ?? 'en',
       log,
       kv: kvNamespace(this.o.kv, `plugin:${p.id}`),
       clock: this.o.clock,

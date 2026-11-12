@@ -124,7 +124,14 @@
 | DELETE | `/api/secrets/:name` | 删除文件 → `{ ok, stillSetByEnvironment }`；管理员令牌不能删（400）；没有这个秘密 404 |
 | GET | `/api/permissions` | `{ settings, tools: [{ name, owner, policy, rule }] }`：规则与每个工具当前的决定 |
 | PATCH | `/api/permissions` | `permissions` 分节的 Merge Patch（如 `{ tools: { chat_send: ask } }`，`null` 删除规则），经 `PATCH /api/config` → 合并后的结果 |
-| GET | `/api/approvals?state=pending` | `{ approvals: ApprovalInfo[] }`（state：pending、approved、denied、expired、used） |
+| GET | `/api/approvals?state=pending` | `{ approvals: ApprovalInfo[] }`（state：pending、approved、denied、expired、used）。每项带 `view`（`ApprovalView`，人读的请求）、`input`（脱敏后的完整输入）、`deliveredTo`（显示过它的平台）、`note`（主人随决定说的话） |
+| GET | `/api/schedules` | `{ schedules: ScheduleInfo[] }`：`cron` 插件的任务，下次运行早的在前。每项 `{ id, name, cron?, at?, note?, level, enabled, kind: once\|recurring\|wake, createdBy: config\|assistant\|operator, createdAt, human, nextAt?, lastFiredAt?, fires, readOnly }` |
+| POST | `/api/schedules` | `{ name, cron \| at, note?, level?, enabled? }` → 201 `ScheduleInfo`；规则不对 422 |
+| PATCH | `/api/schedules/:id` | 只给要改的字段；`enabled: false` 暂停。`config.yaml` 里定义的 422。操作者改动助理建的任务时，助理收到 `schedule.changed` 事件 |
+| DELETE | `/api/schedules/:id` | 删除；`config.yaml` 里定义的 409 |
+| POST | `/api/schedules/:id/run` | 立即触发一次（202），不影响原有的时间 |
+| POST | `/api/schedules/preview` | `{ cron \| at }` → `{ human, next: string[] }`：规则的人话与接下来几次；不对 422 |
+| GET | `/api/schedules/:id/runs` | `{ schedule?, runs: [{ cursor, at, state, batchId?, manual? }] }`：最近 20 次触发（从事件日志查） |
 | GET | `/api/permissions/mode` | `PermissionModeInfo`：`{ mode, baseline, override?: { mode, until, by, setAt }, paused?: { at, reason }, auto: { since, allowed, held, judge: { model, ready, problem? } }, bypassMaxMs }` |
 | POST | `/api/permissions/mode` | `{ mode: ask\|auto\|bypass\|locked, forMs? }`，返回 `PermissionModeInfo`；不带 `forMs` 写成基线，`bypass` 必须带 `forMs`，否则 400 |
 | GET | `/api/approvals/grants` | `{ grants: ApprovalGrantInfo[] }`：时限授权，新的在前 |
@@ -208,7 +215,7 @@
 
 - 连接后服务端先发 `{ topic: 'hello', data: { runId, role } }`。
 - 客户端发 `WsClientMessage`：`{ subscribe: WsTopic[], since?: cursor, logFilter?: { level?, component?, plugin?, q? } }`；每条替换之前的订阅，服务端回 `{ topic: 'subscribed', data: { topics } }`；未知分组回 `{ topic: 'error', data: { message } }`。
-- 分组 `WS_TOPICS`：`events`（`event`、`settled`、`promoted`）、`phase`（`phase`、`batch.*`）、`scheduler`、`output`、`chat`（`chat.draft`，只有对话窗口订阅；载荷见 `@protea/protocol` 的 `ChatDraftUpdate`）、`changes`（`fork`、`plugin`、`approval`、`change`、`permission`、`mcp`、`skills`、`handoff`、`persona`）、`usage`（`UsageInfo`）、`logs`（`log`，`LogRecord`）。 `trace`（`model.request`、`model.delta`、`model.response`、`tool.call`，运行流；载荷见 `@protea/protocol` 的 `TraceMessage`）。
+- 分组 `WS_TOPICS`：`events`（`event`、`settled`、`promoted`）、`phase`（`phase`、`batch.*`）、`scheduler`、`output`、`chat`（`chat.draft`，只有对话窗口订阅；载荷见 `@protea/protocol` 的 `ChatDraftUpdate`）、`changes`（`fork`、`plugin`、`approval`、`schedule`、`change`、`permission`、`mcp`、`skills`、`handoff`、`persona`）、`usage`（`UsageInfo`）、`logs`（`log`，`LogRecord`）。 `trace`（`model.request`、`model.delta`、`model.response`、`tool.call`，运行流；载荷见 `@protea/protocol` 的 `TraceMessage`）。
 - 带 `since` 且订阅了 `events` 时，先补发游标之后存储的全部事件，期间的实时消息暂存后放出；同一游标不会发两次。
 - 服务端每 30 s ping，一个周期内没有 pong 的连接被终止；未发出的数据超过 8 MB 时以 1013 关闭。
 

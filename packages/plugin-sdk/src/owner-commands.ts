@@ -54,7 +54,10 @@ export async function modeCommand<C>(host: Pick<Host<C>, 'permissions'>, senderK
   }
 }
 
-/** "/approve a12", "/approve a12 1h" (also allows this tool family for an hour), "/deny a12". Null for anything else. */
+/**
+ * "/approve a12", "/approve a12 1h" (also allows this tool family for an hour), "/deny a12". Null for anything else.
+ * Connectors that show requests use `ApprovalInbox.reply`, which also understands buttons and plain words.
+ */
 export async function approvalCommand<C>(host: Pick<Host<C>, 'approvals'>, senderKey: string, text: string): Promise<string | null> {
   const cmd = /^\/(approve|deny)\s+(a\d+)(?:\s+(\d+)\s*(m|min|h|hr)?)?\s*$/i.exec(text.trim());
   if (!cmd) return null;

@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { WhoAmIResponse } from '@protea/protocol';
 import { ApiError, api, onUnauthorized, post } from './api';
-import { Button, ErrorText } from './components/ui';
+import { FeedbackProvider, Button, ErrorText } from './components/ui';
 import { ConsoleShell } from './Console';
 import { live } from './live';
 import { SessionContext, goChat, useRoute, useStatus } from './session';
@@ -99,6 +99,7 @@ function SignedIn({ me, onLogout }: { me: WhoAmIResponse; onLogout: () => void }
   }, []);
   return (
     <SessionContext.Provider value={{ role: me.role, canWrite: me.role === 'admin', ...(me.username ? { username: me.username } : {}) }}>
+      <FeedbackProvider>
       <div className={mode === 'console' ? 'app app-console' : 'app app-chat'}>
         <RiskBanner />
         {mode === 'chat' ? (
@@ -114,6 +115,7 @@ function SignedIn({ me, onLogout }: { me: WhoAmIResponse; onLogout: () => void }
           <ConsoleShell me={me} page={page} params={params} status={status} reload={reload} onLogout={onLogout} />
         )}
       </div>
+      </FeedbackProvider>
     </SessionContext.Provider>
   );
 }

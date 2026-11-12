@@ -666,6 +666,7 @@ export class McpManager implements PromptSource {
       const readOnly = t.annotations?.readOnlyHint === true;
       const filtered = (allow !== undefined && !matchesAny(t.name, allow)) || (deny !== undefined && matchesAny(t.name, deny));
       const name = mcpToolName(e.id, t.name);
+      const title = (typeof t.annotations?.title === 'string' && t.annotations.title) || (typeof t.title === 'string' && t.title) || '';
       const description = e.settings.descriptionOverrides[t.name] ?? (t.description || t.title || `${t.name} (MCP server ${e.id})`);
       infos.push({
         name,
@@ -684,6 +685,8 @@ export class McpManager implements PromptSource {
         timeoutMs: e.settings.toolTimeoutMs,
         deferrable: e.settings.alwaysLoad !== true,
         externalSchema: true,
+        // The server's own title for the tool is what the owner reads in an approval request.
+        ...(title ? { approval: { title } } : {}),
         handler: (input, ctx) => this.callTool(e, t.name, input, ctx.signal),
       };
       specs.push(spec as unknown as ToolSpec<never>);
