@@ -91,6 +91,7 @@
 | GET | `/api/plugins` · `/api/plugins/:id` | 列表、详情（`PluginStatus` + `manifest`：显示名、说明、版本、等级、触发、声明的秘密、目录、清单错误与警告） |
 | POST | `/api/plugins` | `{ path, enable? }`、`{ source: git, url, ref?, subdir?, enable? }` 或 `{ source: tarball, url, subdir?, enable? }`：取到本地临时目录（Git 浅克隆；tarball ≤ 50 MB，单层包装目录自动展开），校验清单后复制到 `/data/plugins/<id>`（不含 `.git`）→ 201 `PluginStatus`。来源里必须有可直接运行的入口；指向来源外的符号链接、越界的 `subdir` 一律 400 |
 | POST | `/api/plugins/:id/enable` · `/disable` · `/reload` · `/restart` | 返回 `PluginStatus`；`restart` 从 failed 恢复 |
+| POST | `/api/plugins/:id/always-load` · `/on-demand` | 写 `plugins.<id>.alwaysLoad`：它的工具是否永不延迟加载（插件不重启，下一次请求生效）；返回 `PluginStatus`（含 `alwaysLoad`、`deferredTools`） |
 | DELETE | `/api/plugins/:id?keepData=true` | 卸载（须先禁用）；返回 `{ ok, replacedBy }`（重新出现的同名内置插件） |
 | GET | `/api/plugins/:id/config` | `{ config, schema, coldKeys }`：`schema` 为插件的 JSON Schema（没有则 null）；`x-secret` 键若不是 `${secret:…}` 引用则显示为 `********`；`coldKeys` 是 `x-hot: false` 的键 |
 | PATCH | `/api/plugins/:id/config` | `{ config }` 整体替换：按 schema 校验，写回 `config.yaml` 并应用 |

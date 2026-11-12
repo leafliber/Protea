@@ -97,6 +97,8 @@ export interface ControlDeps extends Omit<OpsDeps, 'store' | 'audit'> {
   setMcpEnabled?: (id: string, enabled: boolean) => Promise<void>;
   /** `alwaysLoad`: the server's tools are never deferred behind tool search. */
   setMcpAlwaysLoad?: (id: string, on: boolean) => Promise<void>;
+  /** `plugins.<id>.alwaysLoad`: the plugin's tools are never deferred behind tool search (saved; the plugin keeps running). */
+  setPluginAlwaysLoad?: (id: string, on: boolean) => void;
   skills?: SkillRegistry;
   /** Persist `skills.disabled` and update the catalog. */
   setSkillEnabled?: (name: string, enabled: boolean) => void;
@@ -529,6 +531,18 @@ export function createControlApp(d: ControlDeps): Hono {
       if (!d.plugins?.get(id)) return c.json({ error: { code: 'not_found', message: 'no such plugin' } }, 404);
       try {
         return c.json(await d.plugins[action](id));
+      } catch (err) {
+        return errorJson(c, 409, `${action}_failed`, err);
+      }
+    });
+  }
+  for (const action of ['always-load', 'on-demand'] as const) {
+    app.post(`/api/plugins/:id/${action}`, (c) => {
+      const id = c.req.param('id');
+      if (!d.plugins?.get(id) || !d.setPluginAlwaysLoad) return c.json({ error: { code: 'not_found', message: 'no such plugin' } }, 404);
+      try {
+        d.setPluginAlwaysLoad(id, action === 'always-load');
+        return c.json(d.plugins.get(id));
       } catch (err) {
         return errorJson(c, 409, `${action}_failed`, err);
       }

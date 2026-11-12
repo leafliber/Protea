@@ -250,6 +250,40 @@ describe('plugin host: out-of-process plugins', () => {
     await expect(h.host.updateConfig('fx', { greeting: 42 })).rejects.toThrow(/invalid config for fx/);
   });
 
+  it('lets a tool plugin load on demand, keeps a connector loaded, and switches either without a restart', async () => {
+    const h = harness({ settings: { fx: { enabled: true, config: {} } } });
+    writeFixture(h.pluginsDir, { manifest: { kind: 'tool' } });
+    await started(h);
+    const pid = h.host.get('fx')?.pid;
+    expect(h.host.get('fx')?.alwaysLoad).toBe(false);
+    expect(h.tools.get('fx_echo')?.deferrable).toBe(true);
+    // Always load: the tools stay registered, the process keeps running.
+    const rev = h.tools.revision;
+    expect(h.host.setAlwaysLoad('fx', true)).toMatchObject({ alwaysLoad: true, state: 'running', pid });
+    expect(h.tools.get('fx_echo')?.deferrable).toBeUndefined();
+    expect(h.tools.revision).toBeGreaterThan(rev);
+    expect((await h.call('fx_echo', { text: 'still here' })).content).toBe('echo: still here');
+    // Back to the kind's default through the config file (hot reload).
+    await h.host.applySettings('fx', { enabled: true, config: {} });
+    expect(h.host.get('fx')?.alwaysLoad).toBe(false);
+    expect(h.tools.get('fx_echo')?.deferrable).toBe(true);
+    // A restart registers the tools again with the same choice.
+    h.host.setAlwaysLoad('fx', true);
+    await h.host.reload('fx');
+    expect(h.tools.get('fx_echo')?.deferrable).toBeUndefined();
+  });
+
+  it('keeps a connector’s tools loaded unless it is set to load on demand', async () => {
+    const h = harness({ settings: { fx: { enabled: true, config: {} } } });
+    writeFixture(h.pluginsDir);
+    await started(h);
+    expect(h.host.get('fx')?.alwaysLoad).toBe(true);
+    expect(h.tools.get('fx_echo')?.deferrable).toBeUndefined();
+    await h.host.applySettings('fx', { enabled: true, config: {}, alwaysLoad: false });
+    expect(h.host.get('fx')?.alwaysLoad).toBe(false);
+    expect(h.tools.get('fx_echo')?.deferrable).toBe(true);
+  });
+
   it('resolves ${secret:NAME} references in plugin config', async () => {
     const h = harness({ env: { PROTEA_SECRET_HOOK_KEY: 's3cret' }, settings: { fx: { enabled: true, config: { token: '${secret:HOOK_KEY}' } } } });
     writeFixture(h.pluginsDir);

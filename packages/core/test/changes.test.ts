@@ -86,7 +86,7 @@ function setup(over: { adapters?: Partial<Record<'mcp' | 'skill' | 'plugin', Cha
 
   const plugins = new Map<string, PluginStatus>();
   const configs: Record<string, Record<string, unknown>> = {};
-  const status = (id: string, enabled: boolean): PluginStatus => ({ id, kind: 'tool', state: enabled ? 'running' : 'stopped', enabled, origin: 'data', tools: [] });
+  const status = (id: string, enabled: boolean): PluginStatus => ({ id, kind: 'tool', state: enabled ? 'running' : 'stopped', enabled, origin: 'data', tools: [], alwaysLoad: false });
   const plugin = pluginChangeAdapter({
     get: (id) => plugins.get(id),
     dirOf: (id) => (plugins.has(id) ? path.join(dir, 'plugins', id) : undefined),

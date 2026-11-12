@@ -197,7 +197,7 @@ function validate(cfg: ProteaConfig, warnings: string[]): void {
   if (!['auto', 'always', 'never'].includes(ts.mode)) throw new Error('context.toolSearch.mode must be auto, always or never');
   if (!(Number.isInteger(ts.threshold) && ts.threshold >= 0)) throw new Error('context.toolSearch.threshold must be a non-negative integer');
   if (!(Number.isInteger(ts.thresholdTokens) && ts.thresholdTokens >= 0)) throw new Error('context.toolSearch.thresholdTokens must be a non-negative integer');
-  if (!(Number.isInteger(ts.keepPerServer) && ts.keepPerServer >= 0)) throw new Error('context.toolSearch.keepPerServer must be a non-negative integer');
+  if (!(Number.isInteger(ts.keepPerOwner) && ts.keepPerOwner >= 0)) throw new Error('context.toolSearch.keepPerOwner must be a non-negative integer');
   const h = cfg.context.handoff;
   const posInt = (v: unknown): boolean => Number.isInteger(v) && (v as number) > 0;
   if (!posInt(h.softTokens)) throw new Error('context.handoff.softTokens must be a positive integer');
@@ -232,6 +232,8 @@ function validate(cfg: ProteaConfig, warnings: string[]): void {
     if (p.enabled === undefined) p.enabled = false; // plugins without built-in defaults start disabled
     if (typeof p.enabled !== 'boolean') throw new Error(`plugins.${id}.enabled must be a boolean`);
     p.config ??= {};
+    if (p.alwaysLoad === null) delete p.alwaysLoad;
+    if (p.alwaysLoad !== undefined && typeof p.alwaysLoad !== 'boolean') throw new Error(`plugins.${id}.alwaysLoad must be a boolean`);
   }
 }
 

@@ -101,7 +101,7 @@ export class ToolDispatcher {
     const results: OneResult[] = new Array(uses.length);
     const inflight: Promise<void>[] = [];
     for (const [i, written] of uses.entries()) {
-      // A redirecting tool (mcp_call) stands for another: from here on the call is that tool's.
+      // A redirecting tool (tool_call) stands for another: from here on the call is that tool's.
       const { use, refused } = this.resolve(written);
       inflight.push(
         this.traced(use, ctx, refused).then((r) => {

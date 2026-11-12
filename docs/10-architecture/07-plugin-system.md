@@ -1,6 +1,6 @@
 # 插件系统
 
-> 状态：Accepted（M2）· 更新：2026-11-03 · 决策：[ADR-0005](../20-decisions/ADR-0005-plugin-isolation-out-of-process.md) · 规范：[../30-specs/02-plugin-manifest.md](../30-specs/02-plugin-manifest.md) · [../30-specs/03-plugin-protocol.md](../30-specs/03-plugin-protocol.md)
+> 状态：Accepted（M2）· 更新：2026-11-12 · 决策：[ADR-0005](../20-decisions/ADR-0005-plugin-isolation-out-of-process.md) · [ADR-0023](../20-decisions/ADR-0023-plugin-tools-on-demand.md) · 规范：[../30-specs/02-plugin-manifest.md](../30-specs/02-plugin-manifest.md) · [../30-specs/03-plugin-protocol.md](../30-specs/03-plugin-protocol.md)
 
 > **实现状态（M2）**：`source` / `connector` / `tool` 三类进程外插件已实现（`packages/core/src/plugins/`：`manifest.ts` 清单与发现，`process.ts` 子进程与协议，`host.ts` 生命周期与监督，事件网关在 `events/gateway.ts`，`conformance.ts` 一致性检查）；MCP 服务器由 MCP 管理器运行（M3，[09-mcp-integration.md](09-mcp-integration.md)；服务器在 `mcp.servers` 里声明，`kind: mcp` 清单在 M5），Skills 由 Skills 注册表管理（M3，[10-skills.md](10-skills.md)），`provider` 插件在 M7。进程内插件只有 `console` 与 `cron`，由守护进程在代码里注册。
 
@@ -147,11 +147,21 @@ stateDiagram-v2
 | 卸载 | 必须先禁用；删除目录、配置组、`plugin-data`（`keepData` 可保留） | 否 |
 | 升级内核 | 换镜像 | 是（整个容器） |
 
-对应接口：`POST /api/plugins`、`POST /api/plugins/:id/enable|disable|reload|restart`、`PATCH /api/plugins/:id/config`、`DELETE /api/plugins/:id`；CLI `protea plugins install|enable|disable|reload|restart|config|uninstall`。
+对应接口：`POST /api/plugins`、`POST /api/plugins/:id/enable|disable|reload|restart|always-load|on-demand`、`PATCH /api/plugins/:id/config`、`DELETE /api/plugins/:id`；CLI `protea plugins install|enable|disable|reload|restart|always-load|on-demand|config|uninstall`。
 
 **秘密与环境**：子进程只拿到最小环境（`PATH`、`HOME`、`LANG`、`TZ`、`PROTEA_PLUGIN_ID`、`PROTEA_PLUGIN_DATA_DIR`、清单 `runtime.env`）加上清单声明的秘密；守护进程自己的环境（例如供应商密钥 `PROVIDER_<ID>_API_KEY`）不会传给插件。插件配置里的 `${secret:NAME}` 只在发给插件的那一刻解析。
 
 **工具表与环境提示的变化**在下一个回合边界生效（[06-context-assembly.md](06-context-assembly.md) §4）。禁用一个插件时，它的工具从表中移除；若模型随后仍调用了旧工具名，回执为 `failed: tool not available (plugin disabled)`。
+
+### 7.1 工具按需加载
+
+插件工具和 MCP 工具一样参与工具搜索（[12-model-providers.md](12-model-providers.md) §5，[ADR-0023](../20-decisions/ADR-0023-plugin-tools-on-demand.md)）：工具多了以后，可延迟的工具不随每次请求发送定义，模型用到时再查。
+
+- `plugins.<id>.alwaysLoad`：`true` 工具始终加载；`false` 可以按需加载。不写时按种类：`connector` 与进程内插件（`console`、`webchat`、`cron`）始终加载，`tool` 与 `source` 可以按需加载。
+- "可以按需加载"只在启用条件满足时（工具总数超过 `context.toolSearch.threshold`，或可延迟工具的定义超过 `thresholdTokens`）才真的延迟，且每个插件调用最多的 `keepPerOwner`（默认 3）个工具照样加载。
+- 切换不重启插件：工具表直接改这些工具的可延迟标记，下一次请求生效，前缀缓存失效一次。入口：`config.yaml`（热加载）、`POST /api/plugins/:id/always-load` · `/on-demand`、`protea plugins always-load|on-demand <id>`、插件页弹窗里的按钮。
+- `PluginStatus.alwaysLoad` 是生效的值（已按种类取过默认），`deferredTools` 是此刻被延迟的个数。
+- 客户端模式下被延迟的插件工具出现在 `tool-catalog` 段里（"plugin, N tools" 加工具全名），用 `tool_search {source: <插件 id>}` 查、`tool_call` 调；权限、审批与审计按真实工具名走。
 
 ## 8. 插件 SDK
 

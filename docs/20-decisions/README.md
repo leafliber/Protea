@@ -25,6 +25,8 @@
 | [ADR-0019](ADR-0019-capability-change-requests.md) | 助理对 MCP 服务器、Skills、插件的改动只能提议，由管理员人工审核后由 Core 应用 | Accepted |
 | [ADR-0020](ADR-0020-fork-reuse-client-tool-search-final-reply.md) | Fork 汇报后待命可复用；Provider 不能搜索工具时由客户端延迟加载；回复可以直接结束回合 | Accepted |
 | [ADR-0021](ADR-0021-readable-approval-requests-and-delivery.md) | 授权请求按"人读的样子"生成，助理可以选择发到哪个平台 | Accepted |
+| [ADR-0022](ADR-0022-no-backward-compatibility-before-launch.md) | 上线前不做向前兼容，只用最合适的方案（上线时必须被取代） | Accepted |
+| [ADR-0023](ADR-0023-plugin-tools-on-demand.md) | 插件工具也可以按需加载，按插件配置；元工具改名为 `tool_search` / `tool_call`（修订 ADR-0020 的命名） | Accepted |
 
 新增 ADR：复制 `ADR-0000-template.md`（见下），编号递增，提交 PR 时在此表登记。
 

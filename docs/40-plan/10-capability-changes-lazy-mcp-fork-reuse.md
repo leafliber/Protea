@@ -2,6 +2,8 @@
 
 > 状态：Accepted（2026-11-12 实现；真实模型下的表现待 T17 实测）· 更新：2026-11-12 · 决策：[ADR-0019](../20-decisions/ADR-0019-capability-change-requests.md) · [ADR-0020](../20-decisions/ADR-0020-fork-reuse-client-tool-search-final-reply.md) · 相关：[05-sessions-and-agent-loop.md](../10-architecture/05-sessions-and-agent-loop.md) §3、§5 · [09-mcp-integration.md](../10-architecture/09-mcp-integration.md) §5 · [12-model-providers.md](../10-architecture/12-model-providers.md) §5 · [13-control-plane.md](../10-architecture/13-control-plane.md) · [14-security-and-permissions.md](../10-architecture/14-security-and-permissions.md) §3.1 · [17-chat-and-console.md](../10-architecture/17-chat-and-console.md)
 
+> 2026-11-12 修订：按需加载已推广到插件工具，元工具与系统段改名为 `tool_search` / `tool_call` / `tool-catalog`，`keepPerServer` 改为 `keepPerOwner`（[ADR-0023](../20-decisions/ADR-0023-plugin-tools-on-demand.md)）。下文保留当时的名字。
+
 本文是实施前定下的方案，保留原样供对照；精确形态以架构与规范文档为准，实施中和方案不一样的地方记在最后一节。
 
 

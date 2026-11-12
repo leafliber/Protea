@@ -42,12 +42,12 @@ export interface ToolSpec<I = unknown> {
   inputSchema: JsonSchema;
   flags?: ToolFlags;
   timeoutMs?: number;
-  /** May be deferred behind the provider's tool search when there are many tools (MCP tools). */
+  /** May be deferred behind tool search when there are many tools (MCP servers and plugins not set to always load). */
   deferrable?: boolean;
   /** The schema comes from elsewhere (an MCP server): if it does not compile, skip local validation. */
   externalSchema?: boolean;
   /**
-   * Part of the client-side tool search (`mcp_search`, `mcp_call`): sent to the model only while
+   * Part of the client-side tool search (`tool_search`, `tool_call`): sent to the model only while
    * some tools are held back for a provider that cannot search them itself, and callable by any
    * session that has such a tool.
    */

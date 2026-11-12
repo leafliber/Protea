@@ -179,6 +179,11 @@ function PluginModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
           <>
             {s.enabled ? <Button small onClick={() => action('disable')}>禁用</Button> : <Button small kind="primary" onClick={() => action('enable')}>启用</Button>}
             <Button small onClick={() => action('reload')} title="重新读取清单与配置并重启">重载</Button>
+            {s.tools.length > 0 && (
+              <Button small kind="ghost" title="按需加载：工具多时不随每次请求发送定义，助理用到时再取。插件不重启，下一次请求生效。" onClick={() => action(s.alwaysLoad ? 'on-demand' : 'always-load')}>
+                {s.alwaysLoad ? '改为按需加载' : '改为始终加载'}
+              </Button>
+            )}
             {(s.state === 'failed' || s.state === 'crashed') && <Button small onClick={() => action('restart')}>重启</Button>}
             {s.origin === 'data' && (
               <Button
@@ -210,6 +215,7 @@ function PluginModal({ id, onClose, onChanged }: { id: string; onClose: () => vo
           ['类型', `${kindLabel(s.kind)} · ${s.origin}${s.version ? ` · v${s.version}` : ''}`],
           ['说明', String(m['description'] ?? '—')],
           ['工具', s.tools.length ? s.tools.join(', ') : '—'],
+          ...(s.tools.length ? [['加载', s.alwaysLoad ? '始终加载' : s.deferredTools ? `按需加载（现有 ${s.deferredTools} 个按需）` : '可按需加载（工具不多时仍随请求发送）'] as [string, string]] : []),
           ['进程', s.pid ? `pid ${s.pid}${s.restarts ? ` · 重启 ${s.restarts} 次` : ''}` : '—'],
           ...(Array.isArray(m['secrets']) && (m['secrets'] as string[]).length ? ([['需要的秘密', (m['secrets'] as string[]).join(', ')]] as Array<[string, string]>) : []),
         ]}
@@ -318,7 +324,7 @@ export function Plugins({ params }: { params: URLSearchParams }) {
             </div>
             <div className="muted small">{[kind === 'all' ? kindLabel(p.kind) : null, p.origin, p.version ? `v${p.version}` : null].filter(Boolean).join(' · ')}</div>
             <div className="small">
-              {p.tools.length} 个工具{p.restarts ? <Badge tone="warn">重启 {p.restarts}</Badge> : null}
+              {p.tools.length} 个工具{p.deferredTools ? `（${p.deferredTools} 个按需加载）` : ''}{p.restarts ? <Badge tone="warn">重启 {p.restarts}</Badge> : null}
             </div>
             {p.error && <div className="error-text small">{oneLine(p.error, 90)}</div>}
           </button>

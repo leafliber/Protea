@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ScriptedProvider, reply, setConfigValue, silentLogger, textReply, toolCall, type ProviderRequest } from '@protea/core';
+import { ScriptedProvider, loadConfig, reply, setConfigValue, silentLogger, textReply, toolCall, type ProviderRequest } from '@protea/core';
 import type { ApprovalInfo, PluginStatus } from '@protea/protocol';
 import { startDaemon, type Daemon } from '../src/index.js';
 import { FakeTelegram } from '../../../plugins/telegram/test/fake-telegram.js';
@@ -120,7 +120,7 @@ describe('M2 acceptance: plugins are hot-pluggable while the main session keeps 
     expect(installed.json).toMatchObject({ state: 'running', enabled: true, origin: 'data', tools: ['tg_react', 'tg_send_chat'] });
     const yaml = fs.readFileSync(path.join(dataDir, 'config.yaml'), 'utf8');
     expect(yaml).toContain('# operator comments survive edits made through the API');
-    expect(yaml).toMatch(/telegram:\n\s+config:\n\s+apiBase:/);
+    expect(yaml).toMatch(/telegram:\n\s+enabled: true\n\s+config:\n\s+apiBase:/);
 
     // The owner writes; the assistant answers on Telegram.
     tg.inject({ fromId: OWNER, text: 'hello from telegram' });
@@ -197,6 +197,48 @@ describe('M2 acceptance: plugins are hot-pluggable while the main session keeps 
     expect(provider.calls.at(-1)?.system.find((s) => s.id === 'permissions')?.text).toContain('Not allowed: chat_send');
     setConfigValue(dataDir, ['permissions', 'tools', 'chat_send'], undefined);
     await waitUntil(() => d.config.permissions.tools['chat_send'] === undefined, 'config reload back');
+  });
+
+  it('switches a plugin between always loaded and on demand without restarting it', async () => {
+    // cron is in-process: its tools always load unless it is set otherwise.
+    expect((await api<PluginStatus>('GET', '/api/plugins/cron')).json).toMatchObject({ alwaysLoad: true, state: 'running' });
+    // Defer whatever may be deferred, keeping one tool per owner.
+    setConfigValue(dataDir, ['context', 'toolSearch'], { mode: 'always', threshold: 40, thresholdTokens: 0, keepPerOwner: 1 });
+    await waitUntil(() => d.config.context.toolSearch.keepPerOwner === 1, 'config reload');
+
+    const onDemand = await api<PluginStatus>('POST', '/api/plugins/cron/on-demand');
+    expect(onDemand.status).toBe(200);
+    expect(onDemand.json).toMatchObject({ alwaysLoad: false, state: 'running', deferredTools: 4 });
+    expect(d.config.plugins['cron']).toMatchObject({ enabled: true, alwaysLoad: false });
+    // Saved with `enabled`: a group without it would read as disabled and stop the plugin at the next reload.
+    expect(loadConfig(dataDir, {}).config.plugins['cron']).toMatchObject({ enabled: true, alwaysLoad: false });
+
+    // The next request: one cron tool, the search tools, and a catalog line for cron.
+    const turn = async (text: string): Promise<ProviderRequest> => {
+      const calls = provider.calls.length;
+      await api('POST', '/api/events', { text });
+      await waitUntil(() => provider.calls.length > calls && !d.main.busy, 'next turn');
+      return provider.calls.at(-1) as ProviderRequest;
+    };
+    const cronTools = ['schedule_create', 'schedule_delete', 'schedule_list', 'schedule_update', 'sleep_until'];
+    const held = await turn('anything due?');
+    const names = held.tools.map((t) => t.name);
+    expect(names.filter((n) => cronTools.includes(n))).toHaveLength(1);
+    expect(names).toEqual(expect.arrayContaining(['tool_search', 'tool_call']));
+    expect(held.system.find((s) => s.id === 'tool-catalog')?.text).toMatch(/- cron \(plugin, 4 tools\)/);
+
+    // Back to always loaded: every cron tool returns, nothing is held back, the plugin kept running.
+    expect((await api<PluginStatus>('POST', '/api/plugins/cron/always-load')).json).toMatchObject({ alwaysLoad: true, state: 'running' });
+    const loaded = await turn('and now?');
+    expect(loaded.tools.map((t) => t.name).filter((n) => cronTools.includes(n)).sort()).toEqual(cronTools);
+    expect(loaded.system.map((s) => s.id)).not.toContain('tool-catalog');
+
+    // Removing the key from config.yaml goes back to the kind's default.
+    setConfigValue(dataDir, ['plugins', 'cron', 'alwaysLoad'], undefined);
+    await waitUntil(() => d.config.plugins['cron']?.alwaysLoad === undefined, 'config reload back');
+    expect((await api<PluginStatus>('GET', '/api/plugins/cron')).json).toMatchObject({ alwaysLoad: true, enabled: true, state: 'running' });
+    setConfigValue(dataDir, ['context', 'toolSearch'], undefined);
+    await waitUntil(() => d.config.context.toolSearch.mode === 'auto', 'tool search back');
   });
 
   it('forwards /hooks/<name> to the webhook plugin, which verifies signatures', async () => {

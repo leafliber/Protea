@@ -34,7 +34,7 @@ function registry(): ToolRegistry {
 }
 
 function exposure(tools: ToolRegistry, s: Partial<ToolSearchSettings> = {}, usage: Record<string, number> = {}, supported = true) {
-  const settings: ToolSearchSettings = { mode: 'auto', threshold: 40, thresholdTokens: 0, keepPerServer: 3, ...s };
+  const settings: ToolSearchSettings = { mode: 'auto', threshold: 40, thresholdTokens: 0, keepPerOwner: 3, ...s };
   return new ToolExposure({ tools, settings: () => settings, usage: (n) => usage[n] ?? 0, supported: () => supported });
 }
 
@@ -182,7 +182,7 @@ async function runSession(withMcp: boolean): Promise<{ ratio: number; calls: Pro
       }
     },
   ]);
-  const h = makeHarness({ provider, toolSearch: { mode: 'auto', threshold: 40, thresholdTokens: 0, keepPerServer: 3 } });
+  const h = makeHarness({ provider, toolSearch: { mode: 'auto', threshold: 40, thresholdTokens: 0, keepPerOwner: 3 } });
   const mcp = new McpManager({
     tools: h.tools,
     bus: h.bus,

@@ -215,7 +215,7 @@ Claude 5 系列的 thinking 块绑定产生它的对话前缀（system、工具�
 | ✓ `events_promote {cursor, trigger}` | 把未投递事件（pending 或 `store` 归档的）改为 `flush` 或 `piggyback`；等级不变 | |
 | ✓ `fork_spawn / fork_send / fork_status / fork_cancel` | Fork 管理（§5）；`fork_send` 给待命或运行中的 Fork 追加工作 | `fork_status` 只读 |
 | ✓ `mcp_propose / skill_propose / plugin_propose / change_status / change_withdraw` | 提议改 MCP 服务器、Skills、插件；只登记请求，由管理员在控制台审核（[14](14-security-and-permissions.md) §3.1） | `change_status` 只读；Fork 默认不带 |
-| ✓ `mcp_search / mcp_call` | Provider 不能搜索工具时，查找并调用被延迟的 MCP 工具（[12](12-model-providers.md) §5）；只在确有工具被延迟时出现 | `mcp_search` 只读 |
+| ✓ `tool_search / tool_call` | Provider 不能搜索工具时，查找并调用被延迟的 MCP 工具与插件工具（[12](12-model-providers.md) §5）；只在确有工具被延迟时出现 | `tool_search` 只读 |
 | `memory_*` | 记忆读写（[11](11-memory-and-persona.md)） | |
 | `skill_load {name}` | 加载 Skill 正文与文件清单（[10](10-skills.md)） | 只读、可并行 |
 | ✓ `schedule_create / schedule_list / schedule_delete` | 操作 `cron` 事件源 | |

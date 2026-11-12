@@ -134,6 +134,13 @@ export interface PluginStatus {
   origin: 'inproc' | 'builtin' | 'data';
   version?: string;
   tools: string[];
+  /**
+   * Its tools always load up front (`plugins.<id>.alwaysLoad`; unset, connectors and in-process
+   * plugins do). Otherwise they may be deferred behind tool search.
+   */
+  alwaysLoad: boolean;
+  /** How many of its tools are deferred right now. */
+  deferredTools?: number;
   pid?: number;
   /** Resident memory of the plugin process and its children at the last sample (out-of-process plugins). */
   memoryBytes?: number;
@@ -457,7 +464,7 @@ export interface StatusResponse {
   skills: { listed: number; rejected: number };
   /**
    * Tools the model can call, how many of them it has to look up first, and how it does:
-   * `native` is the provider's tool search, `client` is `mcp_search` / `mcp_call`.
+   * `native` is the provider's tool search, `client` is `tool_search` / `tool_call`.
    */
   tools: { total: number; deferred: number; search?: 'native' | 'client' };
   /**
