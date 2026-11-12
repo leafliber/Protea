@@ -9,12 +9,12 @@ import { UserMenu } from '../components/UserMenu';
 import { IconAlert, IconArrowDown, IconCheck, IconConsole, IconCopy, IconRetry, IconSend } from '../components/icons';
 import { cx } from '../components/ui';
 import { applyDraft, removeBatchDrafts, removeDraft, type ChatDraft } from '../chat-drafts';
+import { CATCH_UP_PAGES, PAGE, merge, order, reaches, trimOldest } from '../chat-window';
 import { live, useChatDrafts, useLive, useLiveState, useReloadOn } from '../live';
 import { consoleHref, useSession } from '../session';
 import { chatActivity } from '../view-logic';
 import { ChangeCards } from './Changes';
 
-const PAGE = 50;
 /** Messages from the same side closer than this read as one group (one avatar, one time stamp). */
 const GROUP_MS = 3 * 60_000;
 
@@ -32,20 +32,6 @@ const PLATFORM = 'webchat';
 const PENDING_TEXT: Record<ChatPending, string> = { images: '正在准备图片…', choices: '正在准备选项…', widget: '正在生成小组件…' };
 
 const SOURCE_LABEL: Record<string, string> = { cron: '定时提醒', core: '后台任务', telegram: 'Telegram', wechat: '微信', qq: 'QQ', rss: '订阅更新', imap: '新邮件', webhook: 'Webhook', filewatch: '文件变化', shell: '命令' };
-
-function order(a: ChatItem, b: ChatItem): number {
-  if (a.at !== b.at) return a.at < b.at ? -1 : 1;
-  const ka = a.key[0] === 'e' ? 0 : 1;
-  const kb = b.key[0] === 'e' ? 0 : 1;
-  if (ka !== kb) return ka - kb;
-  return Number(a.key.slice(1)) - Number(b.key.slice(1)) || (a.key < b.key ? -1 : 1);
-}
-
-function merge(old: ChatItem[], incoming: ChatItem[]): ChatItem[] {
-  const map = new Map(old.map((i) => [i.key, i]));
-  for (const i of incoming) map.set(i.key, { ...map.get(i.key), ...i });
-  return [...map.values()].sort(order);
-}
 
 function dayLabel(iso: string): string {
   const d = new Date(iso);
@@ -200,7 +186,13 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
   const colRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const prepend = useRef<number | null>(null);
+  const lastTop = useRef(0);
   const lastKey = useRef<string | null>(null);
+  const itemsRef = useRef<ChatItem[]>(items);
+  itemsRef.current = items;
+  const hasPage = useRef(false);
+  /** The newest item we had when the connection dropped, until what came after it is loaded. */
+  const gapFrom = useRef<ChatItem | null>(null);
 
   useEffect(() => {
     document.title = 'Protea';
@@ -210,25 +202,48 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
     if (list.length) setBatches((old) => ({ ...old, ...Object.fromEntries(list.map((b) => [b.id, b])) }));
   };
 
-  const loadLatest = (first: boolean) =>
-    get<ChatHistoryResponse>(`/api/chat${qs({ limit: PAGE, platform: PLATFORM })}`).then(
-      (r) => {
-        setItems((old) => merge(old, r.items));
+  /**
+   * The newest page. After a reconnect, read back until the pages reach the newest item we had
+   * when the connection dropped, so nothing sent meanwhile is missing. When that is too far back,
+   * the window starts again from the newest messages.
+   */
+  const loadLatest = async () => {
+    const since = gapFrom.current;
+    try {
+      let got: ChatItem[] = [];
+      let token: string | null = null;
+      let joined = since === null;
+      for (let n = 0; n < (since ? CATCH_UP_PAGES : 1); n++) {
+        const r: ChatHistoryResponse = await get<ChatHistoryResponse>(`/api/chat${qs({ limit: PAGE, platform: PLATFORM, ...(token ? { before: token } : {}) })}`);
+        got = merge(got, r.items);
         addBatches(r.batches);
-        if (first) setBefore(r.before);
-        setLoaded(true);
-        setError(null);
-      },
-      (e: unknown) => setError(e instanceof Error ? e.message : String(e)),
-    );
+        token = r.before;
+        if (!token || (since && reaches(r.items, since))) {
+          joined = true;
+          break;
+        }
+      }
+      if (joined) setItems((old) => merge(old, got));
+      // What arrived or was sent since the connection came back stays; `token` loads the rest again.
+      else setItems((old) => merge(got, old.filter((i) => since !== null && order(i, since) > 0)));
+      if (!joined || !hasPage.current) setBefore(token);
+      hasPage.current = true;
+      if (gapFrom.current === since) gapFrom.current = null;
+      setLoaded(true);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   useEffect(() => {
-    void loadLatest(true);
-    // A dropped WebSocket misses replies: fetch the newest page again when it is back.
+    void loadLatest();
+    // A dropped WebSocket misses replies: fetch what came after the newest item we had when it is back.
     let was = live.state;
     return live.onState((s) => {
       if (s !== 'open') setDrafts([]);
-      if (s === 'open' && was !== 'open') void loadLatest(false);
+      if (was === 'open' && s !== 'open') gapFrom.current ??= itemsRef.current[itemsRef.current.length - 1] ?? null;
+      if (s === 'open' && was !== 'open') void loadLatest();
       was = s;
     });
   }, []);
@@ -348,6 +363,19 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
     }
     lastKey.current = newest;
   }, [items, drafts, active, phase.phase, loaded]);
+
+  // A long-open window does not keep everything: at the newest message the oldest items go, and load again on scrolling up.
+  useEffect(() => {
+    if (!stick.current || olderBusy) return;
+    const cut = trimOldest(items);
+    if (!cut) return;
+    const from = (cut.items[0] as ChatItem).key;
+    setItems((old) => {
+      const n = old.findIndex((i) => i.key === from);
+      return n > 0 ? old.slice(n) : old;
+    });
+    setBefore(cut.before);
+  }, [items, atBottom, olderBusy]);
 
   // A diagram, a picture or a widget grows after it arrives: stay at the newest message while the reader is there.
   useEffect(() => {
@@ -531,7 +559,10 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
         ref={scrollRef}
         onScroll={(e) => {
           const el = e.currentTarget;
-          const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+          // Messages that come on screen take their real height, which moves the bottom away without the
+          // reader doing anything: only scrolling up leaves the newest message.
+          const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80 || (stick.current && el.scrollTop >= lastTop.current);
+          lastTop.current = el.scrollTop;
           stick.current = bottom;
           setAtBottom(bottom);
           if (bottom) setUnseen(false);
@@ -599,7 +630,7 @@ export function ChatApp({ me, status, onLogout }: { me: WhoAmIResponse; status: 
           {error && (
             <div className="chat-error">
               {error}
-              <button type="button" className="cm-link" onClick={() => void loadLatest(false)}>
+              <button type="button" className="cm-link" onClick={() => void loadLatest()}>
                 重试
               </button>
             </div>

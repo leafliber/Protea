@@ -2590,6 +2590,23 @@ ul.plain {
   margin-top: 18px;
 }
 
+/* A long conversation: messages away from the screen are not laid out or painted. Only where the
+   browser keeps the reading position when their real height replaces the estimate. */
+@supports (content-visibility: auto) and (overflow-anchor: auto) {
+  .cm {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 64px;
+    /* Containment clips at the padding box: leave room for the meta row that hangs below a message. */
+    padding-bottom: 12px;
+    margin-bottom: -12px;
+  }
+
+  .cm:hover {
+    position: relative;
+    z-index: 1;
+  }
+}
+
 .cm-avatar {
   width: 28px;
   flex: none;
