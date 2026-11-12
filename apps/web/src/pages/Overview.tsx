@@ -171,11 +171,13 @@ export function Overview({ status, reload }: { status: StatusResponse | undefine
 
       <Card title="插件与 MCP">
         <div className="chips">
-          {status.plugins.map((p) => (
-            <a key={p.id} href={`#/console/plugins?id=${p.id}`} className="chip">
-              {p.id} <StateBadge state={p.enabled ? p.state : 'disabled'} />
-            </a>
-          ))}
+          {status.plugins
+            .filter((p) => p.enabled)
+            .map((p) => (
+              <a key={p.id} href={`#/console/plugins?id=${p.id}`} className="chip">
+                {p.id} <StateBadge state={p.state} />
+              </a>
+            ))}
           {status.mcp.map((m) => (
             <a key={m.id} href="#/console/mcp" className="chip">
               mcp:{m.id} <StateBadge state={m.enabled ? m.state : 'disabled'} />

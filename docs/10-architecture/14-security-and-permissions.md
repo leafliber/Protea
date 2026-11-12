@@ -76,6 +76,19 @@ M2 实现细节：
 - 摘要与理由经过秘密扫描：已知秘密值替换为 `[REDACTED:<NAME>]`。
 - `audit` 记录：`tool_call`（有副作用或受限的调用及其结果）、`tool_blocked`（被拒绝或等待审批）、`approval_requested`、`approval_decided`、`approval_expired`（I-8）。
 
+### 3.1 能力变更请求（[ADR-0019](../20-decisions/ADR-0019-capability-change-requests.md)）
+
+MCP 服务器、Skills 和插件决定助理能做什么，所以它们的改动不走上面的工具审批，而是单独的一条路：
+
+- 助理只能**提议**：`mcp_propose`、`skill_propose`、`plugin_propose` 登记一个变更请求（`c<n>`），什么都不改。每个提议必须带理由。`change_status` 查看，`change_withdraw` 撤回。
+- **只有管理员能决定，只有控制 API 一个入口**（控制台「审批 → 能力变更」、`protea changes approve|reject`）。聊天里的 `/approve`、连接器的 `approvals/decide`、`auto` 模式的判断模型、时限授权、`bypass` 模式都不能决定变更请求；只读账号只能看。
+- **同意后由 Core 应用**，结果作为 L1 `change.decided` 事件告诉助理：`applied`、`failed`（附原因）、`rejected`（附审核人的备注）、`stale`。
+- **审核的就是被应用的**：登记时把要安装的文件取回并复制到 `/data/changes/<id>/`，记下摘要；应用前核对。登记时还记下目标当前状态的哈希，决定时目标已被改过 → `stale`，不应用。
+- **凭据不进提议**：bearer token、OAuth client secret 只接受 `${secret:NAME}`；助理没有写秘密库的工具；审核页标出没有值的秘密。
+- **来源**：skill 来自提议里的文本或工作区目录；插件来自工作区目录或 `https://` 的 git / tarball。其他协议只有管理员自己安装时可用。
+- 同一目标只有一个待审请求，总数不超过 20，7 天过期。请求、决定与结果都进 `audit`（`change_requested`、`change_decided`）。
+- 边界：`shell` 插件用 `backend: local` 时，获批的命令可以直接写 `/data`，绕过这里（§6）。默认的沙箱后端不能。
+
 ## 4. 秘密
 
 - 存储：`/data/secrets/` 下每个秘密一个文件（0600），或环境变量 `PROTEA_SECRET_<NAME>`。控制台/CLI 只能写与列名，不能读值。

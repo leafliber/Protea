@@ -16,7 +16,7 @@ import {
   type StatusResponse,
   type StreamMessage,
 } from '@protea/protocol';
-import { BROWSER_SERVER_ID, PermissionModeError, type BlobStore, type PermissionModes, type WidgetStore } from '@protea/core';
+import { BROWSER_SERVER_ID, PermissionModeError, type BlobStore, type ChangeRequestService, type PermissionModes, type WidgetStore } from '@protea/core';
 import {
   BoardError,
   MemoryError,
@@ -69,6 +69,8 @@ export interface ControlDeps extends Omit<OpsDeps, 'store' | 'audit'> {
   forks?: ForkManager;
   plugins?: PluginHost;
   approvals?: ApprovalService;
+  /** Changes to MCP servers, skills and plugins the assistant proposed; decided here and nowhere else. */
+  changes?: ChangeRequestService;
   permissionModes?: PermissionModes;
   /** Re-scan plugin directories (after uninstall, so a built-in with the same id reappears). */
   rescanPlugins?: () => Promise<void>;
@@ -78,6 +80,8 @@ export interface ControlDeps extends Omit<OpsDeps, 'store' | 'audit'> {
   /** Add or replace (a config entry) or remove (null) an MCP server: validated, persisted and applied. */
   putMcpServer?: (id: string, entry: Record<string, unknown> | null) => Promise<void>;
   setMcpEnabled?: (id: string, enabled: boolean) => Promise<void>;
+  /** `alwaysLoad`: the server's tools are never deferred behind tool search. */
+  setMcpAlwaysLoad?: (id: string, on: boolean) => Promise<void>;
   skills?: SkillRegistry;
   /** Persist `skills.disabled` and update the catalog. */
   setSkillEnabled?: (name: string, enabled: boolean) => void;
@@ -637,13 +641,14 @@ export function createControlApp(d: ControlDeps): Hono {
     await d.putMcpServer(id, null);
     return c.json({ ok: true });
   });
-  for (const action of ['enable', 'disable', 'restart'] as const) {
+  for (const action of ['enable', 'disable', 'restart', 'always-load', 'on-demand'] as const) {
     app.post(`/api/mcp/servers/:id/${action}`, async (c) => {
       const id = c.req.param('id');
       if (!d.mcp?.get(id)) return noMcp(c);
       try {
         if (action === 'restart') return c.json(await d.mcp.restart(id));
-        await d.setMcpEnabled?.(id, action === 'enable');
+        if (action === 'always-load' || action === 'on-demand') await d.setMcpAlwaysLoad?.(id, action === 'always-load');
+        else await d.setMcpEnabled?.(id, action === 'enable');
         return c.json(d.mcp.get(id));
       } catch (err) {
         return errorJson(c, 409, `${action}_failed`, err);
@@ -697,6 +702,36 @@ export function createControlApp(d: ControlDeps): Hono {
     } catch (err) {
       return errorJson(c, 409, 'uninstall_failed', err);
     }
+  });
+
+  // Change requests (docs/20-decisions/ADR-0019): what the assistant proposed for its own capabilities.
+  // Deciding one is a write, so the read-only role is refused before it gets here; no other path decides.
+  const CHANGE_STATES = ['pending', 'applied', 'rejected', 'failed', 'stale', 'expired', 'withdrawn'];
+  const noChange = (c: Context) => c.json({ error: { code: 'not_found', message: 'no such change request' } }, 404);
+  app.get('/api/changes', (c) => {
+    const state = c.req.query('state');
+    if (state !== undefined && !CHANGE_STATES.includes(state)) return c.json({ error: { code: 'bad_request', message: `state must be one of ${CHANGE_STATES.join(', ')}` } }, 400);
+    return c.json({ changes: d.changes?.list(state as never, intParam(c, 'limit') ?? 50) ?? [] });
+  });
+  app.get('/api/changes/:id', (c) => {
+    const detail = d.changes?.detail(c.req.param('id'));
+    return detail ? c.json(detail) : noChange(c);
+  });
+  app.get('/api/changes/:id/file', (c) => {
+    if (!d.changes?.get(c.req.param('id'))) return noChange(c);
+    const r = d.changes.readFile(c.req.param('id'), c.req.query('path') ?? '');
+    return 'error' in r ? c.json({ error: { code: 'unavailable', message: r.error } }, 409) : c.json(r);
+  });
+  app.post('/api/changes/:id/decide', async (c) => {
+    const body = (await c.req.json().catch(() => null)) as { decision?: unknown; note?: unknown } | null;
+    if (body?.decision !== 'approve' && body?.decision !== 'reject') return c.json({ error: { code: 'bad_request', message: 'decision must be approve or reject' } }, 400);
+    if (body.note !== undefined && typeof body.note !== 'string') return c.json({ error: { code: 'bad_request', message: 'note must be a string' } }, 400);
+    if (!d.changes) return noChange(c);
+    const who = principal(c);
+    if (who.role !== 'admin') return c.json({ error: { code: 'forbidden', message: 'only an administrator decides a change request' } }, 403);
+    const r = await d.changes.decide(c.req.param('id'), body.decision, actorOf(who), body.note);
+    if (!r.ok) return c.json({ error: { code: r.change ? 'conflict' : 'not_found', message: r.message ?? 'not decided' } }, r.change ? 409 : 404);
+    return c.json(d.changes.detail(c.req.param('id')));
   });
 
   // Approvals.

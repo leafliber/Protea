@@ -267,7 +267,7 @@ describe('M5: operations without SSH', () => {
     await waitUntil(() => d.forks.get(a.json.id)?.state === 'running', 'the first fork to run');
     expect((await api<ForkInfo>('POST', `/api/sessions/forks/${b.json.id}/pause`)).json).toMatchObject({ state: 'paused', pauseReason: 'operator' });
     release();
-    await waitUntil(() => d.forks.get(a.json.id)?.state === 'completed', 'the first fork to complete');
+    await waitUntil(() => d.forks.get(a.json.id)?.state === 'idle', 'the first fork to complete');
     await new Promise((r) => setTimeout(r, 100));
     expect(d.forks.get(b.json.id)?.state).toBe('paused'); // a free slot does not start an operator-paused fork
 

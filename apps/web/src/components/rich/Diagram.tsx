@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Lightbox } from '../Lightbox';
 import { CodeBlock, CopyText } from './CodeBlock';
 import { lazy, useLazy } from './lazy';
 
@@ -73,13 +74,6 @@ export function Diagram({ source, live }: { source: string; live?: boolean }) {
     };
   }, [lib, source, live]);
 
-  useEffect(() => {
-    if (!zoom) return;
-    const on = (e: KeyboardEvent) => e.key === 'Escape' && setZoom(false);
-    window.addEventListener('keydown', on);
-    return () => window.removeEventListener('keydown', on);
-  }, [zoom]);
-
   if (live || state.kind === 'wait') {
     return (
       <div className="rich-block rich-diagram rich-pending" aria-busy="true">
@@ -120,11 +114,7 @@ export function Diagram({ source, live }: { source: string; live?: boolean }) {
         </button>
       </div>
       {showSource ? <pre className="rich-code">{source}</pre> : picture}
-      {zoom && (
-        <div className="lightbox" role="dialog" aria-label="放大的图" onClick={() => setZoom(false)}>
-          <div className="lightbox-svg" dangerouslySetInnerHTML={{ __html: state.svg }} />
-        </div>
-      )}
+      {zoom && <Lightbox label="放大的图" svg={state.svg} onClose={() => setZoom(false)} />}
     </div>
   );
 }

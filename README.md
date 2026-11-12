@@ -21,6 +21,8 @@ Protea 是一个 **24/7 常驻、事件流驱动、可热插拔** 的云端个�
 - **M5**：Web 控制台（总览、事件流、会话、插件、MCP、Skills、审批、记忆与人格、配置、日志），不用 SSH 就能做 M0–M4 的所有操作；完整的控制 API 与 WebSocket；只读令牌；Prometheus 指标与 Grafana 示例面板；运行目录里的关停记录与崩溃报告；`protea logq` 等全套 CLI。
 - **M6**：Docker 镜像（full 含 Python/uv，slim 只有 Node），非 root 运行、启动前自动迁移并快照数据库、健康检查；预算强制执行与全局硬上限（控制台可临时放行）；外发限速；内置 `shell` 工具（工作区、超时、输出截断、无秘密环境）；插件与 MCP 进程的内存与文件描述符上限；日志的秘密过滤；控制平面地址白名单；在线备份、恢复与 Git 备份；模型调用录制与离线回放；CI（测试、依赖审计、镜像构建、容器冒烟测试、Trivy）。
 
+- **改自己的能力要你点头**（[ADR-0019](docs/20-decisions/ADR-0019-capability-change-requests.md)）：在对话里让助理加 MCP 服务器、写 skill、装插件，它只能提议；你在控制台「审批 → 能力变更」里看完整内容和差异，同意后才生效。自动审批、时限授权和聊天里的 `/approve` 都不能代替。
+- **少做重复的事**（[ADR-0020](docs/20-decisions/ADR-0020-fork-reuse-client-tool-search-final-reply.md)）：回复可以直接结束回合，不再多调用一次模型；后台 Fork 汇报后待命一段时间，后续相关的事交回同一个；MCP 工具多的时候按需加载定义，不支持工具搜索的接口（兼容接口、OpenAI 协议）也一样。
 - **沙箱、浏览器与视觉**（[方案](docs/40-plan/08-sandbox-browser-vision.md)）：助理的 shell 在独立的容器里，碰不到 Protea 的数据，目录、环境变量和后台任务都能延续；内置无头浏览器（Playwright MCP）；模型能看图片（对话里发的、工具截的、工作区里的），图片只以引用进入转录；批准时可以附带时限（`/approve a12 1h`）。
 
 ## 用 Docker 运行

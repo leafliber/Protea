@@ -21,6 +21,7 @@ import { PageActionsContext, cx } from './components/ui';
 import { useLiveState, useReloadOn } from './live';
 import { consoleHref, useSession } from './session';
 import { Approvals } from './pages/Approvals';
+import { usePendingChanges } from './pages/Changes';
 import { Config } from './pages/Config';
 import { Events } from './pages/Events';
 import { Logs } from './pages/Logs';
@@ -52,10 +53,10 @@ export const CONSOLE_GROUPS: Array<{ label: string; pages: PageDef[] }> = [
   {
     label: '能力',
     pages: [
-      { id: 'providers', label: '模型', desc: '模型供应商、协议、接口地址与按角色使用的模型', icon: <IconCpu /> },
       { id: 'plugins', label: '插件', desc: '事件来源与工具插件：状态、配置与日志', icon: <IconPuzzle /> },
       { id: 'mcp', label: 'MCP', desc: '外部 MCP 服务器与它们提供的工具', icon: <IconPlug /> },
       { id: 'skills', label: 'Skills', desc: '助理按需加载的技能包', icon: <IconSparkles /> },
+      { id: 'providers', label: '模型', desc: '模型供应商、协议、接口地址与按角色使用的模型', icon: <IconCpu /> },
       { id: 'memory', label: '记忆与人格', desc: '助理的记忆文件、全文检索与人格设定', icon: <IconBook /> },
     ],
   },
@@ -76,7 +77,9 @@ function usePendingApprovals(): number {
   const { canWrite } = useSession();
   const r = useApi<{ approvals: ApprovalInfo[] }>(canWrite ? '/api/approvals?state=pending' : null);
   useReloadOn('approval', r.reload, 300);
-  return r.data?.approvals?.filter((a) => a.state === 'pending').length ?? 0;
+  // Change requests the assistant filed wait in the same place.
+  const changes = usePendingChanges().length;
+  return (r.data?.approvals?.filter((a) => a.state === 'pending').length ?? 0) + changes;
 }
 
 /** The operator console: everything except the conversation. */
@@ -161,7 +164,7 @@ export function ConsoleShell({ me, page, params, status, reload, onLogout }: { m
             {page === 'providers' && <Providers />}
             {page === 'mcp' && <Mcp />}
             {page === 'skills' && <Skills />}
-            {page === 'approvals' && <Approvals />}
+            {page === 'approvals' && <Approvals params={params} />}
             {page === 'memory' && <Memory params={params} />}
             {page === 'config' && <Config />}
             {page === 'logs' && <Logs params={params} />}

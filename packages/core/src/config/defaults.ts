@@ -30,7 +30,7 @@ export function defaultConfig(): ProteaConfig {
         4: { debounceMs: null, maxWaitMs: 1_800_000 },
       },
       preemptStorm: { count: 3, windowMs: 10_000, cooldownMs: 60_000 },
-      forks: { maxConcurrent: 2, maxQueued: 8, yieldLevel: 1, yieldTimeoutMs: 30_000, maxTurns: 20 },
+      forks: { maxConcurrent: 2, maxQueued: 8, yieldLevel: 1, yieldTimeoutMs: 30_000, maxTurns: 20, idleTtlMs: 30 * 60_000, maxIdle: 4 },
     },
     budget: { dailyUsd: null, shares: { 0: null, 1: 0.6, 2: 0.2, 3: 0.15, 4: 0.05 }, warnAt: 0.9, enforce: true, hardDailyUsd: null },
     session: { rounds: { soft: 12, hard: 30 }, backoffMs: [5_000, 15_000, 45_000] },

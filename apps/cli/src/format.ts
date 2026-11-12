@@ -1,4 +1,4 @@
-import type { ApprovalInfo, BatchInfo, EventEnvelope, ForkInfo, LogRecord, McpServerStatus, McpToolInfo, PluginStatus, SkillInfo, StatusResponse } from '@protea/protocol';
+import type { ApprovalInfo, BatchInfo, ChangeRequestInfo, EventEnvelope, ForkInfo, LogRecord, McpServerStatus, McpToolInfo, PluginStatus, SkillInfo, StatusResponse } from '@protea/protocol';
 
 const tty = process.stdout.isTTY;
 const paint = (code: string) => (s: string): string => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
@@ -75,6 +75,12 @@ export function formatSkill(k: SkillInfo): string {
 export function formatApproval(a: ApprovalInfo): string {
   const state = a.state === 'pending' ? yellow(a.state) : a.state === 'approved' || a.state === 'used' ? green(a.state) : dim(a.state);
   return `${bold(a.id.padEnd(5))} ${state.padEnd(9)} ${oneLine(a.summary, 100)}${a.reason ? dim(` — ${oneLine(a.reason, 60)}`) : ''}${dim(`  (expires ${a.expiresAt}${a.decidedBy ? `, by ${a.decidedBy}` : ''})`)}`;
+}
+
+export function formatChange(c: ChangeRequestInfo): string {
+  const state = c.state === 'pending' ? yellow(c.state) : c.state === 'applied' ? green(c.state) : c.state === 'failed' || c.state === 'rejected' ? red(c.state) : dim(c.state);
+  const tail = [c.result ? `result: ${oneLine(c.result, 80)}` : '', c.decidedBy ? `by ${c.decidedBy}` : c.state === 'pending' ? `expires ${c.expiresAt}` : ''].filter(Boolean).join(', ');
+  return `${bold(c.id.padEnd(5))} ${state.padEnd(9)} ${oneLine(c.summary, 100)}${dim(` — ${oneLine(c.reason, 60)}`)}${tail ? dim(`  (${tail})`) : ''}`;
 }
 
 export function formatStatus(s: StatusResponse): string {

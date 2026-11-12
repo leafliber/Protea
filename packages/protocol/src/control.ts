@@ -178,6 +178,12 @@ export interface McpServerStatus {
   avgLatencyMs?: number;
   /** What the operator should know about its settings (the console keeps showing it). */
   warnings?: string[];
+  /** What the server says about itself (`initialize` instructions, clipped). */
+  instructions?: string;
+  /** Its tools are never deferred (`alwaysLoad`). */
+  alwaysLoad?: boolean;
+  /** How many of its tools the model has to look up before calling them. */
+  deferredTools?: number;
 }
 
 export interface SkillInfo {
@@ -238,6 +244,57 @@ export interface SetPermissionModeRequest {
 }
 
 /** A time-limited approval of a whole tool family (one plugin's tools, one MCP server's, or a single core tool). */
+export type ChangeKind = 'mcp' | 'skill' | 'plugin';
+/** `add` installs a plugin or a skill, or declares an MCP server; `configure` is for plugins only. */
+export type ChangeAction = 'add' | 'update' | 'remove' | 'enable' | 'disable' | 'configure';
+/**
+ * `applied`: approved and done. `failed`: approved, but applying it failed. `stale`: approved,
+ * but the target had changed since the proposal, so nothing was applied.
+ */
+export type ChangeState = 'pending' | 'applied' | 'rejected' | 'failed' | 'stale' | 'expired' | 'withdrawn';
+
+/**
+ * A change to the assistant's capabilities that the assistant proposed. Only an administrator
+ * decides it, through the control API (docs/20-decisions/ADR-0019).
+ */
+export interface ChangeRequestInfo {
+  id: string;
+  kind: ChangeKind;
+  action: ChangeAction;
+  /** The MCP server id, skill name or plugin id. */
+  target: string;
+  state: ChangeState;
+  /** One line, written by Core, saying what would change. */
+  summary: string;
+  /** Why, in the assistant's words. */
+  reason: string;
+  createdAt: string;
+  expiresAt: string;
+  sessionId?: string;
+  batchId?: string;
+  decidedAt?: string;
+  decidedBy?: string;
+  /** What the reviewer wrote with the decision. */
+  note?: string;
+  /** What applying it led to, or why it was not applied. */
+  result?: string;
+}
+
+export interface ChangeRequestDetail extends ChangeRequestInfo {
+  /** The target as it was when proposed, and as it would be, as text to compare; null when there is none. */
+  before: string | null;
+  after: string | null;
+  warnings: string[];
+  /** Where the staged files came from. */
+  source?: string;
+  /** The files that would be installed (readable through `/api/changes/:id/file` while pending). */
+  files?: Array<{ path: string; size: number }>;
+  /** Secrets the change refers to, and whether each has a value. */
+  secrets?: Array<{ name: string; set: boolean }>;
+  /** Pending, but the target changed since: approving would apply nothing. */
+  stale?: boolean;
+}
+
 export interface ApprovalGrantInfo {
   id: string;
   family: string;
@@ -317,8 +374,11 @@ export interface StatusResponse {
   plugins: PluginStatus[];
   mcp: McpServerStatus[];
   skills: { listed: number; rejected: number };
-  /** Tools sent to the model, and how many of them sit behind tool search. */
-  tools: { total: number; deferred: number };
+  /**
+   * Tools the model can call, how many of them it has to look up first, and how it does:
+   * `native` is the provider's tool search, `client` is `mcp_search` / `mcp_call`.
+   */
+  tools: { total: number; deferred: number; search?: 'native' | 'client' };
   /**
    * M4: the main conversation's size. `estimatedTokens` is the last response's usage plus an
    * estimate of what came after; a handoff starts when it passes `softTokens` at a batch start or `hardTokens` anytime.
@@ -349,6 +409,10 @@ export interface ForkInfo {
   pauseReason?: string;
   summary?: string;
   error?: string;
+  /** How many pieces of work it was given (the goal, then each follow-up). */
+  tasks?: number;
+  /** An idle fork is released at this time unless it gets follow-up work first. */
+  idleUntil?: string;
 }
 
 export interface LevelBudget {
@@ -510,6 +574,7 @@ export type StreamMessage =
   | { topic: 'chat.draft'; data: ChatDraftUpdate }
   | { topic: 'scheduler'; data: SchedulerAction }
   | { topic: 'fork'; data: ForkInfo }
+  | { topic: 'change'; data: ChangeRequestInfo }
   | { topic: 'mcp'; data: McpServerStatus }
   | { topic: 'skills'; data: { names: string[] } }
   /** M4: the main session handed off to a new transcript. */
@@ -562,7 +627,7 @@ export const WS_TOPICS = {
   output: ['output'],
   /** Replies as they are written: only the chat window subscribes. */
   chat: ['chat.draft'],
-  changes: ['fork', 'plugin', 'approval', 'permission', 'mcp', 'skills', 'handoff', 'persona'],
+  changes: ['fork', 'plugin', 'approval', 'change', 'permission', 'mcp', 'skills', 'handoff', 'persona'],
   usage: ['usage'],
   logs: ['log'],
   /** The run stream: heavy, so only pages that show it subscribe. */

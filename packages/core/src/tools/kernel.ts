@@ -110,7 +110,7 @@ export function kernelTools(deps: KernelToolDeps): ToolSpec<never>[] {
             ? ''
             : `; hard cap $${s.budget.hardDailyUsd}${s.budget.hardCapReached && !s.budget.hardCapReleasedUntil ? ' REACHED: only L0/L1 events are delivered' : ''}`
         }`,
-        `forks: ${s.forks.filter((f) => !['completed', 'cancelled', 'failed'].includes(f.state)).map((f) => `${f.id}(${f.state}, L${f.level})`).join(', ') || 'none active'}`,
+        `forks: ${s.forks.filter((f) => !['completed', 'cancelled', 'failed'].includes(f.state)).map((f) => `${f.id}(${f.state}${f.idleUntil ? ` until ${f.idleUntil}` : ''}, L${f.level})`).join(', ') || 'none active'}`,
       ].join('\n');
     },
   };

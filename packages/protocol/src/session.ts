@@ -95,7 +95,11 @@ export type BatchEndReason =
 /** How a running turn was cut short (docs/10-architecture/04-scheduling-and-preemption.md §4). */
 export type CancelKind = 'preempt' | 'interrupt';
 
-export const FORK_STATES = ['queued', 'running', 'paused', 'completed', 'cancelled', 'failed'] as const;
+/**
+ * `idle`: the fork reported its result and waits for follow-up work with its conversation kept;
+ * it is released (`completed`) when none arrives in time.
+ */
+export const FORK_STATES = ['queued', 'running', 'paused', 'idle', 'completed', 'cancelled', 'failed'] as const;
 export type ForkState = (typeof FORK_STATES)[number];
 
 export function isForkTerminal(s: ForkState): boolean {

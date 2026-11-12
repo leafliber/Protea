@@ -354,6 +354,18 @@ PROTEA_DATA_DIR=.dev-data pnpm -s protea status
 
 未验证：真实模型是否会恰当地使用表格、图、选项和小组件；Firefox 与 Safari 里的沙箱行为；Telegram 与微信没有接入新能力；QQ 的按钮权限、流式消息与额度没有用真实账号验证（T15、T16）。已知缺口：WebRTC 不受 CSP 约束（[14-security-and-permissions.md](../10-architecture/14-security-and-permissions.md) §8.1）。
 
+### 能力变更审核、MCP 客户端按需加载、Fork 复用与七项修复（2026-11-12）
+
+方案见 [10-capability-changes-lazy-mcp-fork-reuse.md](10-capability-changes-lazy-mcp-fork-reuse.md)，决策见 [ADR-0019](../20-decisions/ADR-0019-capability-change-requests.md)、[ADR-0020](../20-decisions/ADR-0020-fork-reuse-client-tool-search-final-reply.md)。
+- 能力变更请求：助理用 `mcp_propose` / `skill_propose` / `plugin_propose` 提议，管理员在控制台「审批 → 能力变更」或 `protea changes` 审核，同意后由 Core 应用；迁移 10（表 `change_requests`）。
+- MCP 按需加载补上客户端模式：Provider 不能搜索工具时用 `mcp_search` / `mcp_call`；启用条件增加按定义大小判断（`context.toolSearch.thresholdTokens`）；`mcp.servers.<id>.alwaysLoad`。
+- Fork 汇报后待命（`idle`），`fork_send` 复用，`scheduler.forks.idleTtlMs` / `maxIdle` 回收；运行时说明、工具描述与 `protea-self-ops` 引导主会话多用后台 Fork。
+- `chat_send` 的 `final`：回复后直接结束回合；对话窗口不再为看回执的那一轮显示"正在思考…"。
+- 界面：图片与图表的放大改成可缩放、可拖动的查看器（修复"放大后仍是缩略图尺寸"）；「能力」导航改为插件、MCP、Skills、模型、记忆与人格；已禁用的插件默认隐藏。
+- 测试共 626 个通过；界面在 Chrome（无头）里走过一遍。
+
+未验证：真实模型是否会用 `final`、是否先搜索再调用被延迟的工具、是否更愿意把工作交给 Fork 并复用它（T17）。已有实例的 `/data/persona/OPERATING.md` 不会自动得到默认人格里新增的「Delegation」一节。
+
 ### 权限模式与 auto 判断模型（2026-11-10）
 
 决策见 [ADR-0015](../20-decisions/ADR-0015-permission-modes-and-auto-review.md)。

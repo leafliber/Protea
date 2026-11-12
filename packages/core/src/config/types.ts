@@ -32,8 +32,12 @@ export interface ForkSchedulerSettings {
   yieldLevel: Level | null;
   /** A fork at L3/L4 that has not reached a boundary this long after a yield request has its model call cancelled. */
   yieldTimeoutMs: number;
-  /** Default and ceiling for a fork's model rounds. */
+  /** Default and ceiling for a fork's model rounds (per piece of work). */
   maxTurns: number;
+  /** A fork that reported its result stays available for follow-up work this long; 0 ends it at once. */
+  idleTtlMs: number;
+  /** Idle forks kept at most; the one idle longest is released first. */
+  maxIdle: number;
 }
 
 export interface BudgetSettings {

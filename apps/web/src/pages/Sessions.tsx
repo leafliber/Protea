@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import type { BatchInfo, ContentBlock, EventEnvelope, ForkInfo, StatusResponse, TranscriptMessage, UsageInfo } from '@protea/protocol';
 import { enc, post, qs, useAction, useApi } from '../api';
-import { Button, Card, Drawer, Empty, ErrorText, Field, KV, LevelBadge, Ring, StateBadge, Tabs, compact, dateTime, oneLine, timeAgo, usd } from '../components/ui';
+import { Button, Card, Drawer, Empty, ErrorText, Field, KV, LevelBadge, Ring, StateBadge, Tabs, clock, compact, dateTime, oneLine, timeAgo, usd } from '../components/ui';
 import { BlockView, ContextView } from '../components/Trace';
 import { useReloadOn } from '../live';
 import { go, useSession } from '../session';
@@ -213,21 +213,29 @@ function Forks({ selected }: { selected: string | null }) {
         <ul className="list">
           {r.data?.forks.map((f) => (
             <li key={f.id} className={`clickable ${f.id === selected ? 'selected' : ''}`} onClick={() => go('sessions', { tab: 'forks', fork: f.id })}>
-              <StateBadge state={f.state} title={f.pauseReason ?? f.error ?? ''} /> <LevelBadge level={f.level} /> <span className="mono small">{f.id}</span> {oneLine(f.goal, 90)}{' '}
+              <StateBadge state={f.state} title={f.state === 'idle' ? '已完成并汇报，保留着上下文等后续任务；到时间没有新任务就回收' : (f.pauseReason ?? f.error ?? '')} /> <LevelBadge level={f.level} /> <span className="mono small">{f.id}</span> {oneLine(f.goal, 90)}{' '}
               <span className="muted small">
                 {f.model} · {f.rounds} 回合 · {timeAgo(f.createdAt)}
                 {f.pauseReason ? ` · 暂停原因 ${f.pauseReason}` : ''}
+                {f.tasks ? ` · 第 ${f.tasks} 个任务` : ''}
+                {f.idleUntil ? ` · 待命到 ${clock(f.idleUntil)}` : ''}
               </span>
               {canWrite && !['completed', 'cancelled', 'failed'].includes(f.state) && (
                 <span className="row-actions" onClick={(e) => e.stopPropagation()}>
-                  {f.state === 'paused' && f.pauseReason === 'operator' ? (
-                    <Button small onClick={() => forkAction(f.id, 'resume')}>恢复</Button>
+                  {f.state === 'idle' ? (
+                    <Button small onClick={() => forkAction(f.id, 'cancel')}>回收</Button>
                   ) : (
-                    <Button small onClick={() => forkAction(f.id, 'pause')}>暂停</Button>
+                    <>
+                      {f.state === 'paused' && f.pauseReason === 'operator' ? (
+                        <Button small onClick={() => forkAction(f.id, 'resume')}>恢复</Button>
+                      ) : (
+                        <Button small onClick={() => forkAction(f.id, 'pause')}>暂停</Button>
+                      )}
+                      <Button small kind="danger" onClick={() => confirm('取消这个 Fork？') && forkAction(f.id, 'cancel')}>
+                        取消
+                      </Button>
+                    </>
                   )}
-                  <Button small kind="danger" onClick={() => confirm('取消这个 Fork？') && forkAction(f.id, 'cancel')}>
-                    取消
-                  </Button>
                 </span>
               )}
             </li>

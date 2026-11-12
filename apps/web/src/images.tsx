@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { BlobImageRef } from '@protea/protocol';
 import { enc, post } from './api';
+import { Lightbox } from './components/Lightbox';
 
 const MAX_EDGE = 1568;
 /** The largest file sent as it is; anything bigger is re-encoded (the server's limit is 1.5 MB by default). */
@@ -43,12 +44,6 @@ export async function uploadImage(file: Blob): Promise<BlobImageRef> {
 export function BlobImages({ images }: { images: BlobImageRef[] | undefined }) {
   const [open, setOpen] = useState<string | null>(null);
   const [gone, setGone] = useState<string[]>([]);
-  useEffect(() => {
-    if (!open) return;
-    const on = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(null);
-    window.addEventListener('keydown', on);
-    return () => window.removeEventListener('keydown', on);
-  }, [open]);
   if (!images || images.length === 0) return null;
   return (
     <div className="blob-images">
@@ -63,11 +58,7 @@ export function BlobImages({ images }: { images: BlobImageRef[] | undefined }) {
           </button>
         ),
       )}
-      {open && (
-        <div className="lightbox" role="dialog" aria-label="放大的图片" onClick={() => setOpen(null)}>
-          <img src={blobUrl(open)} alt="图片" />
-        </div>
-      )}
+      {open && <Lightbox label="放大的图片" src={blobUrl(open)} onClose={() => setOpen(null)} />}
     </div>
   );
 }

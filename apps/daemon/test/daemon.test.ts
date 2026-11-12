@@ -130,15 +130,41 @@ describe('daemon', () => {
     );
     expect(req?.system.at(-1)?.text).toMatch(/^<memory_index path="\/memories\/INDEX.md">\n# Memory index\n/);
     expect(req?.tools.map((t) => t.name)).toEqual([
-      'approval_request', 'board', 'events_promote', 'events_query', 'fork_cancel', 'fork_spawn', 'fork_status', 'idle', 'memory', 'memory_recent', 'memory_search', 'self_status', 'skill_load', 'skill_read', 'view_image',
+      'approval_request', 'board', 'change_status', 'change_withdraw', 'events_promote', 'events_query', 'fork_cancel', 'fork_send', 'fork_spawn', 'fork_status', 'idle', 'mcp_propose', 'memory', 'memory_recent', 'memory_search', 'plugin_propose', 'self_status', 'skill_load', 'skill_propose', 'skill_read', 'view_image',
       'chat_send', 'schedule_create', 'schedule_delete', 'schedule_list', 'sleep_until',
     ]);
     expect(req?.toolSearch).toBeUndefined();
     expect(status['forks']).toEqual([]);
-    expect(status).toMatchObject({ mcp: [], skills: { listed: 3, rejected: 0 }, tools: { total: 20, deferred: 0 }, memory: { files: 1 } });
+    expect(status).toMatchObject({ mcp: [], skills: { listed: 3, rejected: 0 }, tools: { total: 26, deferred: 0 }, memory: { files: 1 } });
     // The scripted provider reports no context window: 200k − 64k output − 10k margin.
     expect(status['context']).toMatchObject({ transcript: 'main.0001.jsonl', handoffs: 0, softTokens: 80_000, hardTokens: 126_000 });
     expect((status['budget'] as { enforced: boolean }).enforced).toBe(true);
+  });
+
+  it('ends the turn with the reply when chat_send says it is final, and not when the send fails', async () => {
+    const provider = new ScriptedProvider([
+      () => reply([toolCall('chat_send', { platform: 'webchat', text: 'here you go', final: true })]),
+      // Second message: the first send names a platform that does not exist, so the turn goes on.
+      () => reply([toolCall('chat_send', { platform: 'nowhere', text: 'lost', final: true })]),
+      () => reply([toolCall('chat_send', { platform: 'webchat', text: 'second try' })]),
+      () => textReply('done'),
+    ]);
+    const d = await start(tmp(), provider);
+    const ended: Array<{ endReason: string; rounds: number }> = [];
+    const outputs: string[] = [];
+    d.bus.on('batch.ended', (b) => ended.push({ endReason: b.endReason, rounds: b.rounds }));
+    d.bus.on('plugin.output', (o) => outputs.push(o.text));
+    await fetch(`${d.url}/api/chat/messages`, { method: 'POST', headers: auth(d), body: JSON.stringify({ text: 'one' }) });
+    await waitUntil(() => ended.length === 1);
+    // One model call: no round after the reply.
+    expect(ended[0]).toEqual({ endReason: 'ends_turn', rounds: 1 });
+    expect(provider.calls).toHaveLength(1);
+    expect(outputs).toEqual(['here you go']);
+
+    await fetch(`${d.url}/api/chat/messages`, { method: 'POST', headers: auth(d), body: JSON.stringify({ text: 'two' }) });
+    await waitUntil(() => ended.length === 2);
+    expect(ended[1]).toEqual({ endReason: 'end_turn', rounds: 3 });
+    expect(outputs).toEqual(['here you go', 'second try']);
   });
 
   it('runs a fork and serves it over the control API', async () => {
@@ -155,13 +181,15 @@ describe('daemon', () => {
     const outputs: string[] = [];
     d.bus.on('plugin.output', (o) => outputs.push(o.text));
     await fetch(`${d.url}/api/events`, { method: 'POST', headers: auth(d), body: JSON.stringify({ text: 'how many invoices are open?' }) });
-    await waitUntil(() => outputs.length > 0 && d.forks.list()[0]?.state === 'completed' && d.main.phase === 'idle');
+    await waitUntil(() => outputs.length > 0 && d.forks.list()[0]?.state === 'idle' && d.main.phase === 'idle');
     expect(outputs).toEqual(['2 open invoices']);
 
     const { forks } = (await (await fetch(`${d.url}/api/sessions/forks`, { headers: auth(d) })).json()) as { forks: Array<{ id: string; state: string; level: number }> };
     expect(forks).toHaveLength(1);
     const f = forks[0] as { id: string; state: string; level: number };
-    expect(f).toMatchObject({ state: 'completed', level: 1 });
+    // It reported and now waits for follow-up work.
+    expect(f).toMatchObject({ state: 'idle', level: 1 });
+    expect((f as { idleUntil?: string }).idleUntil).toBeDefined();
     const t = (await (await fetch(`${d.url}/api/sessions/${f.id}/transcript`, { headers: auth(d) })).json()) as {
       total: number;
       messages: Array<{ role: string }>;
@@ -174,7 +202,9 @@ describe('daemon', () => {
     const { sessions } = (await (await fetch(`${d.url}/api/sessions`, { headers: auth(d) })).json()) as { sessions: Array<{ id: string; kind: string }> };
     expect(sessions.map((x) => x.kind)).toEqual(['main', 'fork']);
     const cancel = await fetch(`${d.url}/api/sessions/forks/${f.id}/cancel`, { method: 'POST', headers: auth(d) });
-    expect(((await cancel.json()) as { state: string }).state).toBe('completed'); // already ended: unchanged
+    expect(((await cancel.json()) as { state: string }).state).toBe('completed'); // an idle fork is released, not cancelled
+    const again = await fetch(`${d.url}/api/sessions/forks/${f.id}/cancel`, { method: 'POST', headers: auth(d) });
+    expect(((await again.json()) as { state: string }).state).toBe('completed'); // already ended: unchanged
   });
 
   it('rejects bad requests', async () => {

@@ -289,4 +289,38 @@ CREATE TABLE widgets (
 );
 `,
   },
+  {
+    version: 10,
+    name: 'change-requests',
+    // Changes to MCP servers, skills and plugins that the assistant proposed and a person decides (ADR-0019).
+    sql: `
+CREATE TABLE change_requests (
+  seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+  id          TEXT NOT NULL,
+  kind        TEXT NOT NULL CHECK (kind IN ('mcp','skill','plugin')),
+  action      TEXT NOT NULL,
+  target      TEXT NOT NULL,
+  summary     TEXT NOT NULL,
+  reason      TEXT NOT NULL,
+  payload     TEXT NOT NULL,
+  before_text TEXT,
+  after_text  TEXT,
+  meta        TEXT NOT NULL,
+  digest      TEXT NOT NULL,
+  base_hash   TEXT NOT NULL,
+  state       TEXT NOT NULL CHECK (state IN ('pending','applied','rejected','failed','stale','expired','withdrawn')),
+  session_id  TEXT,
+  batch_id    TEXT,
+  created_at  TEXT NOT NULL,
+  expires_at  TEXT NOT NULL,
+  expires_ms  INTEGER NOT NULL,
+  decided_at  TEXT,
+  decided_by  TEXT,
+  note        TEXT,
+  result      TEXT
+);
+CREATE INDEX ix_changes_id ON change_requests(id);
+CREATE INDEX ix_changes_state ON change_requests(state, expires_ms);
+`,
+  },
 ];

@@ -3,6 +3,7 @@ import type { McpServerStatus, McpToolInfo } from '@protea/protocol';
 import { api, enc, post, useAction, useApi } from '../api';
 import { Badge, Button, PageActions, Card, Empty, ErrorText, Field, StateBadge, oneLine } from '../components/ui';
 import { useReloadOn } from '../live';
+import { PendingChangesBanner } from './Changes';
 import { useSession } from '../session';
 
 function pairs(text: string): Record<string, string> {
@@ -23,10 +24,11 @@ function AddServer({ onDone }: { onDone: () => void }) {
   const [auth, setAuth] = useState<'none' | 'bearer' | 'oauth'>('none');
   const [bearer, setBearer] = useState('');
   const [trust, setTrust] = useState('normal');
+  const [alwaysLoad, setAlwaysLoad] = useState(false);
   const act = useAction();
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    const entry: Record<string, unknown> = { id, trust };
+    const entry: Record<string, unknown> = { id, trust, ...(alwaysLoad ? { alwaysLoad: true } : {}) };
     if (transport === 'stdio') {
       const parts = command.trim().split(/\s+/);
       entry['command'] = parts[0];
@@ -84,6 +86,9 @@ function AddServer({ onDone }: { onDone: () => void }) {
           </div>
         </>
       )}
+      <label className="row small" title="工具多、定义大时，MCP 工具默认按需加载：助理用到时才取定义。勾选后这个服务器的工具始终随每次请求发送。">
+        <input type="checkbox" checked={alwaysLoad} onChange={(e) => setAlwaysLoad(e.target.checked)} /> 工具始终加载（不按需加载）
+      </label>
       <div className="row">
         <Button kind="primary" type="submit" busy={act.busy} disabled={!id.trim() || (transport === 'stdio' ? !command.trim() : !url.trim())}>
           添加并启动
@@ -139,6 +144,7 @@ export function Mcp() {
           />
         </Card>
       )}
+      <PendingChangesBanner kind="mcp" />
       <ErrorText error={r.error ?? act.error} />
       {r.data?.servers.length === 0 && <Empty>还没有 MCP 服务器</Empty>}
       {r.data?.servers.map((m) => (
@@ -188,15 +194,24 @@ export function Mcp() {
           )}
           <div className="muted small">
             {m.server ? `${m.server.name} ${m.server.version} · ` : ''}
-            {m.tools.length} 个工具{m.prompts ? ` · ${m.prompts} 个 prompts` : ''}
+            {m.tools.length} 个工具{m.alwaysLoad ? '（始终加载）' : m.deferredTools ? `（${m.deferredTools} 个按需加载）` : ''}
+            {m.prompts ? ` · ${m.prompts} 个 prompts` : ''}
             {m.resources ? ' · 资源' : ''}
             {m.avgLatencyMs !== undefined ? ` · 平均 ${m.avgLatencyMs} ms/次` : ''}
             {m.pid ? ` · pid ${m.pid}` : ''}
             {m.restarts ? ` · 重启 ${m.restarts} 次` : ''}
           </div>
-          <Button small kind="ghost" onClick={() => setOpen(open === m.id ? null : m.id)}>
-            {open === m.id ? '收起工具' : '查看工具'}
-          </Button>
+          {m.instructions && <div className="muted small">服务器说明：{oneLine(m.instructions, 240)}</div>}
+          <div className="row">
+            <Button small kind="ghost" onClick={() => setOpen(open === m.id ? null : m.id)}>
+              {open === m.id ? '收起工具' : '查看工具'}
+            </Button>
+            {canWrite && (
+              <Button small kind="ghost" title="按需加载：工具多时不随每次请求发送定义，助理用到时再取。改动会重启这个服务器。" onClick={() => action(m.id, m.alwaysLoad ? 'on-demand' : 'always-load')}>
+                {m.alwaysLoad ? '改为按需加载' : '改为始终加载'}
+              </Button>
+            )}
+          </div>
           {open === m.id && <Tools id={m.id} />}
         </Card>
       ))}

@@ -18,7 +18,7 @@ const LAYERS: ReadonlyArray<readonly string[]> = [
   ['auth', 'blobs', 'bus', 'config', 'db', 'events', 'memory', 'observability', 'permissions', 'persona', 'skills'],
   ['backup', 'chat', 'context', 'diagnostics', 'mcp', 'tools'],
   ['plugins', 'providers'],
-  ['session'],
+  ['changes', 'session'],
   ['forks', 'maintenance', 'scheduler'],
 ];
 const LAYER_OF = new Map(LAYERS.flatMap((mods, layer) => mods.map((m) => [m, layer] as const)));

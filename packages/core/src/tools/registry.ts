@@ -147,8 +147,9 @@ export class ToolRegistry {
   }
 
   forProvider(filter?: (d: ToolDef) => boolean): ProviderToolDef[] {
+    // Without tool exposure nothing is held back, so the client-side search tools have no use.
     return this.list()
-      .filter((d) => !filter || filter(d))
+      .filter((d) => !d.clientSearch && (!filter || filter(d)))
       .map((d) => ({ name: d.name, description: d.description, inputSchema: d.inputSchema, ...(d.providerType ? { providerType: d.providerType } : {}) }));
   }
 }

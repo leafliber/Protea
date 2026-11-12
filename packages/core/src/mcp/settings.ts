@@ -38,6 +38,8 @@ export interface McpServerSettings {
   roots?: string[];
   /** Text added to the system prefix as `env:mcp:<id>` (when to use this server). */
   envPrompt?: string;
+  /** Its tools always load up front: they are never deferred behind tool search. */
+  alwaysLoad?: boolean;
   /** Replace a tool's description (the server's own text is used otherwise). */
   descriptionOverrides: Record<string, string>;
   /** Resource URIs to subscribe to; updates arrive as L4 events. */
@@ -163,6 +165,10 @@ export function normalizeMcpServer(id: string, raw: unknown): McpServerSettings 
   if (raw['envPrompt'] !== undefined && raw['envPrompt'] !== null) {
     if (typeof raw['envPrompt'] !== 'string') throw new Error(`${at}.envPrompt must be a string`);
     if (raw['envPrompt'].trim()) out.envPrompt = raw['envPrompt'];
+  }
+  if (raw['alwaysLoad'] !== undefined && raw['alwaysLoad'] !== null) {
+    if (typeof raw['alwaysLoad'] !== 'boolean') throw new Error(`${at}.alwaysLoad must be a boolean`);
+    if (raw['alwaysLoad']) out.alwaysLoad = true;
   }
   return out;
 }

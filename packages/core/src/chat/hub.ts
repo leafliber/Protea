@@ -75,6 +75,8 @@ interface ChatSendInput {
   images?: string[];
   choices?: ChatChoices;
   widget?: { title: string; code: string };
+  /** The turn ends once this message is sent. */
+  final?: boolean;
 }
 
 /** A reply being written, as far as a platform that takes drafts has been told. */
@@ -249,6 +251,7 @@ export class ChatHub {
           text: { type: 'string', minLength: 1, maxLength: 20_000 },
           reply_to: { type: 'string', maxLength: 256, description: 'Platform message id to reply to (the correlation of the event).' },
           ...extra,
+          final: { type: 'boolean', description: 'true when this message is the last thing you do in this turn: the turn ends as soon as it is sent, with no further model call. Leave it out when you will keep working after it.' },
         },
       },
       flags: { sideEffect: true, barrierAfter: true },
@@ -343,6 +346,7 @@ export class ChatHub {
     const extras = [parts.images ? `${parts.images.length} image${parts.images.length === 1 ? '' : 's'}` : '', parts.choices ? `${parts.choices.options.length} choices` : '', parts.widget ? 'a widget' : ''].filter(Boolean);
     return {
       text: `sent to ${id}${ids.length > 0 ? ` as message ${ids.join(', ')}` : ''} (${text.length} characters${extras.length > 0 ? `, ${extras.join(', ')}` : ''})${parts.choices ? '; the answer will arrive as a chat.message' : ''}`,
+      ...(input.final === true ? { endsTurn: true } : {}),
     };
   }
 
