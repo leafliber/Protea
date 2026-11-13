@@ -103,6 +103,8 @@ export async function checkConformance(dir: string, opts: ConformanceOptions = {
       blobs.set(handle, data);
       return { handle, mime: (p as { mime?: string }).mime ?? 'image/png', size: data.length };
     },
+    [PLUGIN_TO_HOST.speechStatus]: () => ({ ready: false }),
+    [PLUGIN_TO_HOST.speechTranscribe]: () => ({ ok: false, code: 'not_configured', error: 'speech-to-text is not set up' }),
     [PLUGIN_TO_HOST.blobGet]: (p) => {
       const data = blobs.get((p as { handle: string }).handle);
       if (!data) throw new RpcError(RPC_ERRORS.InvalidParams, 'not stored');

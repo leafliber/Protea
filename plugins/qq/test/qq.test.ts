@@ -36,6 +36,8 @@ interface SetupOptions {
   config?: Record<string, unknown>;
   /** Write the sign-in record for the secret (default: when there is a secret and no kv given). */
   signedIn?: boolean;
+  /** Speech-to-text the fake host answers with; unset: not set up. */
+  speech?: ConstructorParameters<typeof FakeHost>[1] extends infer O ? (O extends { speech?: infer S } ? S : never) : never;
 }
 
 async function setup(o: SetupOptions = {}) {
@@ -51,6 +53,7 @@ async function setup(o: SetupOptions = {}) {
     dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'protea-qq-test-')),
     ...(secret ? { env: { [SECRET]: secret } } : {}),
     config: { apiBase: base, tokenBase: base, bindBase: base, ...o.config },
+    ...(o.speech ? { speech: o.speech } : {}),
   });
   if (secret && (o.signedIn ?? !o.kv)) host.kv.set('signIn', { appId: APP, secretSha256: sha256(secret) });
   if (o.kv) for (const [k, v] of o.kv) host.kv.set(k, v);
@@ -203,6 +206,7 @@ describe('qq connector', () => {
     // Buttons, and nothing to type: no command, no id.
     const sent = qq.sent.at(-1);
     expect(sent?.content).toBe('[Needs your OK] shell\nshell rm -rf /tmp/x');
+    expect(sent?.msgType).toBe(2);
     expect(sent?.keyboard?.content.rows.map((r) => r.buttons.map((b) => b.render_data.label))).toEqual([['Approve', 'Deny']]);
   });
 
@@ -276,6 +280,29 @@ describe('qq connector', () => {
     qq.c2c({ from: OWNER, text: `好的 <faceType=1,faceId="14",ext="${face}">`, quoted: '原来那条' });
     await waitFor(() => host.events.length === 3);
     expect(host.events.map((e) => e.text.split('\n').slice(1).join('\n'))).toEqual(['[voice] 明天八点叫我', '看看这个\n[file report.pdf]', '[quoted: 原来那条]\n好的 【表情: [微笑]】']);
+  });
+
+  it('transcribes the owner\'s voice itself when speech-to-text is set up, QQ\'s WAV copy first, and falls back to QQ\'s text', async () => {
+    let fail = false;
+    const { qq, host, base } = await setup({ speech: (data, mime) => (fail ? { ok: false, code: 'failed', error: 'down' } : { ok: true, text: `heard ${data.toString()} as ${mime}`, ms: 5 }) });
+    await waitFor(() => qq.online === 1);
+    qq.images.set('/img/v.wav', Buffer.from('wav-bytes'));
+    qq.images.set('/img/v.silk', Buffer.from('silk-bytes'));
+    qq.c2c({ from: OWNER, attachments: [{ content_type: 'voice', url: `${base}/img/v.silk`, voice_wav_url: `${base}/img/v.wav`, asr_refer_text: '明天八点叫我' }] });
+    qq.c2c({ from: OWNER, attachments: [{ content_type: 'voice', url: `${base}/img/v.silk` }] });
+    await waitFor(() => host.events.length === 2);
+    fail = true;
+    qq.c2c({ from: OWNER, attachments: [{ content_type: 'voice', url: `${base}/img/v.silk`, asr_refer_text: '明天八点叫我' }] });
+    // A stranger's voice is not sent anywhere.
+    qq.c2c({ from: 'STRANGER', attachments: [{ content_type: 'voice', url: `${base}/img/v.silk` }] });
+    await waitFor(() => host.events.length === 4);
+    expect(host.events.map((e) => e.text.split('\n').slice(1).join('\n'))).toEqual([
+      '[voice] heard wav-bytes as audio/wav',
+      '[voice] heard silk-bytes as audio/silk',
+      '[voice] 明天八点叫我',
+      '[voice] (could not be transcribed)',
+    ]);
+    expect(host.transcriptions).toHaveLength(3);
   });
 
   it('keeps the order of messages that arrive together', async () => {
@@ -529,6 +556,9 @@ describe('qq rich replies', () => {
     expect(r).toMatchObject({ ok: true, messageIds: ['out-1'] });
     expect(qq.sent).toHaveLength(1);
     expect(qq.sent[0]?.content).toBe('When?');
+    // QQ shows buttons only under a markdown message: on plain text it drops them without an error.
+    expect(qq.sent[0]?.msgType).toBe(2);
+    expect(qq.sent[0]?.keyboard?.content.rows[0]?.buttons[0]?.action.unsupport_tips).toBeTruthy();
     expect(qq.sent[0]?.keyboard?.content.rows.flatMap((row) => row.buttons.map((b) => [b.render_data.label, b.action.data]))).toEqual([
       ['周五下午', 'choice:0'],
       ['下周一', 'choice:1'],
@@ -656,7 +686,7 @@ describe('qq rich replies', () => {
     expect(qq.streamFrames.at(-1)).toMatchObject({ input_state: 10, content_raw: 'Look at this.' });
     expect(qq.sent.map((s) => [s.msgType, s.content, !!s.keyboard])).toEqual([
       [7, '', false],
-      [0, '请选择：', true],
+      [2, '请选择：', true],
     ]);
   });
 });

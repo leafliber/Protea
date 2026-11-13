@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, 
 import type { ApprovalInfo, BatchEndReason, BlobImageRef, ChatAnswer, ChatBatch, ChatHistoryResponse, ChatItem, ChatMessageRequest, ChatPending, PushEventResponse, RunPhase, StatusResponse, WhoAmIResponse } from '@protea/protocol';
 import { get, post, qs, useApi } from '../api';
 import { BlobImages, blobUrl, uploadImage } from '../images';
+import { MicButton } from '../voice';
 import { Choices, type ChoiceState } from '../components/rich/Choices';
 import { Rich } from '../components/rich/Markdown';
 import { Widget } from '../components/rich/Widget';
@@ -757,6 +758,15 @@ function Composer({ busy, draft, onDraftUsed, onSend }: { busy: boolean; draft: 
         <button type="button" className="composer-attach" disabled={uploading || images.length >= MAX_IMAGES} title="添加图片" aria-label="添加图片" onClick={() => picker.current?.click()}>
           {uploading ? '上传中…' : '图片'}
         </button>
+        <MicButton
+          disabled={sending}
+          onError={setError}
+          onDictated={(said) => {
+            setText((old) => (old.trim() ? `${old.replace(/\s+$/, '')} ${said}` : said));
+            ref.current?.focus();
+          }}
+          onSend={(said) => onSend(said)}
+        />
         <span className="composer-hint">{error ? <span className="error-text">{error}</span> : coarse ? '' : 'Enter 发送，Shift + Enter 换行'}</span>
         {busy && (
           <button type="button" className="composer-interrupt" disabled={!canSend} title="停下正在进行的回答，先处理这条" onClick={() => void submit('interrupt')}>

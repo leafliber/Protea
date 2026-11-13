@@ -53,6 +53,7 @@ import { actorOf, principal, registerAccountRoutes, registerAuthRoutes, requireA
 import { loginView } from './login.js';
 import { installFrom, registerOpsRoutes, type OpsDeps } from './ops.js';
 import { registerProviderRoutes, type ProviderOps } from './providers.js';
+import { registerSpeechRoutes, type SpeechOps } from './speech.js';
 import { registerConsole } from './static.js';
 import { subscribeStream } from './stream.js';
 
@@ -61,6 +62,8 @@ export interface ControlDeps extends Omit<OpsDeps, 'store' | 'audit'> {
   auth: AuthDeps;
   /** Model provider profiles (/api/providers). */
   providers?: ProviderOps;
+  /** Speech-to-text (/api/speech): settings, test, the web chat's microphone. */
+  speech?: SpeechOps;
   bus: Bus;
   store: EventStore;
   /** Stored images (GET and POST /api/blobs). */
@@ -242,6 +245,7 @@ export function createControlApp(d: ControlDeps): Hono {
   });
   registerAccountRoutes(app, d.auth);
   registerProviderRoutes(app, d.providers);
+  registerSpeechRoutes(app, d.speech, (c) => actorOf(principal(c)));
 
   app.get('/metrics', async (c, next) => {
     if (!d.publicMetrics?.()) return guard(c, next);

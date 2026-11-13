@@ -22,6 +22,8 @@ import {
   type PluginLoginStatus,
   type PushResultMsg,
   type SettledParams,
+  type SpeechTranscribeParams,
+  type SpeechTranscribeResult,
   type ToolCallResult,
   type ToolDecl,
   type Trigger,
@@ -38,6 +40,8 @@ export interface FakeHostOptions {
   /** Which senderKeys the fake owner registry recognises. */
   owners?: string[];
   env?: Record<string, string>;
+  /** Answers `speech/transcribe`; unset: speech-to-text is not configured. */
+  speech?: (data: Buffer, mime: string) => SpeechTranscribeResult | Promise<SpeechTranscribeResult>;
 }
 
 const TYPE_RE = /^[a-z0-9-]+\.[a-z0-9_.-]+$/;
@@ -57,6 +61,8 @@ export class FakeHost {
   readonly modeRequests: PermissionModeParams[] = [];
   /** Images stored through `blob/put`, by handle. */
   readonly blobs = new Map<string, { data: Buffer; mime: string }>();
+  /** Recordings sent through `speech/transcribe`. */
+  readonly transcriptions: Array<{ data: Buffer; mime: string }> = [];
   /** What the plugin handed over with `login/complete`. */
   readonly logins: LoginCompleteParams[] = [];
   capabilities: InitializeResult['capabilities'] = {};
@@ -118,6 +124,13 @@ export class FakeHost {
         const b = this.blobs.get((p as BlobGetParams).handle);
         if (!b) throw new Error('not stored');
         return { dataBase64: b.data.toString('base64'), mime: b.mime, size: b.data.length };
+      })
+      .handle(PLUGIN_TO_HOST.speechStatus, () => ({ ready: o.speech !== undefined }))
+      .handle(PLUGIN_TO_HOST.speechTranscribe, async (p): Promise<SpeechTranscribeResult> => {
+        const { dataBase64, mime } = p as SpeechTranscribeParams;
+        const data = Buffer.from(dataBase64, 'base64');
+        this.transcriptions.push({ data, mime });
+        return o.speech ? o.speech(data, mime) : { ok: false, code: 'not_configured', error: 'speech-to-text is not set up' };
       })
       .handle(PLUGIN_TO_HOST.loginComplete, (p) => {
         this.logins.push(p as LoginCompleteParams);

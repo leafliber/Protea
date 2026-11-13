@@ -30,6 +30,7 @@ import {
   type PushResultMsg,
   type RpcPeer,
   type RunPhaseParams,
+  type SpeechTranscribeResult,
   type SettledParams,
   type StopParams,
   type ToolCallParams,
@@ -74,6 +75,16 @@ export interface Host<C = Record<string, unknown>> {
     /** Store an image; put the returned handle in a tool result's `images` or an event's `blobs`. */
     put(data: Uint8Array, mime?: string): Promise<BlobPutResult>;
     get(handle: string): Promise<{ data: Buffer; mime: string; size: number }>;
+  };
+  speech: {
+    /** Whether speech-to-text is set up: check before downloading a recording for it. */
+    ready(): Promise<boolean>;
+    /**
+     * The owner's voice as text, through the speech service the operator set up (SILK from QQ or
+     * WeChat is decoded by the host). `not_configured`: nobody set one up; use the platform's own
+     * transcript when it has one.
+     */
+    transcribe(data: Uint8Array, mime: string, opts?: { language?: string }): Promise<SpeechTranscribeResult>;
   };
   /** A secret the manifest declared; the host injects it into the environment at start. */
   secret(name: string): string | undefined;
@@ -227,6 +238,10 @@ export function servePlugin<C>(peer: RpcPeer, def: PluginDefinition<C>, opts: Se
         const r = await peer.request<BlobGetResult>(PLUGIN_TO_HOST.blobGet, { handle });
         return { data: Buffer.from(r.dataBase64, 'base64'), mime: r.mime, size: r.size };
       },
+    },
+    speech: {
+      ready: async () => (await peer.request<{ ready: boolean }>(PLUGIN_TO_HOST.speechStatus, {})).ready,
+      transcribe: (data, mime, o) => peer.request<SpeechTranscribeResult>(PLUGIN_TO_HOST.speechTranscribe, { dataBase64: Buffer.from(data).toString('base64'), mime, ...(o?.language ? { language: o.language } : {}) }),
     },
     secret: (name) => env[name],
     login: {

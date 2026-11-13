@@ -4,6 +4,7 @@ import YAML from 'yaml';
 import { LEVELS, type Level } from '@protea/protocol';
 import { normalizeMcpServer } from '../mcp/settings.js';
 import { normalizeProviders } from '../providers/profiles.js';
+import { normalizeSpeech } from '../speech/settings.js';
 import { parseCidr } from '../util/cidr.js';
 import { isValidTimeZone } from '../util/time.js';
 import { defaultConfig, STARTER_CONFIG_YAML } from './defaults.js';
@@ -230,6 +231,7 @@ function validate(cfg: ProteaConfig, warnings: string[]): void {
   const legacy = ['anthropic', 'echo'].filter((k) => k in (cfg.providers as unknown as Record<string, unknown>));
   if (legacy.length > 0) warnings.push(`providers.${legacy.join(' and providers.')} (environment): the old layout is ignored; use providers.profiles`);
   cfg.providers = normalizeProviders(cfg.providers);
+  cfg.speech = normalizeSpeech(cfg.speech);
   for (const [id, p] of Object.entries(cfg.plugins)) {
     if (p.enabled === undefined) p.enabled = false; // plugins without built-in defaults start disabled
     if (typeof p.enabled !== 'boolean') throw new Error(`plugins.${id}.enabled must be a boolean`);

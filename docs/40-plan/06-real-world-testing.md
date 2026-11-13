@@ -84,6 +84,7 @@ docker cp protea:/data/exports/<名字> .
 | T17 | 能力变更、按需加载、Fork 复用 | 真实模型是否用 `final` 结束回合、是否先搜再调延迟的工具（MCP 与插件）、是否把工作交给 Fork 并复用、提议的内容是否完整 | 一个模型的 API key；一个工具较多的 MCP 服务器（如内置浏览器） |
 | T18 | 授权请求与定时任务 | 真实模型是否恰当地填写 `_approval`（理由、平台）、不再重复解释；QQ 官方按钮与降级、Telegram 按钮、微信回复词；控制台的定时任务页 | 一个模型的 API key；QQ、Telegram、微信中至少两个平台 |
 | T19 | 滴答清单 | 令牌连通、任务的增改查完成删、到期提醒；确认文档没写明的接口行为 | 一个滴答清单账号（可以新建一个测试清单） |
+| T20 | QQ 按钮、价格、语音输入 | QQ 选项与审批的按钮真的出现并能点；非 Claude 模型有费用；网页听写与按住说话、QQ/微信/Telegram 语音转写 | QQ 机器人；一个转写服务的 key（如硅基流动）；能用麦克风的浏览器（https 或 localhost） |
 | T10 | 账号与供应商 | 首次设置、账号登录；Anthropic 以外的供应商（OpenAI 兼容）跑通对话与工具调用；按角色分配 | 至少一个第三方 API key（或本机 Ollama） |
 
 ### T1 · 缓存命中率
@@ -326,6 +327,17 @@ node scripts/soak.mjs --url http://127.0.0.1:7788 --token-file protea-token --ho
 7. 打开到期提醒（`reminders.enabled: true`，`intervalMin: 1`），建一个 3 分钟后的定时任务和一个今天的全天任务。预期：定时任务到点后 1 分钟内出现 `dida365.task_due`；全天任务在 `dailyAt` 那一刻报（可把 `dailyAt` 设成几分钟后来测）；昨天没完成的任务在 `dailyAt` 后出现在 `dida365.overdue` 里，一天只一次。
 8. `protea secrets rm DIDA365_TOKEN` 后重启插件，或在滴答清单里删除令牌。预期：插件启动失败并说明缺令牌；令牌失效时工具回执提示 401 和重新生成令牌。
 - **导出**：`protea plugins logs dida365`；提醒事件用 `protea events tail --source dida365` 实时看，或 `protea events ls` 后 `protea events show <cursor>`。
+
+### T20 · QQ 按钮、价格、语音输入
+
+自动测试用的是假 QQ 服务端和假转写服务，这里验证真实平台（[ADR-0026](../20-decisions/ADR-0026-qq-buttons-model-prices-voice-input.md)）。
+
+1. **QQ 按钮**：在 QQ 里说"给我三个选项试试按钮"。预期：回复下面有按钮，点一个后助理收到选择，按钮显示已选。触发一个需要审批的工具。预期：审批消息带"批准 / 拒绝"按钮，点了生效。若没有按钮而是编号列表或"回复 approve / deny"的文字，记下 `protea plugins logs qq` 里的错误码（没有按钮权限时如 304057）。
+2. **价格**：控制台「模型」页每个档案的"价格"一行：主模型显示内置或自定义价格。给一个没有内置价的模型在编辑里填价格，或写 `glm-*`。和它对话几轮。预期：总览"过去 24 小时花费"增加；之前没有价格时，那里会提醒"N 次调用的模型没有价格"。走 OpenRouter 的档案，费用和 OpenRouter 后台一致。
+3. **语音设置**：「模型」页"语音转文字"→ 设置，选硅基流动预设，填 key，点"测试"。预期：显示"可用"和耗时。
+4. **网页语音**：用 http://127.0.0.1:7788 或 https 打开对话页。点按"语音"说一句话再点一次。预期：文字出现在输入框，没有发出。按住说一句话松开。预期：直接作为消息发出。按住后移出按钮再松开。预期：不发送。第一次使用时浏览器会询问麦克风权限。手机上也试一次（需要 https）。
+5. **平台语音**：在 QQ、微信、Telegram 私聊里各发一条语音。预期：助理按语音内容回答；`protea events show <cursor>` 里是 `[voice] …`；`protea logq --q "speech transcribed"` 有记录。把转写关掉再发：QQ、微信用平台自带的文字，Telegram 说明没有设置转写。语音说"同意"不会批准待审批的请求。
+- **导出**：`protea plugins logs qq`（`wechat`、`telegram` 同理）、`protea logq --q speech`。
 
 ## 3. 日志在哪里、怎么查
 

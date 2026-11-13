@@ -17,7 +17,9 @@ async function waitFor(cond: () => boolean, ms = 5000): Promise<void> {
   }
 }
 
-async function setup(config: Record<string, unknown> = {}, kv?: Map<string, unknown>, existing?: { tg: FakeTelegram; apiBase: string }) {
+type Speech = (data: Buffer, mime: string) => { ok: true; text: string; ms: number } | { ok: false; code: 'failed'; error: string };
+
+async function setup(config: Record<string, unknown> = {}, kv?: Map<string, unknown>, existing?: { tg: FakeTelegram; apiBase: string }, speech?: Speech) {
   const tg = existing?.tg ?? new FakeTelegram();
   const apiBase = existing?.apiBase ?? (await tg.start());
   if (!existing) running.push(tg);
@@ -27,6 +29,7 @@ async function setup(config: Record<string, unknown> = {}, kv?: Map<string, unkn
     owners: [`telegram:${OWNER}`],
     env: { TELEGRAM_BOT_TOKEN: tg.token },
     config: { apiBase, pollTimeoutSec: 1, ...config },
+    ...(speech ? { speech } : {}),
   });
   if (kv) for (const [k, v] of kv) host.kv.set(k, v);
   await host.start();
@@ -108,6 +111,20 @@ describe('telegram connector', () => {
     expect(host.events[0]?.blobs).toMatchObject([{ size: png.length }]);
     expect(host.blobs.get(host.events[0]?.blobs?.[0]?.handle as string)?.data.equals(png)).toBe(true);
     expect(host.events[1]?.blobs).toBeUndefined();
+  });
+
+  it('transcribes the owner\'s voice messages when speech-to-text is set up, and says so when it is not', async () => {
+    const { tg, host } = await setup({}, undefined, undefined, (data, mime) => ({ ok: true, text: `heard ${data.toString()} as ${mime}`, ms: 4 }));
+    tg.files.set('photos/v1.bin', Buffer.from('ogg-bytes'));
+    tg.inject({ fromId: OWNER, extra: { voice: { file_id: 'v1', mime_type: 'audio/ogg', duration: 2 } } });
+    tg.inject({ fromId: OWNER, extra: { voice: { file_id: 'missing', duration: 2 } } });
+    await waitFor(() => host.events.length === 2);
+    expect(host.events[0]?.text).toMatch(/\n\[voice\] heard ogg-bytes as audio\/ogg$/);
+    expect(host.events[1]?.text).toMatch(/\n\[voice\] \(could not be transcribed\)$/);
+    const plain = await setup();
+    plain.tg.inject({ fromId: OWNER, extra: { voice: { file_id: 'v1', duration: 2 } } });
+    await waitFor(() => plain.host.events.length === 1);
+    expect(plain.host.events[0]?.text).toMatch(/\[voice\] \(not transcribed: no speech-to-text is set up\)$/);
   });
 
   it('still delivers the message when the picture cannot be fetched', async () => {

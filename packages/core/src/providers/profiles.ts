@@ -1,5 +1,5 @@
 import { LEVELS, MODEL_ROLES, PROVIDER_PROTOCOLS, type Effort, type Level, type ModelRole } from '@protea/protocol';
-import type { ProviderProfile, ProviderProtocol, ProvidersSettings } from '../config/types.js';
+import type { ModelPricing, ProviderProfile, ProviderProtocol, ProvidersSettings } from '../config/types.js';
 
 const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 const PROFILE_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
@@ -111,7 +111,7 @@ export function normalizeProviderProfile(id: string, raw: unknown): ProviderProf
   if (!(Number.isInteger(p.timeoutMs) && p.timeoutMs >= 1000)) throw new Error(`${at}.timeoutMs must be an integer of at least 1000`);
   if (!(Number.isInteger(p.maxRetries) && p.maxRetries >= 0 && p.maxRetries <= 10)) throw new Error(`${at}.maxRetries must be an integer from 0 to 10`);
   if (!isPlainObject(p.headers) || !Object.values(p.headers).every((v) => typeof v === 'string')) throw new Error(`${at}.headers must map header names to text`);
-  if (!isPlainObject(p.pricing)) throw new Error(`${at}.pricing must be a mapping`);
+  p.pricing = checkPricing(`${at}.pricing`, p.pricing);
   const a = p.anthropic;
   if (a.features !== 'full' && a.features !== 'basic') throw new Error(`${at}.anthropic.features must be full or basic`);
   if (a.fallbacks !== null && a.fallbacks !== 'default') throw new Error(`${at}.anthropic.fallbacks must be default or null`);
@@ -223,3 +223,46 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
   { id: 'anthropic-compatible', label: 'Anthropic 兼容接口（其他厂商）', protocol: 'anthropic', baseUrl: null, models: { main: '', fork: '', cheap: '' }, anthropic: { features: 'basic', fallbacks: null, thinkingMismatch: null } },
   { id: 'custom', label: '自定义（OpenAI 兼容）', protocol: 'openai-chat', baseUrl: null },
 ];
+
+const PRICE_FIELDS = ['input', 'output', 'cacheRead', 'cacheWrite'] as const;
+
+/** Check a profile's `pricing` mapping from config.yaml or the console. */
+export function checkPricing(at: string, raw: unknown): Record<string, ModelPricing> {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new Error(`${at} must be a mapping`);
+  const out: Record<string, ModelPricing> = {};
+  const num = (where: string, v: unknown, required: boolean): number | undefined => {
+    if (v === undefined || v === null) {
+      if (required) throw new Error(`${where} is required (USD per million tokens)`);
+      return undefined;
+    }
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) throw new Error(`${where} must be a number of at least 0 (USD per million tokens)`);
+    return v;
+  };
+  for (const [model, value] of Object.entries(raw as Record<string, unknown>)) {
+    const where = `${at}.${model}`;
+    if (model.trim() === '' || model.length > 200) throw new Error(`${at}: a model name is 1 to 200 characters`);
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error(`${where} must be { input, output, cacheRead?, cacheWrite? }`);
+    const v = value as Record<string, unknown>;
+    for (const k of Object.keys(v)) if (![...PRICE_FIELDS, 'tiers'].includes(k)) throw new Error(`${where}.${k}: prices are input, output, cacheRead, cacheWrite and tiers`);
+    const p: ModelPricing = { input: num(`${where}.input`, v['input'], true) as number, output: num(`${where}.output`, v['output'], true) as number };
+    const cr = num(`${where}.cacheRead`, v['cacheRead'], false);
+    const cw = num(`${where}.cacheWrite`, v['cacheWrite'], false);
+    if (cr !== undefined) p.cacheRead = cr;
+    if (cw !== undefined) p.cacheWrite = cw;
+    if (v['tiers'] !== undefined) {
+      if (!Array.isArray(v['tiers'])) throw new Error(`${where}.tiers must be a list of { above, input, output, cacheRead? }`);
+      p.tiers = (v['tiers'] as unknown[]).map((t, i) => {
+        const w = `${where}.tiers[${i}]`;
+        if (typeof t !== 'object' || t === null) throw new Error(`${w} must be { above, input, output, cacheRead? }`);
+        const tt = t as Record<string, unknown>;
+        if (!(Number.isInteger(tt['above']) && (tt['above'] as number) > 0)) throw new Error(`${w}.above must be a positive whole number of prompt tokens`);
+        const tier: NonNullable<ModelPricing['tiers']>[number] = { above: tt['above'] as number, input: num(`${w}.input`, tt['input'], true) as number, output: num(`${w}.output`, tt['output'], true) as number };
+        const tcr = num(`${w}.cacheRead`, tt['cacheRead'], false);
+        if (tcr !== undefined) tier.cacheRead = tcr;
+        return tier;
+      });
+    }
+    out[model.trim()] = p;
+  }
+  return out;
+}

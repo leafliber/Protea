@@ -56,7 +56,7 @@ OpenAI 风格协议的映射（`toChatMessages` / `toResponsesInput`）：
 - 助手的 `tool_use` 变成 `tool_calls`（Responses 为 `function_call`），参数是 JSON 文本；`thinking`、`redacted_thinking`、服务端工具块不发送；Claude 的 `compaction` 块转成一段"之前对话的摘要"文本。
 - 回复里的文本与工具调用转回规范块；参数不是 JSON 对象时变成 `{ _raw }`，由执行前的 schema 校验拒绝（模型看到错误后重试）。
 - 停止原因：`tool_calls` → `tool_use`、`length` / `max_output_tokens` → `max_tokens`、`content_filter` → `refusal`，其余 `end_turn`。
-- 用量：`prompt_tokens` 含缓存部分，所以输入 = prompt − cached，缓存读 = cached；服务端不报用量时按长度估算（预算与交接仍有依据）。费用只在档案配置了 `pricing` 时计算。
+- 用量：`prompt_tokens` 含缓存部分，所以输入 = prompt − cached，缓存读 = cached；服务端不报用量时按长度估算（预算与交接仍有依据）。费用按 §6 的价格查找（档案的 `pricing` 或内置表）计算。
 - 不声明工具搜索（`supportsToolSearch` 为假）：延迟的工具走客户端模式（§5），请求里只有加载的工具与 `tool_search` / `tool_call`；不做精确计数（交接按估算）、`req.compaction` 被忽略。上下文窗口取 `contextWindow`，默认 128000。
 - 错误：401/403 → `config`，404 → `fatal`，429 与 5xx/408/409、连接错误、超时 → `retryable`（先按 `maxRetries` 退避重试，尊重 `Retry-After`），400/413/422 且消息像"超出上下文" → `overflow`。
 
@@ -107,7 +107,12 @@ OpenAI 风格协议的映射（`toChatMessages` / `toResponsesInput`）：
 
 每次调用记录 `usage` 表：`input / output / cache_read / cache_write / thinking`（若有）token、模型、角色、会话、批等级、估算费用（按配置的价格表）。调度器用它做预算；控制台画"今日花费按等级"。
 
-Claude 的价格表随镜像发布，可在档案的 `pricing` 覆盖，避免硬编码过期；其他模型的价格由主人在档案里填写（不填则没有费用估算）。
+价格（[ADR-0026](../20-decisions/ADR-0026-qq-buttons-model-prices-voice-input.md)，`packages/core/src/providers/pricing.ts`）：
+
+- 档案的 `pricing` 按模型名或带 `*` 的通配写价格（美元/百万 token）：`input`、`output`、`cacheRead`（不填按输入价）、`cacheWrite`（不填：5 分钟缓存 1.25 倍输入、1 小时 2 倍）、`tiers`（提示超过 `above` token 后的价格）。控制台「模型」页编辑档案时可以填。
+- 查找顺序：同名条目 → 规范化后的名字 → 最长的通配 → 内置表。规范化去掉路由的厂商路径、云厂商前缀与日期/版本后缀，Claude 的点号版本转成连字符；内置表只精确匹配，不按前缀。
+- 内置表随镜像发布：Claude 全系列与 OpenAI、DeepSeek、通义千问、Kimi、GLM、Gemini、MiniMax、xAI 的现行型号（国际站美元价，核对日期 `PRICES_CHECKED`）。两种 OpenAI 协议同样使用；OpenRouter 报告的实际扣费（`usage.cost`）排在自定义价格之后、内置表之前。
+- 没有价格的调用不计费（预算按 0 计）。`/api/status` 的 `usage24h.unpricedCalls` 与「模型」页每个模型的"7 天内未计费次数"把它们标出来。
 
 ## 7. 拒答与安全分类器
 

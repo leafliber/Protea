@@ -34,6 +34,7 @@ interface SetupOptions {
   existing?: { il: FakeIlink; base: string };
   config?: Record<string, unknown>;
   botId?: string;
+  speech?: (data: Buffer, mime: string) => { ok: true; text: string; ms: number } | { ok: false; code: 'failed'; error: string };
 }
 
 async function setup(o: SetupOptions = {}) {
@@ -48,6 +49,7 @@ async function setup(o: SetupOptions = {}) {
     dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'protea-wechat-test-')),
     ...(token ? { env: { [TOKEN_SECRET]: token } } : {}),
     config: { apiBase: base, cdnBase: `${base}/c2c`, ...o.config },
+    ...(o.speech ? { speech: o.speech } : {}),
   });
   // The official session guard is process-wide and keyed by bot id.
   if (token) host.kv.set('botId', o.botId ?? `bot-${++bots}`);
@@ -313,6 +315,25 @@ describe('wechat connector', () => {
     il.inject({ from: 'stranger@im.wechat', items: [{ type: 2, image_item: { media: { encrypt_query_param: 'p2', aes_key: crypto.randomBytes(16).toString('base64') } } }] });
     await waitFor(() => host.events.length === 1);
     expect(il.callsTo('/c2c/download')).toHaveLength(0);
+  });
+
+  it('transcribes the owner\'s voice itself when speech-to-text is set up, and never takes spoken words as an approval', async () => {
+    let fail = false;
+    const { il, host } = await setup({ speech: (data, mime) => (fail ? { ok: false, code: 'failed', error: 'down' } : { ok: true, text: `heard ${data.toString()} as ${mime}`, ms: 3 }) });
+    const key = crypto.randomBytes(16);
+    il.cdn.set('v1', encryptMedia(Buffer.from('#!SILK_V3-bytes'), key));
+    const voice = { type: 3, voice_item: { text: '同意', media: { encrypt_query_param: 'v1', aes_key: key.toString('base64') } } };
+    il.inject({ from: OWNER, text: 'hi' });
+    await waitFor(() => host.events.length === 1);
+    await host.request('approvals/request', { id: 'a1', tool: 'x_y', summary: 'do it', expiresAt: new Date(Date.now() + 60_000).toISOString() });
+    il.inject({ from: OWNER, items: [voice] });
+    await waitFor(() => host.events.length === 2);
+    fail = true;
+    il.inject({ from: OWNER, items: [voice] });
+    await waitFor(() => host.events.length === 3);
+    expect(host.events[1]?.text).toMatch(/\n\[voice\] heard #!SILK_V3-bytes as audio\/silk$/);
+    expect(host.events[2]?.text).toMatch(/\n\[voice\] 同意$/);
+    expect(host.decisions).toHaveLength(0);
   });
 
   it('uses the transcript of a voice message and the text of a quote', async () => {

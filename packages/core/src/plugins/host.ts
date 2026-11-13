@@ -13,6 +13,8 @@ import {
   type BlobGetParams,
   type BlobGetResult,
   type BlobPutParams,
+  type SpeechTranscribeParams,
+  type SpeechTranscribeResult,
   type BlobPutResult,
   type EventInput,
   type EventState,
@@ -31,6 +33,7 @@ import {
   type ToolDecl,
 } from '@protea/protocol';
 import type { BlobStore } from '../blobs/store.js';
+import { SpeechError, type SpeechService } from '../speech/service.js';
 import type { Bus } from '../bus.js';
 import type { ChatHub } from '../chat/hub.js';
 import type { PluginSettings } from '../config/types.js';
@@ -84,6 +87,8 @@ export interface PluginHostOptions {
   outputs?: OutputLog;
   /** Stored images (`blob/put`, `blob/get`, images in tool results). */
   blobs?: BlobStore;
+  /** Speech-to-text for `speech/transcribe` (voice messages on chat platforms). */
+  speech?: SpeechService;
   /** Chat platforms register here when they start; `chat_send` routes to them. */
   chat?: ChatHub;
   /** A sign-in finished (`ownerSenderKey` set) or was undone (null): update who the owner is on this plugin. */
@@ -1053,6 +1058,18 @@ export class PluginHost {
         const found = blobs.get(handle);
         if (!found) throw new RpcError(RPC_ERRORS.InvalidParams, `${handle} is not stored`);
         return { dataBase64: found.bytes.toString('base64'), mime: found.mime, size: found.size } satisfies BlobGetResult;
+      },
+      [PLUGIN_TO_HOST.speechStatus]: () => ({ ready: this.o.speech?.status().ready ?? false }),
+      [PLUGIN_TO_HOST.speechTranscribe]: async (params): Promise<SpeechTranscribeResult> => {
+        const p = params as SpeechTranscribeParams;
+        const speech = this.o.speech;
+        if (!speech) return { ok: false, code: 'not_configured', error: 'speech-to-text is not available' };
+        try {
+          const r = await speech.transcribe(Buffer.from(str(p.dataBase64, 'dataBase64'), 'base64'), str(p.mime, 'mime'), { source: e.id, ...(typeof p.language === 'string' ? { language: p.language } : {}) });
+          return { ok: true, text: r.text, ms: r.ms };
+        } catch (err) {
+          return { ok: false, code: err instanceof SpeechError ? err.code : 'failed', error: errorMessage(err) };
+        }
       },
       [PLUGIN_TO_HOST.approvalsDecide]: (params) => {
         const p = params as ApprovalDecideParams;

@@ -83,8 +83,8 @@ providers:                             # 模型供应商（12-model-providers.md
       timeoutMs: 600000
       maxRetries: 2                    # 连接错误、429、5xx 的重试次数（会话自己的退避之外）
       headers: {}                      # 每个请求附加的 HTTP 头（不是秘密：控制台会显示）
-      pricing: {}                      # { <model>: { input, output, cacheRead } }，美元/百万 token；Claude 有内置价格表，
-                                       # 其他模型不填就没有费用估算（预算按 0 计）
+      pricing: {}                      # { <模型名或 glm-5.3* 这样的通配>: { input, output, cacheRead?, cacheWrite?, tiers? } }，美元/百万 token；
+                                       # 优先于内置价格表（Claude 与主流厂商，见 12-model-providers.md §6）；都没有就不计费
       anthropic:                       # 只对 protocol: anthropic 生效
         features: full                 # full：自适应思考、effort、缓存、beta 功能（官方 API）；basic：只发标准 Messages 字段，
                                        # 给其他厂商的 Anthropic 兼容接口用（没有思考、工具搜索、精确计数）
@@ -170,6 +170,14 @@ vision:                                # 对话里的图片（ADR-0014）；模�
 chat:                                  # 回复可以带什么（17-chat-and-console.md §2）；热更新
   widgets: true                        # chat_send 可以带内联小组件（模型写的 HTML，在沙箱外壳里运行，14-security-and-permissions.md §8.1）
   widgetMaxKb: 64                      # 小组件代码的上限（1–1024）
+
+speech:                                # 语音转文字（ADR-0026）：网页麦克风与平台语音消息；控制台「模型」页设置；热更新
+  baseUrl: null                        # OpenAI 兼容接口的根（…/v1），会加 /audio/transcriptions；null：关闭
+  apiKeySecret: SPEECH_API_KEY         # 存密钥的秘密；null：不需要密钥（本机 Whisper）
+  model: ""                            # 如 FunAudioLLM/SenseVoiceSmall（硅基流动）、gpt-4o-mini-transcribe、whisper-large-v3-turbo；设了 baseUrl 时必填
+  language: null                       # ISO-639-1 提示，如 zh；null：自动识别
+  maxMb: 20                            # 单段录音上限
+  timeoutMs: 60000
 
 mcp:                                   # MCP 服务器（docs/10-architecture/09-mcp-integration.md §2）；监督参数沿用 pluginHost
   servers:

@@ -19,6 +19,7 @@ import {
   ApiError,
   GatewayError,
   GatewayErrorCode,
+  MsgType,
   QQBot,
   contentSanitizer,
   type InlineKeyboard,
@@ -124,10 +125,15 @@ function isoOf(ts: string | undefined): string {
 
 type Attachment = NonNullable<QQBotInboundMessage['attachments']>[number];
 const isImage = (a: Attachment): boolean => (a.content_type ?? '').startsWith('image');
+const isVoice = (a: Attachment): boolean => a.content_type === 'voice' || (a.content_type ?? '').startsWith('audio');
+const MAX_VOICE_BYTES = 20 * 1024 * 1024;
 const urlOf = (a: Attachment): string => (a.url.startsWith('//') ? `https:${a.url}` : /^https?:\/\//i.test(a.url) ? a.url : `https://${a.url}`);
 
-/** What the model reads: the quote, the text, and a note per attachment that is not a delivered image. */
-function textOf(m: QQBotInboundMessage, imagesDelivered: boolean): string {
+/**
+ * What the model reads: the quote, the text, and a note per attachment that is not a delivered
+ * image. A voice message reads as `[voice] <text>`: our own transcript when there is one, else QQ's.
+ */
+function textOf(m: QQBotInboundMessage, imagesDelivered: boolean, transcripts: ReadonlyMap<Attachment, string> = new Map()): string {
   const lines: string[] = [];
   const quoted = m.refMsgIdx ? m.msgElements?.[0]?.content?.trim() : undefined;
   if (quoted) lines.push(`[quoted: ${quoted}]`);
@@ -136,20 +142,31 @@ function textOf(m: QQBotInboundMessage, imagesDelivered: boolean): string {
     const type = a.content_type ?? '';
     if (isImage(a)) {
       if (!imagesDelivered) lines.push('[image]');
-    } else if (type === 'voice' || type.startsWith('audio')) lines.push(a.asr_refer_text ? `[voice] ${a.asr_refer_text}` : '[voice]');
+    } else if (isVoice(a)) {
+      const said = transcripts.get(a) ?? a.asr_refer_text?.trim();
+      lines.push(said ? `[voice] ${said}` : '[voice] (could not be transcribed)');
+    }
     else if (type.startsWith('video')) lines.push('[video]');
     else lines.push(`[file${a.filename ? ` ${a.filename}` : ''}]`);
   }
   return lines.join('\n') || '[unsupported message]';
 }
 
-/** Buttons for single-choice options, two to a row. */
+/** What an old QQ client shows instead of a button it cannot handle. */
+const UNSUPPORTED_TIP = '这个 QQ 版本不支持按钮，请直接回复文字';
+
+type Button = InlineKeyboard['content']['rows'][number]['buttons'][number];
+
+/** A callback button anyone in the chat may press, once; the owner check happens when it arrives. */
+function button(id: string, label: string, done: string, data: string, primary: boolean): Button {
+  // unsupport_tips is in the platform's button schema but not in the SDK's type.
+  const action = { type: 1, permission: { type: 2 }, data, click_limit: 1, unsupport_tips: UNSUPPORTED_TIP };
+  return { id, render_data: { label, visited_label: done, style: primary ? 1 : 0 }, action };
+}
+
+/** Buttons for single-choice options, two to a row (QQ takes at most 5 rows of 5). */
 function keyboardOf(c: ChatChoices): InlineKeyboard {
-  const buttons = c.options.map((o, i) => ({
-    id: `c${i}`,
-    render_data: { label: o.label, visited_label: o.label, style: i === 0 ? 1 : 0 },
-    action: { type: 1, permission: { type: 2 }, data: `choice:${i}`, click_limit: 1 },
-  }));
+  const buttons = c.options.map((o, i) => button(`c${i}`, o.label, o.label, `choice:${i}`, i === 0));
   const rows: InlineKeyboard['content']['rows'] = [];
   for (let i = 0; i < buttons.length; i += 2) rows.push({ buttons: buttons.slice(i, i + 2) });
   return { content: { rows } };
@@ -157,13 +174,9 @@ function keyboardOf(c: ChatChoices): InlineKeyboard {
 
 /** Approve and deny side by side, the longer "stop asking for a while" on its own row. A pressed button shows the outcome. */
 function approvalKeyboard(m: ApprovalMessage): InlineKeyboard {
-  const button = (b: ApprovalMessage['buttons'][number]) => ({
-    id: b.data,
-    render_data: { label: b.label, visited_label: b.done, style: b.choice === 'approve' ? 1 : 0 },
-    action: { type: 1, permission: { type: 2 }, data: b.data, click_limit: 1 },
-  });
-  const short = m.buttons.filter((b) => b.choice !== 'grant').map(button);
-  const long = m.buttons.filter((b) => b.choice === 'grant').map(button);
+  const of = (b: ApprovalMessage['buttons'][number]) => button(b.data, b.label, b.done, b.data, b.choice === 'approve');
+  const short = m.buttons.filter((b) => b.choice !== 'grant').map(of);
+  const long = m.buttons.filter((b) => b.choice === 'grant').map(of);
   return { content: { rows: [{ buttons: short }, ...(long.length > 0 ? [{ buttons: long }] : [])] } };
 }
 
@@ -295,6 +308,32 @@ export function createQqPlugin(opts: QqPluginOptions = {}): PluginDefinition<QqC
     return { blobs, failed };
   }
 
+  /**
+   * The owner's voice messages as text, when speech-to-text is set up: QQ's WAV copy when it gives
+   * one, else the SILK original (the host decodes it). QQ's own recognition stays the fallback.
+   */
+  async function ownerVoices(host: Host<QqConfig>, m: QQBotInboundMessage): Promise<Map<Attachment, string>> {
+    const out = new Map<Attachment, string>();
+    const voices = (m.attachments ?? []).filter((a) => isVoice(a) && (a.voice_wav_url || a.url));
+    if (voices.length === 0 || !(await host.speech.ready())) return out;
+    for (const a of voices) {
+      const wav = !!a.voice_wav_url;
+      try {
+        const res = await fetch(urlOf({ ...a, url: a.voice_wav_url || a.url }), { signal: AbortSignal.timeout(30_000) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = Buffer.from(await res.arrayBuffer());
+        if (data.length > MAX_VOICE_BYTES) throw new Error('too large');
+        const r = await host.speech.transcribe(data, wav ? 'audio/wav' : 'audio/silk');
+        if (r.ok && r.text) out.set(a, r.text);
+        else if (!r.ok) host.log.warn('could not transcribe a voice message; using QQ\'s own text', { messageId: m.messageId, code: r.code, err: r.error });
+      } catch (err) {
+        // Not the address: it carries a download key.
+        host.log.warn('could not fetch a voice message; using QQ\'s own text', { messageId: m.messageId, err: errorText(err) });
+      }
+    }
+    return out;
+  }
+
   async function handle(host: Host<QqConfig>, m: QQBotInboundMessage): Promise<void> {
     const sender = m.senderId?.trim();
     if (!sender || m.senderIsBot) return;
@@ -353,13 +392,14 @@ export function createQqPlugin(opts: QqPluginOptions = {}): PluginDefinition<QqC
     }
     const isStop = isStopWord(command, host.config.stopWords ?? DEFAULT_STOP_WORDS);
     const { blobs, failed } = await ownerImages(host, m);
+    const transcripts = await ownerVoices(host, m);
     await host.events.push({
       ...base,
       ...(blobs.length > 0 ? { blobs } : {}),
       type: CHAT_MESSAGE_EVENT,
       level: 1,
       trigger: isStop ? 'interrupt' : 'flush',
-      text: `Message from owner in private chat (msg ${id}):\n${textOf(m, true)}${failed ? '\n[the image could not be downloaded]' : ''}`,
+      text: `Message from owner in private chat (msg ${id}):\n${textOf(m, true, transcripts)}${failed ? '\n[the image could not be downloaded]' : ''}`,
     });
   }
 
@@ -457,13 +497,24 @@ export function createQqPlugin(opts: QqPluginOptions = {}): PluginDefinition<QqC
     });
   }
 
+  /**
+   * A message with buttons. QQ shows buttons only under a markdown message (msg_type 2): on a
+   * plain text message it accepts the request and drops the keyboard without a word, which is
+   * how the options once never reached the owner. A bot without the keyboard permission is
+   * refused (e.g. 304057), and the caller falls back to words.
+   */
+  async function withButtons(b: QQBot, owner: string, replyTo: string | undefined, text: string, keyboard: InlineKeyboard): Promise<string> {
+    const sent = await b.send({ target: { scope: 'c2c', targetId: owner, ...(replyTo ? { msgId: replyTo } : {}) }, msgType: MsgType.MARKDOWN, markdown: { content: text }, keyboard });
+    return sent.id;
+  }
+
   /** The options after the text: buttons for one choice when QQ takes them, a numbered list otherwise. */
   async function sendChoices(b: QQBot, owner: string, c: ChatChoices, lead: string | null): Promise<{ id: string; buttons: boolean }> {
     if (!c.multiple) {
       // One try only: a refusal here may be about the buttons, not the reply, so it must not count against replying.
       const replyTo = lastMsgId && passiveRefused !== lastMsgId ? lastMsgId : undefined;
       try {
-        const id = (await b.sendTextWithKeyboard({ scope: 'c2c', targetId: owner, ...(replyTo ? { msgId: replyTo } : {}) }, lead ?? '请选择：', keyboardOf(c))).id;
+        const id = await withButtons(b, owner, replyTo, lead ?? '请选择：', keyboardOf(c));
         return { id, buttons: true };
       } catch (err) {
         if (!refused(err)) throw err;
@@ -729,7 +780,7 @@ export function createQqPlugin(opts: QqPluginOptions = {}): PluginDefinition<QqC
         // Buttons first. One try only: a refusal may be about the buttons (many bots may not send them), not the message.
         const replyTo = lastMsgId && passiveRefused !== lastMsgId ? lastMsgId : undefined;
         try {
-          const id = (await b.sendTextWithKeyboard({ scope: 'c2c', targetId: owner, ...(replyTo ? { msgId: replyTo } : {}) }, msg.text.slice(0, CHUNK), approvalKeyboard(msg))).id;
+          const id = await withButtons(b, owner, replyTo, msg.text.slice(0, CHUNK), approvalKeyboard(msg));
           box.shown(req.id, id);
           return { delivered: true };
         } catch (err) {

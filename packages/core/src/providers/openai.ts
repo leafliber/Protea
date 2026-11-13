@@ -3,7 +3,7 @@ import { isImageBlock, isTextBlock, isToolResultBlock, isToolUseBlock, type Cont
 import type { ProviderProfile } from '../config/types.js';
 import { estimateTokens } from '../util/tokens.js';
 import { estimateRequestTokens } from './tokens.js';
-import { estimateCost } from './pricing.js';
+import { estimateCost, findPricing } from './pricing.js';
 import { joinUrl, parseArguments, request, resultText, sseMessages } from './http.js';
 import { PROTOCOL_DEFAULT_URL } from './profiles.js';
 import { ProviderError, type GenerateOptions, type Provider, type ProviderHealth, type ProviderRequest, type ProviderResponse, type ProviderUsage } from './types.js';
@@ -127,11 +127,17 @@ abstract class OpenAiStyleProvider implements Provider {
     return request({ url: joinUrl(this.base, path), headers: { ...this.headers(), accept: 'text/event-stream' }, body, signal, timeoutMs: this.settings.timeoutMs, maxRetries: this.settings.maxRetries });
   }
 
-  protected finish(req: ProviderRequest, content: ContentBlock[], stopReason: string, usage: ProviderUsage | null, model: string | null): ProviderResponse {
+  /**
+   * The response with its cost: the profile's own price first, then what OpenRouter reports it
+   * charged (USD credits), then the built-in table.
+   */
+  protected finish(req: ProviderRequest, content: ContentBlock[], stopReason: string, usage: ProviderUsage | null, model: string | null, reportedUsd?: number): ProviderResponse {
     const requested = this.modelFor(req.role);
     const u = usage ?? { inputTokens: estimateRequestTokens(req), outputTokens: estimateTokens(JSON.stringify(content)), cacheReadTokens: 0, cacheWriteTokens: 0 };
     const res: ProviderResponse = { content, stopReason, usage: u, model: model || requested, requestedModel: requested };
-    const cost = estimateCost(this.settings.pricing[res.model] ?? this.settings.pricing[requested], u, { fiveMinute: 0, oneHour: 0 });
+    const found = findPricing(res.model, this.settings.pricing) ?? findPricing(requested, this.settings.pricing);
+    const reported = reportedUsd !== undefined && Number.isFinite(reportedUsd) && reportedUsd >= 0 && /(^|\.)openrouter\.ai$/.test(new URL(this.base).hostname) ? reportedUsd : undefined;
+    const cost = found?.source === 'custom' || reported === undefined ? estimateCost(found?.pricing, u, { fiveMinute: 0, oneHour: 0 }) : reported;
     if (cost !== undefined) res.costUsd = cost;
     return res;
   }
@@ -195,7 +201,8 @@ interface ChatChunk {
     delta?: { content?: string | null; reasoning_content?: string | null; tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> };
     finish_reason?: string | null;
   }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } | null; prompt_cache_hit_tokens?: number } | null;
+  /** `cost`: what OpenRouter charged for the call, in USD credits. */
+  usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } | null; prompt_cache_hit_tokens?: number; cost?: number } | null;
   error?: { message?: string };
 }
 
@@ -233,6 +240,7 @@ export class OpenAiChatProvider extends OpenAiStyleProvider {
     const calls: Array<{ id: string; name: string; args: string }> = [];
     let finish: string | null = null;
     let usage: ProviderUsage | null = null;
+    let reported: number | undefined;
     let model: string | null = null;
     if (!(res.headers.get('content-type') ?? '').includes('text/event-stream')) {
       // A server that ignored `stream`: one JSON completion.
@@ -243,6 +251,7 @@ export class OpenAiChatProvider extends OpenAiStyleProvider {
       for (const tc of c?.message?.tool_calls ?? []) calls.push({ id: tc.id ?? callId(), name: tc.function?.name ?? '', args: tc.function?.arguments ?? '' });
       finish = c?.finish_reason ?? null;
       usage = j.usage ? chatUsage(j.usage) : null;
+      if (typeof j.usage?.cost === 'number') reported = j.usage.cost;
       model = j.model ?? null;
     } else {
       const byIndex = new Map<number, { id: string; name: string; args: string }>();
@@ -256,7 +265,10 @@ export class OpenAiChatProvider extends OpenAiStyleProvider {
         }
         if (chunk.error) throw new ProviderError('retryable', `the server reported an error mid-stream: ${chunk.error.message ?? 'unknown'}`);
         if (chunk.model) model = chunk.model;
-        if (chunk.usage) usage = chatUsage(chunk.usage);
+        if (chunk.usage) {
+          usage = chatUsage(chunk.usage);
+          if (typeof chunk.usage.cost === 'number') reported = chunk.usage.cost;
+        }
         for (const choice of chunk.choices ?? []) {
           const d = choice.delta;
           if (d?.content) {
@@ -287,7 +299,7 @@ export class OpenAiChatProvider extends OpenAiStyleProvider {
     const content: ContentBlock[] = [];
     if (text) content.push({ type: 'text', text });
     for (const c of calls) content.push({ type: 'tool_use', id: c.id, name: c.name, input: parseArguments(c.args) });
-    return this.finish(req, content, chatStop(finish, calls.length > 0), usage, model);
+    return this.finish(req, content, chatStop(finish, calls.length > 0), usage, model, reported);
   }
 }
 

@@ -93,7 +93,11 @@ export function Overview({ status, reload }: { status: StatusResponse | undefine
 
       <div className="stats">
         <Stat label="现在" value={PHASE_NAME[status.phase] ?? status.phase} hint={status.batchId ? <a href={consoleHref('events', { batch: status.batchId })}>查看正在处理的这一批</a> : `已运行 ${Math.floor(status.uptimeSec / 3600)} 小时 ${Math.floor((status.uptimeSec % 3600) / 60)} 分`} {...(status.phase === 'backoff' ? { tone: 'bad' as const } : {})} />
-        <Stat label="过去 24 小时花费" value={usd(u.costUsd)} hint={`${u.calls} 次模型调用${u.cacheHitRatio === null ? '' : ` · 缓存命中 ${(u.cacheHitRatio * 100).toFixed(0)}%`}`} href={consoleHref('config', { tab: 'budget' })} />
+        {u.unpricedCalls > 0 ? (
+          <Stat label="过去 24 小时花费" value={usd(u.costUsd)} hint={`${u.unpricedCalls} / ${u.calls} 次调用的模型没有价格，未计入：去「模型」设置`} href={consoleHref('providers')} tone="warn" />
+        ) : (
+          <Stat label="过去 24 小时花费" value={usd(u.costUsd)} hint={`${u.calls} 次模型调用${u.cacheHitRatio === null ? '' : ` · 缓存命中 ${(u.cacheHitRatio * 100).toFixed(0)}%`}`} href={consoleHref('config', { tab: 'budget' })} />
+        )}
         <Stat label="对话长度" value={`${Math.round(ctxRatio * 100)}%`} hint={`约 ${compact(status.context.estimatedTokens)} / ${compact(status.context.softTokens)} tokens`} href={consoleHref('sessions')} {...(ctxRatio >= 1 ? { tone: 'bad' as const } : ctxRatio >= 0.8 ? { tone: 'warn' as const } : {})} />
         <Stat label="排队的事件" value={queued} hint={queued === 0 ? '都处理完了' : Object.entries(status.pending).filter(([, n]) => n > 0).map(([l, n]) => `L${l} ${n}`).join(' · ')} href={consoleHref('events', { state: 'pending' })} />
       </div>

@@ -152,6 +152,15 @@ describe('OpenAiChatProvider', () => {
     expect(s.body).not.toHaveProperty('reasoning_effort');
   });
 
+  it('prices a model the profile names no price for from the built-in table, and trusts a reported cost only from OpenRouter', async () => {
+    answers.push(sse([{ model: 'glm-5.3-flash', choices: [{ index: 0, delta: { content: 'ok' }, finish_reason: 'stop' }] }, { choices: [], usage: { prompt_tokens: 1000, completion_tokens: 100, prompt_tokens_details: { cached_tokens: 600 }, cost: 99 } }, '[DONE]']));
+    const r = await new OpenAiChatProvider(profile('openai-chat'), 'sk-test', 'local').generate(request, { signal: AbortSignal.timeout(5000) });
+    expect(r.costUsd).toBeCloseTo((400 * 0.15 + 100 * 0.5 + 600 * 0.03) / 1e6, 12);
+    answers.push(sse([{ model: 'some-local-model', choices: [{ index: 0, delta: { content: 'ok' }, finish_reason: 'stop' }] }, { choices: [], usage: { prompt_tokens: 10, completion_tokens: 1, cost: 5 } }, '[DONE]']));
+    const unpriced = await new OpenAiChatProvider(profile('openai-chat'), 'sk-test', 'local').generate(request, { signal: AbortSignal.timeout(5000) });
+    expect(unpriced.costUsd).toBeUndefined();
+  });
+
   it('sends reasoning effort and the other output field when the profile asks for them', async () => {
     answers.push(sse([{ choices: [{ delta: { content: 'ok' }, finish_reason: 'length' }] }, '[DONE]']));
     const p = new OpenAiChatProvider(profile('openai-chat', { openai: { reasoningEffort: true, maxTokensField: 'max_completion_tokens' }, maxOutputTokens: 1000 }), 'k', 'local');

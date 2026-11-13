@@ -113,6 +113,8 @@ export interface UsageTotals {
   cacheReadTokens: number;
   cacheWriteTokens: number;
   costUsd: number;
+  /** Calls with no price (no cost estimate): costUsd leaves them out. */
+  unpricedCalls: number;
   /** cache_read / (input + cache_read + cache_write); null when no calls. */
   cacheHitRatio: number | null;
 }
@@ -845,6 +847,34 @@ export interface ProviderProfileInfo {
   key: { required: boolean; set: boolean; source: 'env' | 'file' | null };
   ready: boolean;
   problem?: string;
+  /** The models this profile serves now or served in the last 7 days, with the price each is billed at. */
+  prices: ModelPriceRow[];
+}
+
+/** USD per million tokens (config.yaml providers.profiles.<id>.pricing.<model>). */
+export interface ModelPriceInfo {
+  input: number;
+  output: number;
+  /** Unset: the input price. */
+  cacheRead?: number;
+  /** Unset: 1.25x input (5-minute cache), 2x (1-hour cache). */
+  cacheWrite?: number;
+  /** Other rates once a request's prompt passes `above` tokens. */
+  tiers?: Array<{ above: number; input: number; output: number; cacheRead?: number }>;
+}
+
+export interface ModelPriceRow {
+  model: string;
+  /** Roles of this profile that use the model now (empty: only used before). */
+  roles: ModelRole[];
+  /** Calls through this profile in the last 7 days, and how many of them had no price. */
+  calls: number;
+  unpricedCalls: number;
+  /** `custom`: the profile's own entry; `builtin`: Protea's table; null: no price, no cost estimate. */
+  source: 'custom' | 'builtin' | null;
+  /** The entry that matched: a model name, a pattern with *, or the built-in id. */
+  key?: string;
+  pricing?: ModelPriceInfo;
 }
 
 export interface ProviderPresetInfo {
@@ -867,9 +897,35 @@ export interface ProvidersResponse {
   protocols: Array<{ id: ProviderProtocolName; label: string; defaultUrl: string | null }>;
   /** A new profile's complete defaults per protocol (for the console's form). */
   defaults: Record<ProviderProtocolName, Record<string, unknown>>;
+  /** When the built-in prices were last checked against the vendors' pages (YYYY-MM-DD). */
+  pricesChecked: string;
   /** Overall readiness (what /api/status reports). */
   ready: boolean;
   problem?: string;
+}
+
+/** GET /api/speech: the speech-to-text service (config.yaml `speech`). */
+export interface SpeechView {
+  settings: { baseUrl: string | null; apiKeySecret: string | null; model: string; language: string | null; maxMb: number; timeoutMs: number };
+  key: { required: boolean; set: boolean; source: 'env' | 'file' | null };
+  ready: boolean;
+  problem?: string;
+  presets: Array<{ id: string; label: string; baseUrl: string; model: string; noKey?: boolean; note?: string }>;
+}
+
+/** PUT /api/speech. `apiKey`: a string stores it, null removes it, absent keeps it. `settings.baseUrl: null` turns speech-to-text off. */
+export interface PutSpeechRequest {
+  settings: Record<string, unknown>;
+  apiKey?: string | null;
+}
+
+/** POST /api/speech/test: a second of silence through the endpoint, with the settings given (or the saved ones). */
+export type SpeechTestResponse = { ok: true; ms: number; text: string } | { ok: false; error: string };
+
+/** POST /api/speech/transcribe (body: the recording, Content-Type audio/*). */
+export interface TranscribeResponse {
+  text: string;
+  ms: number;
 }
 
 /** PUT /api/providers/:id. `apiKey`: a string stores it, null removes the stored key, absent keeps it. */

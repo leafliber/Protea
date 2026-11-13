@@ -19,6 +19,7 @@ import {
   prepareOfficialClient,
   sendMessageWeixin,
   weixinMessageToMsgContext,
+  type MessageItem,
   type WeixinMessage,
 } from './ilink.js';
 import { QrLogin } from './login.js';
@@ -162,12 +163,45 @@ export function createWechatPlugin(opts: WechatPluginOptions = {}): PluginDefini
     return { blobs, failed };
   }
 
+  /**
+   * The owner's voice as text. With speech-to-text set up, the recording itself (SILK, which the
+   * host decodes): WeChat's own transcript is often wrong for speech that is not Mandarin. Without
+   * it, or when that fails, WeChat's transcript.
+   */
+  async function ownerVoice(host: Host<WechatConfig>, item: MessageItem, id: string | undefined): Promise<string | null> {
+    const platform = item.voice_item?.text?.trim() || null;
+    if (!item.voice_item?.media || !(await host.speech.ready())) return platform;
+    let audio: { data: Buffer; mime: string } | null = null;
+    await downloadMediaFromItem(item, {
+      cdnBaseUrl: cdnBase,
+      label: 'wechat',
+      log: () => undefined,
+      errLog: () => undefined,
+      saveMedia: async (buffer, contentType) => {
+        audio = { data: buffer, mime: contentType ?? 'audio/silk' };
+        return { path: 'memory' };
+      },
+    });
+    const got = audio as { data: Buffer; mime: string } | null;
+    if (!got) {
+      host.log.warn('could not fetch a voice message; using WeChat\'s own text', { messageId: id });
+      return platform;
+    }
+    const r = await host.speech.transcribe(got.data, got.mime);
+    if (r.ok && r.text) return r.text;
+    if (!r.ok) host.log.warn('could not transcribe a voice message; using WeChat\'s own text', { messageId: id, code: r.code, err: r.error });
+    return platform;
+  }
+
   async function handle(host: Host<WechatConfig>, m: WeixinMessage): Promise<void> {
     const from = m.from_user_id?.trim();
     if (m.message_type !== MessageType.USER || !from) return;
     const id = getWeixinMessageId(m);
     const { Body: body, ReplyToBody: quoted } = weixinMessageToMsgContext(m, botId);
-    const text = `${quoted ? `[quoted: ${quoted}]\n` : ''}${body || '[unsupported message]'}`;
+    const voice = (m.item_list ?? []).find((i) => i.type === MessageItemType.VOICE);
+    const said = (t: string | null | undefined): string => `[voice] ${t?.trim() || '(could not be transcribed)'}`;
+    const quote = quoted ? `[quoted: ${quoted}]\n` : '';
+    const text = `${quote}${voice ? said(voice.voice_item?.text) : body || '[unsupported message]'}`;
     const senderKey = `wechat:${from}`;
     const role = await host.owner.resolve(senderKey);
     const ref = id ? `msg ${id}` : 'no message id';
@@ -196,10 +230,14 @@ export function createWechatPlugin(opts: WechatPluginOptions = {}): PluginDefini
       ownerUserId = from;
       await host.kv.set('ownerUserId', from);
     }
-    const answer = await inboxOf(host).reply(senderKey, text);
-    if (answer !== null) return tell(host, answer);
-    if (isModeCommand(text)) return tell(host, await modeCommand(host, senderKey, text));
-    const isStop = isStopWord(text, host.config.stopWords ?? DEFAULT_STOP_WORDS);
+    // Spoken words never answer an approval or change a mode: a misheard "yes" must not approve anything.
+    if (!voice) {
+      const answer = await inboxOf(host).reply(senderKey, text);
+      if (answer !== null) return tell(host, answer);
+      if (isModeCommand(text)) return tell(host, await modeCommand(host, senderKey, text));
+    }
+    const shown = voice ? `${quote}${said(await ownerVoice(host, voice, id))}` : text;
+    const isStop = !voice && isStopWord(text, host.config.stopWords ?? DEFAULT_STOP_WORDS);
     const { blobs, failed } = await ownerImages(host, m, id);
     await host.events.push({
       ...base,
@@ -207,7 +245,7 @@ export function createWechatPlugin(opts: WechatPluginOptions = {}): PluginDefini
       type: CHAT_MESSAGE_EVENT,
       level: 1,
       trigger: isStop ? 'interrupt' : 'flush',
-      text: `Message from owner in private chat (${ref}):\n${text}${failed ? '\n[the image could not be downloaded]' : ''}`,
+      text: `Message from owner in private chat (${ref}):\n${shown}${failed ? '\n[the image could not be downloaded]' : ''}`,
     });
   }
 

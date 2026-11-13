@@ -1,5 +1,6 @@
 import { DEFAULT_VISION_SETTINGS } from '../blobs/settings.js';
 import { DEFAULT_CHAT_SETTINGS } from '../chat/settings.js';
+import { DEFAULT_SPEECH_SETTINGS } from '../speech/settings.js';
 import { DEFAULT_TOOL_SEARCH } from '../context/settings.js';
 import { DEFAULT_DREAM, DEFAULT_IDLE_COMPACTION } from '../maintenance/settings.js';
 import { DEFAULT_MCP_SETTINGS } from '../mcp/settings.js';
@@ -64,6 +65,7 @@ export function defaultConfig(): ProteaConfig {
     memory: { board: { ...DEFAULT_BOARD }, dream: { ...DEFAULT_DREAM } },
     vision: { ...DEFAULT_VISION_SETTINGS },
     chat: { ...DEFAULT_CHAT_SETTINGS },
+    speech: { ...DEFAULT_SPEECH_SETTINGS },
     persona: { dir: 'persona' },
     observability: { logLevel: 'info', logFormat: 'auto', logEventText: false, keepRuns: 20, logRotateMb: 50, logRotateKeep: 4, requiredPlugins: [], recordProvider: 'off' },
   };
@@ -132,6 +134,11 @@ export const STARTER_CONFIG_YAML = `# Protea configuration. Every key is optiona
 # chat:
 #   widgets: true             # replies may carry an inline widget (HTML/SVG in a sandbox frame)
 #   widgetMaxKb: 64
+
+# speech:                     # speech-to-text for voice input; set it up in the console (Models, Speech)
+#   baseUrl: https://api.siliconflow.cn/v1   # any OpenAI-compatible /audio/transcriptions endpoint; unset: off
+#   model: FunAudioLLM/SenseVoiceSmall
+#   language: zh              # unset: detected
 
 # mcp:
 #   servers:                  # add with "protea mcp add"; tools appear as mcp__<server>__<tool>

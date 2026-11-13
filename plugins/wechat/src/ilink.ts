@@ -9,7 +9,7 @@ import { setLogLevel } from '@tencent-weixin/openclaw-weixin/dist/src/util/logge
  */
 export { apiGetFetch, apiPostFetch, getUpdates, notifyStart, notifyStop } from '@tencent-weixin/openclaw-weixin/dist/src/api/api.js';
 export { MessageItemType, MessageType } from '@tencent-weixin/openclaw-weixin/dist/src/api/types.js';
-export type { GetUpdatesResp, WeixinMessage } from '@tencent-weixin/openclaw-weixin/dist/src/api/types.js';
+export type { GetUpdatesResp, MessageItem, WeixinMessage } from '@tencent-weixin/openclaw-weixin/dist/src/api/types.js';
 export { STALE_TOKEN_ERRCODE, getRemainingPauseMs, isSessionPaused, pauseSession } from '@tencent-weixin/openclaw-weixin/dist/src/api/session-guard.js';
 export { CDN_BASE_URL, DEFAULT_BASE_URL } from '@tencent-weixin/openclaw-weixin/dist/src/auth/accounts.js';
 export { StreamingMarkdownFilter, sendMessageWeixin } from '@tencent-weixin/openclaw-weixin/dist/src/messaging/send.js';
