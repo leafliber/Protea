@@ -62,7 +62,7 @@ mcp:
 | **Logging** | 服务器日志进入结构化日志，带 `mcp=<server>` 字段 |
 | **结果内容** | 文本原样；图片存进 blob 并随回执给模型（[ADR-0014](../20-decisions/ADR-0014-images-as-blob-references.md)），超限或不是图片时写成 `[image image/png, N bytes]`；音频写成同样的占位；资源链接与嵌入资源写成 `[resource …]`（文本资源附正文）；没有文本时用 `structuredContent` 的 JSON；`isError` → 失败回执 |
 
-**内置浏览器**（`mcp.servers.browser`，[ADR-0013](../20-decisions/ADR-0013-sandboxed-shell-and-in-container-browser.md)）：`protea mcp preset browser` 或控制台 MCP 页写入这个条目，stdio 运行镜像目标 `browser` 里固定版本的 Playwright MCP。预设固定了：禁用 `browser_run_code_unsafe`；根目录只有 `workspace/browser`（Playwright MCP 默认只能访问根目录内的文件、不能打开 `file://`）；开启 Chromium 自带沙箱；内存上限 1536 MB。用 `--no-sandbox` 启动时 `McpServerStatus.warnings` 持续报告。
+**内置浏览器**（`mcp.servers.browser`，[ADR-0013](../20-decisions/ADR-0013-sandboxed-shell-and-in-container-browser.md)）：`protea mcp preset browser` 或控制台 MCP 页写入这个条目，stdio 运行镜像目标 `browser` 里固定版本的 Playwright MCP。预设固定了：禁用 `browser_run_code_unsafe`；根目录只有 `workspace/browser`（Playwright MCP 默认只能访问根目录内的文件、不能打开 `file://`）；开启 Chromium 自带沙箱；内存上限 3072 MB（看门狗把整棵进程树的 RSS 相加，Chromium 各进程的共享内存会重复计入，所以要留足）。用 `--no-sandbox` 启动时 `McpServerStatus.warnings` 持续报告。
 
 ## 5. 工具表与缓存
 

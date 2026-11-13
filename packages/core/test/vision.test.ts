@@ -251,7 +251,7 @@ describe('the browser preset', () => {
     expect(s.tools.deny).toEqual(expect.arrayContaining([...BROWSER_DENIED_TOOLS]));
     expect(BROWSER_DENIED_TOOLS).toContain('browser_run_code_unsafe');
     expect(s.roots).toEqual(['workspace/browser']);
-    expect(s.memoryMb).toBe(1536);
+    expect(s.memoryMb).toBe(3072);
     expect(s.args).toContain('--sandbox');
     expect(s.args).not.toContain('--no-sandbox');
     expect(s.args).not.toContain('--allow-unrestricted-file-access');
