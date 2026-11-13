@@ -10,7 +10,7 @@ function status(plugins: Array<{ id: string; state: string; enabled: boolean }>)
     pending: {},
     provider: { id: 'p', mainModel: 'm', ready: true },
     plugins,
-    usage24h: { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0 },
+    usage24h: { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, unpricedCalls: 0 },
     budget: { enforced: false, levels: {}, hardDailyUsd: null },
     forks: [],
   } as unknown as StatusResponse;

@@ -98,7 +98,7 @@ export function formatStatus(s: StatusResponse): string {
     `mcp        ${s.mcp.length ? s.mcp.map((m) => `${m.id}:${m.state === 'running' ? green(m.state) : red(m.state)}`).join('  ') : dim('none')}`,
     `tools      ${s.tools.total}${s.tools.deferred ? ` (${s.tools.deferred} behind tool search)` : ''} · skills ${s.skills.listed} listed${s.skills.rejected ? red(` · ${s.skills.rejected} rejected`) : ''}`,
     `usage 24h  ${u.calls} calls · ${u.inputTokens} in · ${u.outputTokens} out · cache read ${u.cacheReadTokens} / write ${u.cacheWriteTokens}` +
-      `${u.cacheHitRatio === null ? '' : ` · hit ${(u.cacheHitRatio * 100).toFixed(1)}%`} · ~$${u.costUsd.toFixed(4)}`,
+      `${u.cacheHitRatio === null ? '' : ` · hit ${(u.cacheHitRatio * 100).toFixed(1)}%`} · ~$${u.costUsd.toFixed(4)}${u.unpricedCalls ? red(` (${u.unpricedCalls} calls have no price: set one in the console, Models)`) : ''}`,
     `budget     ${Object.entries(s.budget.levels)
       .map(([l, b]) => `L${l} $${b.spentUsd.toFixed(2)}${b.limitUsd === null ? '' : `/${b.limitUsd.toFixed(2)}`}`)
       .join('  ')}${s.budget.enforced ? '' : dim('  (tracked, not enforced)')}`,

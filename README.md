@@ -24,6 +24,7 @@ Protea 是一个 **24/7 常驻、事件流驱动、可热插拔** 的云端个�
 - **改自己的能力要你点头**（[ADR-0019](docs/20-decisions/ADR-0019-capability-change-requests.md)）：在对话里让助理加 MCP 服务器、写 skill、装插件，它只能提议；你在控制台「审批 → 能力变更」里看完整内容和差异，同意后才生效。自动审批、时限授权和聊天里的 `/approve` 都不能代替。
 - **少做重复的事**（[ADR-0020](docs/20-decisions/ADR-0020-fork-reuse-client-tool-search-final-reply.md)）：回复可以直接结束回合，不再多调用一次模型；后台 Fork 汇报后待命一段时间，后续相关的事交回同一个；MCP 工具多的时候按需加载定义，不支持工具搜索的接口（兼容接口、OpenAI 协议）也一样。
 - **沙箱、浏览器与视觉**（[方案](docs/40-plan/08-sandbox-browser-vision.md)）：助理的 shell 在独立的容器里，碰不到 Protea 的数据，目录、环境变量和后台任务都能延续；内置无头浏览器（Playwright MCP）；模型能看图片（对话里发的、工具截的、工作区里的），图片只以引用进入转录；批准时可以附带时限（`/approve a12 1h`）。
+- **语音输入与费用**（[ADR-0026](docs/20-decisions/ADR-0026-qq-buttons-model-prices-voice-input.md)）：在「模型」页接一个语音转文字服务（硅基流动、OpenAI、Groq、本机 Whisper 等 OpenAI 兼容接口），网页对话里点按听写、按住说话；QQ、微信、Telegram 的语音消息也转成文字。费用按内置价格表（Claude 与主流厂商）或你给每个模型填的价格估算，没有价格的模型会被标出来。
 
 ## 用 Docker 运行
 

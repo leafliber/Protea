@@ -10,7 +10,7 @@ import type {
 import type { ContentBlock, ModelRole } from '@protea/protocol';
 import type { ProviderProfile } from '../config/types.js';
 import { AbortedError } from '../util/abort.js';
-import { DEFAULT_PRICING, estimateCost } from './pricing.js';
+import { estimateCost, findPricing } from './pricing.js';
 import { ProviderError, type GenerateOptions, type Provider, type ProviderHealth, type ProviderRequest, type ProviderResponse } from './types.js';
 
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
@@ -275,7 +275,7 @@ export class AnthropicProvider implements Provider {
     let total = 0;
     for (const it of attempts) {
       const model = it.model ?? message.model;
-      const pricing = this.settings.pricing[model] ?? DEFAULT_PRICING[model];
+      const pricing = findPricing(model, this.settings.pricing)?.pricing;
       const write = it.cache_creation_input_tokens ?? 0;
       const oneHour = it.cache_creation?.ephemeral_1h_input_tokens ?? (this.full && this.settings.anthropic.cacheTtl === '1h' ? write : 0);
       const c = estimateCost(

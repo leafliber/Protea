@@ -18,7 +18,7 @@ export interface SentMessage {
   msgType: number;
   /** The upload a media message refers to. */
   fileInfo?: string;
-  keyboard?: { content: { rows: Array<{ buttons: Array<{ id: string; render_data: { label: string }; action: { data: string } }> }> } };
+  keyboard?: { content: { rows: Array<{ buttons: Array<{ id: string; render_data: { label: string }; action: { data: string; unsupport_tips?: string } }> }> } };
 }
 
 /** One answer of poll_bind_result: a status, or a finished bind whose secret the fake seals to the task's key. */
@@ -233,14 +233,16 @@ export class FakeQq {
     if (m && req.method === 'POST') {
       const result = body['keyboard'] ? (this.keyboardResults.shift() ?? this.sendResults.shift()) : this.sendResults.shift();
       if (result && result.status !== 200) return json(result.status, result.body);
+      const msgType = Number(body['msg_type'] ?? 0);
       this.sent.push({
         scope: m[1] === 'users' ? 'c2c' : 'group',
         target: decodeURIComponent(m[2] as string),
-        content: String(body['content'] ?? ''),
+        content: String(body['content'] ?? (body['markdown'] as { content?: string } | undefined)?.content ?? ''),
         msgId: typeof body['msg_id'] === 'string' ? body['msg_id'] : undefined,
-        msgType: Number(body['msg_type'] ?? 0),
+        msgType,
         ...(body['media'] ? { fileInfo: String((body['media'] as { file_info: string }).file_info) } : {}),
-        ...(body['keyboard'] ? { keyboard: body['keyboard'] as NonNullable<SentMessage['keyboard']> } : {}),
+        // As QQ does: buttons show only under a markdown message; on plain text they are dropped silently.
+        ...(body['keyboard'] && msgType === 2 ? { keyboard: body['keyboard'] as NonNullable<SentMessage['keyboard']> } : {}),
       });
       return json(200, { id: `out-${this.sent.length}`, timestamp: Math.floor(Date.now() / 1000) });
     }

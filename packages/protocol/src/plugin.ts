@@ -388,6 +388,18 @@ export interface BlobGetResult {
   size: number;
 }
 
+/** `speech/transcribe`: the owner's voice to text, through the speech service the operator set up. */
+export interface SpeechTranscribeParams {
+  dataBase64: string;
+  /** audio/webm, audio/ogg, audio/wav, audio/silk…; SILK (QQ, WeChat) is decoded by the host. */
+  mime: string;
+  /** ISO-639-1 hint; unset: speech.language. */
+  language?: string;
+}
+
+/** Not a failure of the call: `not_configured` means nobody set up speech-to-text (use the platform's own text, if any). */
+export type SpeechTranscribeResult = { ok: true; text: string; ms: number } | { ok: false; code: 'not_configured' | 'too_large' | 'unsupported' | 'failed'; error: string };
+
 export const HOST_TO_PLUGIN = {
   initialize: 'initialize',
   start: 'start',
@@ -427,6 +439,9 @@ export const PLUGIN_TO_HOST = {
   permissionsMode: 'permissions/mode',
   blobPut: 'blob/put',
   blobGet: 'blob/get',
+  speechTranscribe: 'speech/transcribe',
+  /** `{ ready }`: whether speech-to-text is set up, before downloading a recording for it. */
+  speechStatus: 'speech/status',
   loginComplete: 'login/complete',
 } as const;
 

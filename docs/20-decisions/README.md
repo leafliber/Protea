@@ -29,6 +29,7 @@
 | [ADR-0023](ADR-0023-plugin-tools-on-demand.md) | 插件工具也可以按需加载，按插件配置；元工具改名为 `tool_search` / `tool_call`（修订 ADR-0020 的命名） | Accepted |
 | [ADR-0024](ADR-0024-resident-memory-and-chunked-search.md) | 常驻记忆 `core/`、生成的笔记索引、分块检索、写常驻文件的来源管控、压缩退避与梦境验收（修订 ADR-0011） | Accepted |
 | [ADR-0025](ADR-0025-optional-plugins.md) | 可选插件放在 `optional-plugins/`，不随镜像分发，打包后装进数据卷（`dida365` 是第一个） | Accepted |
+| [ADR-0026](ADR-0026-qq-buttons-model-prices-voice-input.md) | QQ 按钮走 markdown 消息；价格表覆盖主流模型、可按模型或通配自定义；语音输入（网页听写与按住说话、平台语音消息转写） | Accepted |
 
 新增 ADR：复制 `ADR-0000-template.md`（见下），编号递增，提交 PR 时在此表登记。
 

@@ -15,7 +15,7 @@ const CORE_SRC = path.join(ROOT, 'packages/core/src');
 const LAYERS: ReadonlyArray<readonly string[]> = [
   ['util'],
   ['settings'],
-  ['auth', 'blobs', 'bus', 'config', 'db', 'events', 'memory', 'observability', 'permissions', 'persona', 'skills'],
+  ['auth', 'blobs', 'bus', 'config', 'db', 'events', 'memory', 'observability', 'permissions', 'persona', 'skills', 'speech'],
   ['backup', 'chat', 'context', 'diagnostics', 'mcp', 'tools'],
   ['plugins', 'providers'],
   ['changes', 'session'],

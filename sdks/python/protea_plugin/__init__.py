@@ -259,6 +259,20 @@ class Host:
         r = self._conn.request("blob/get", {"handle": handle})
         return base64.b64decode(r["dataBase64"]), r["mime"]
 
+    def speech_ready(self) -> bool:
+        """Whether speech-to-text is set up: check before downloading a recording for it."""
+        return bool(self._conn.request("speech/status", {}).get("ready"))
+
+    def speech_transcribe(self, data: bytes, mime: str, language: Optional[str] = None) -> Dict[str, Any]:
+        """The owner's voice as text: ``{"ok": True, "text", "ms"}`` or ``{"ok": False, "code", "error"}``.
+
+        ``code`` ``not_configured`` means nobody set up speech-to-text; SILK (QQ, WeChat) is decoded by the host.
+        """
+        params: Dict[str, Any] = {"dataBase64": base64.b64encode(data).decode("ascii"), "mime": mime}
+        if language is not None:
+            params["language"] = language
+        return self._conn.request("speech/transcribe", params)
+
     def log(self, level: str, msg: str, **fields: Any) -> None:
         params: Dict[str, Any] = {"level": level, "msg": msg}
         if fields:

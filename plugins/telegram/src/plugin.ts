@@ -125,7 +125,7 @@ function displayName(u: TgUser | undefined): string {
 
 function contentOf(m: TgMessage): string {
   if (typeof m.text === 'string') return m.text;
-  const kind = ['photo', 'document', 'voice', 'audio', 'video', 'sticker', 'location', 'contact'].find((k) => k in m) ?? 'message';
+  const kind = ['photo', 'document', 'voice', 'audio', 'video_note', 'video', 'sticker', 'location', 'contact'].find((k) => k in m) ?? 'message';
   return `${m.caption ? `${m.caption}\n` : ''}[${kind}]`;
 }
 
@@ -203,6 +203,27 @@ export function createTelegramPlugin(): PluginDefinition<TelegramConfig> {
     }
   }
 
+  /**
+   * The owner's voice message, audio file or round video as text: Telegram has no transcript of
+   * its own, so this is the speech-to-text service (OGG/Opus and MP4 go as they are). Null: none.
+   */
+  async function ownerVoice(host: Host<TelegramConfig>, m: TgMessage): Promise<string | null> {
+    const kind = (['voice', 'audio', 'video_note'] as const).find((k) => k in m);
+    if (!kind) return null;
+    if (!(await host.speech.ready())) return '(not transcribed: no speech-to-text is set up)';
+    const f = m[kind] as { file_id?: string; mime_type?: string } | undefined;
+    if (!f?.file_id) return '(could not be transcribed)';
+    try {
+      const data = await needClient().download(f.file_id);
+      const r = await host.speech.transcribe(data, f.mime_type ?? (kind === 'video_note' ? 'video/mp4' : 'audio/ogg'));
+      if (r.ok) return r.text || '(nothing was said)';
+      host.log.warn('could not transcribe a voice message', { messageId: m.message_id, code: r.code, err: r.error });
+    } catch (err) {
+      host.log.warn('could not fetch a voice message', { messageId: m.message_id, err: (err as Error).message });
+    }
+    return '(could not be transcribed)';
+  }
+
   async function handle(host: Host<TelegramConfig>, u: TgUpdate): Promise<void> {
     if (u.callback_query) return pressed(host, u.callback_query);
     const m = u.message ?? u.edited_message;
@@ -243,7 +264,9 @@ export function createTelegramPlugin(): PluginDefinition<TelegramConfig> {
         }
         const isStop = isStopWord(text, host.config.stopWords ?? DEFAULT_STOP_WORDS);
         const blobs = await ownerImages(host, m);
-        await host.events.push({ ...base, ...(blobs.length > 0 ? { blobs } : {}), type: ownerType, level: 1, trigger: isStop && !edited ? 'interrupt' : 'flush', text: `Message from owner in private chat (${ref}):\n${text}` });
+        const said = edited ? null : await ownerVoice(host, m);
+        const shown = said === null ? text : text.replace(/\[(voice|audio|video_note)\]$/, `[$1] ${said}`);
+        await host.events.push({ ...base, ...(blobs.length > 0 ? { blobs } : {}), type: ownerType, level: 1, trigger: isStop && !edited ? 'interrupt' : 'flush', text: `Message from owner in private chat (${ref}):\n${shown}` });
         return;
       }
       await host.events.push({

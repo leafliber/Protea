@@ -509,6 +509,52 @@
   cursor: default;
 }
 
+/* Tap to dictate, hold to talk: no text selection or callout menu on a long press. */
+.composer-mic {
+  border: 1px solid var(--line, rgba(127, 127, 127, 0.3));
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  padding: 3px 9px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.composer-mic:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.composer-mic.recording {
+  border-color: var(--accent);
+  color: var(--accent);
+  animation: mic-pulse 1.2s ease-in-out infinite;
+}
+
+.composer-mic.cancel {
+  border-color: var(--bad);
+  color: var(--bad);
+  animation: none;
+}
+
+@keyframes mic-pulse {
+  50% {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-mic.recording {
+    animation: none;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+}
+
 .composer-images {
   display: flex;
   flex-wrap: wrap;

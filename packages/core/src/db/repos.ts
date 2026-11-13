@@ -139,10 +139,10 @@ export class UsageRepo {
       .prepare(
         `SELECT COUNT(*) AS calls, COALESCE(SUM(input_tokens),0) AS i, COALESCE(SUM(output_tokens),0) AS o,
                 COALESCE(SUM(cache_read_tokens),0) AS cr, COALESCE(SUM(cache_write_tokens),0) AS cw,
-                COALESCE(SUM(cost_usd),0) AS cost
+                COALESCE(SUM(cost_usd),0) AS cost, COALESCE(SUM(cost_usd IS NULL),0) AS unpriced
          FROM usage WHERE ${where.join(' AND ')}`,
       )
-      .get(...args) as { calls: number; i: number; o: number; cr: number; cw: number; cost: number };
+      .get(...args) as { calls: number; i: number; o: number; cr: number; cw: number; cost: number; unpriced: number };
     const denom = r.i + r.cr + r.cw;
     return {
       calls: r.calls,
@@ -151,8 +151,19 @@ export class UsageRepo {
       cacheReadTokens: r.cr,
       cacheWriteTokens: r.cw,
       costUsd: Math.round(r.cost * 1e6) / 1e6,
+      unpricedCalls: r.unpriced,
       cacheHitRatio: r.calls === 0 || denom === 0 ? null : r.cr / denom,
     };
+  }
+
+  /** Each provider's models used since a time, with how many calls had no price. */
+  modelsSince(sinceMs: number): Array<{ provider: string; model: string; calls: number; unpricedCalls: number }> {
+    return this.db
+      .prepare(
+        `SELECT provider, model, COUNT(*) AS calls, COALESCE(SUM(cost_usd IS NULL),0) AS unpricedCalls
+         FROM usage WHERE at_ms >= ? GROUP BY provider, model ORDER BY calls DESC`,
+      )
+      .all(sinceMs) as Array<{ provider: string; model: string; calls: number; unpricedCalls: number }>;
   }
 
   /** The model calls of one batch (its rounds), oldest first. */

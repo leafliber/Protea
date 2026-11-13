@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import type { ModelRole, ProbeProviderResponse, ProviderProfileInfo, ProviderProtocolName, ProvidersResponse } from '@protea/protocol';
+import type { ModelPriceInfo, ModelPriceRow, ModelRole, ProbeProviderResponse, ProviderProfileInfo, ProviderProtocolName, ProvidersResponse, SpeechTestResponse, SpeechView } from '@protea/protocol';
 import { api, enc, post, useAction, useApi } from '../api';
 import { Badge, Button, PageActions, Card, Drawer, Empty, ErrorText, Field, cx, useAsk } from '../components/ui';
 import { useSession } from '../session';
@@ -19,6 +19,42 @@ const PROTOCOL_HINT: Record<ProviderProtocolName, string> = {
 };
 
 type Draft = Record<string, unknown> & { protocol: ProviderProtocolName; models: Record<ModelRole, string> };
+
+/** A price as typed: text per field, so a half-typed number is not lost. */
+type PriceText = { input: string; output: string; cacheRead: string };
+
+const usd = (n: number): string => `$${Number(n.toFixed(4))}`;
+
+/** "输入 $2 · 输出 $10 · 缓存读 $0.2" per million tokens. */
+export function priceLine(p: ModelPriceInfo): string {
+  const parts = [`输入 ${usd(p.input)}`, `输出 ${usd(p.output)}`, `缓存读 ${usd(p.cacheRead ?? p.input)}`];
+  if (p.cacheWrite !== undefined) parts.push(`缓存写 ${usd(p.cacheWrite)}`);
+  const tier = p.tiers?.length ? `；超过 ${p.tiers.map((t) => `${Math.round(t.above / 1000)}K`).join('/')} token 另计` : '';
+  return `${parts.join(' · ')}${tier}`;
+}
+
+function priceText(p: ModelPriceInfo | undefined): PriceText {
+  const t = (n: number | undefined) => (n === undefined ? '' : String(n));
+  return { input: t(p?.input), output: t(p?.output), cacheRead: t(p?.cacheRead) };
+}
+
+/** The typed prices as config: rows left empty are dropped; other fields of an entry (tiers, cacheWrite) stay. */
+export function pricingOf(rows: Record<string, PriceText>, before: Record<string, ModelPriceInfo>): Record<string, ModelPriceInfo> {
+  const out: Record<string, ModelPriceInfo> = {};
+  for (const [model, t] of Object.entries(rows)) {
+    if (!t.input.trim() && !t.output.trim() && !t.cacheRead.trim()) continue;
+    const num = (v: string, what: string): number => {
+      const n = Number(v);
+      if (v.trim() === '' || !Number.isFinite(n) || n < 0) throw new Error(`${model} 的${what}价格要填一个不小于 0 的数（美元/百万 token）`);
+      return n;
+    };
+    const p: ModelPriceInfo = { ...before[model], input: num(t.input, '输入'), output: num(t.output, '输出') };
+    if (t.cacheRead.trim()) p.cacheRead = num(t.cacheRead, '缓存读');
+    else delete p.cacheRead;
+    out[model] = p;
+  }
+  return out;
+}
 
 function clone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T;
@@ -67,6 +103,9 @@ export function ProviderEditor({ view, initial, onSaved, onCancel, compact }: { 
   const [probe, setProbe] = useState<ProbeProviderResponse | null>(null);
   const [advanced, setAdvanced] = useState(false);
   const [makeDefault, setMakeDefault] = useState(view.default === null || view.default === initial?.id);
+  const savedPricing = (initial?.profile['pricing'] ?? {}) as Record<string, ModelPriceInfo>;
+  const [prices, setPrices] = useState<Record<string, PriceText>>(() => Object.fromEntries(Object.entries(savedPricing).map(([m, p]) => [m, priceText(p)])));
+  const [newPriceKey, setNewPriceKey] = useState('');
   const act = useAction();
   const probing = useAction();
   const preset = view.presets.find((p) => p.id === presetId);
@@ -120,6 +159,7 @@ export function ProviderEditor({ view, initial, onSaved, onCancel, compact }: { 
     if (sameModel) profile['models'] = { main: draft.models.main, fork: draft.models.main, cheap: draft.models.main, judge: draft.models.main };
     if (profile['baseUrl'] === '') profile['baseUrl'] = null;
     if (!initial && profile['apiKeySecret'] !== null) delete profile['apiKeySecret']; // PROVIDER_<ID>_API_KEY
+    profile['pricing'] = pricingOf(prices, savedPricing);
     return profile;
   };
   const runProbe = (what: 'test' | 'models') =>
@@ -138,6 +178,9 @@ export function ProviderEditor({ view, initial, onSaved, onCancel, compact }: { 
     });
   };
   const listId = `models-${id}`;
+  const roleModels = sameModel ? [draft.models.main] : ROLES.map(([role]) => draft.models[role]);
+  const priceRows = [...new Set([...roleModels, ...(initial?.prices.map((x) => x.model) ?? []), ...Object.keys(prices)].filter((m): m is string => !!m && m.trim() !== ''))];
+  const setPrice = (model: string, field: keyof PriceText, v: string) => setPrices((old) => ({ ...old, [model]: { ...(old[model] ?? { input: '', output: '', cacheRead: '' }), [field]: v } }));
   return (
     <form className="form-grid" onSubmit={(e) => void submit(e)}>
       {!initial && (
@@ -235,6 +278,22 @@ export function ProviderEditor({ view, initial, onSaved, onCancel, compact }: { 
             />{' '}
             模型能看图片（否则图片以文字占位）
           </label>
+          <PricingFields
+            rows={priceRows}
+            prices={prices}
+            known={initial?.prices ?? []}
+            checked={view.pricesChecked}
+            onChange={setPrice}
+            onClear={(m) => setPrices((old) => Object.fromEntries(Object.entries(old).filter(([k]) => k !== m)))}
+            newKey={newPriceKey}
+            setNewKey={setNewPriceKey}
+            onAdd={() => {
+              const k = newPriceKey.trim();
+              if (!k) return;
+              setPrices((old) => ({ ...old, [k]: old[k] ?? { input: '', output: '', cacheRead: '' } }));
+              setNewPriceKey('');
+            }}
+          />
           <button type="button" className="link small" onClick={() => setAdvanced(!advanced)}>
             {advanced ? '收起高级设置' : '高级设置'}
           </button>
@@ -293,6 +352,99 @@ export function ProviderEditor({ view, initial, onSaved, onCancel, compact }: { 
       </div>
       <ErrorText error={act.error} />
     </form>
+  );
+}
+
+/**
+ * Prices per model, USD per million tokens. An empty row uses the built-in price when there is
+ * one; a name with * covers a group of models ("glm-5.3*").
+ */
+function PricingFields(o: {
+  rows: string[];
+  prices: Record<string, PriceText>;
+  known: ModelPriceRow[];
+  checked: string;
+  onChange: (model: string, field: keyof PriceText, v: string) => void;
+  onClear: (model: string) => void;
+  newKey: string;
+  setNewKey: (v: string) => void;
+  onAdd: () => void;
+}) {
+  return (
+    <fieldset className="form-grid price-fields">
+      <legend>价格（美元 / 百万 token）</legend>
+      <p className="muted small">
+        用来估算费用和执行每日预算。留空的模型用内置价格（核对于 {o.checked}），没有内置价格就不计费。缓存读留空按输入价计。名字里可以用 *，例如 glm-5.3* 覆盖一组模型。
+      </p>
+      <div className="price-row price-head" aria-hidden="true">
+        <span>模型</span>
+        <span>输入</span>
+        <span>输出</span>
+        <span>缓存读</span>
+        <span />
+      </div>
+      {o.rows.map((model) => {
+        const t = o.prices[model];
+        const k = o.known.find((x) => x.model === model);
+        const builtin = k?.source === 'builtin' ? k.pricing : undefined;
+        const custom = !!t && !!(t.input || t.output || t.cacheRead);
+        return (
+          <div className="price-row" key={model}>
+            <span className="mono small price-model" title={model}>
+              {model}{' '}
+              {!custom && (builtin ? <Badge tone="info">内置</Badge> : k?.source === 'custom' && k.key !== model ? <Badge tone="info">{k.key}</Badge> : k?.source === 'custom' ? null : <Badge tone="warn">无价格</Badge>)}
+            </span>
+            <input type="number" min={0} step="any" aria-label={`${model} 输入价格`} placeholder={builtin ? String(builtin.input) : '输入'} value={t?.input ?? ''} onChange={(e) => o.onChange(model, 'input', e.target.value)} />
+            <input type="number" min={0} step="any" aria-label={`${model} 输出价格`} placeholder={builtin ? String(builtin.output) : '输出'} value={t?.output ?? ''} onChange={(e) => o.onChange(model, 'output', e.target.value)} />
+            <input type="number" min={0} step="any" aria-label={`${model} 缓存读价格`} placeholder={builtin ? String(builtin.cacheRead ?? builtin.input) : '缓存读'} value={t?.cacheRead ?? ''} onChange={(e) => o.onChange(model, 'cacheRead', e.target.value)} />
+            {t ? (
+              <button type="button" className="link small" onClick={() => o.onClear(model)}>
+                清除
+              </button>
+            ) : (
+              <span />
+            )}
+          </div>
+        );
+      })}
+      <div className="row">
+        <input
+          className="grow"
+          value={o.newKey}
+          onChange={(e) => o.setNewKey(e.target.value)}
+          placeholder="其他模型名，或 glm-*"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              o.onAdd();
+            }
+          }}
+        />
+        <Button small onClick={o.onAdd} disabled={!o.newKey.trim()}>
+          添加
+        </Button>
+      </div>
+    </fieldset>
+  );
+}
+
+function PriceList({ rows }: { rows: ModelPriceRow[] }) {
+  if (rows.length === 0) return <span className="muted">无</span>;
+  return (
+    <span className="price-list">
+      {rows.map((x) => (
+        <span key={x.model} className="small">
+          <span className="mono">{x.model}</span>{' '}
+          {x.pricing ? (
+            <>
+              <span className="muted">{priceLine(x.pricing)}</span> <Badge tone="info">{x.source === 'custom' ? '自定义' : '内置'}</Badge>
+            </>
+          ) : (
+            <Badge tone="warn">没有价格{x.unpricedCalls > 0 ? `：7 天内 ${x.unpricedCalls} 次调用未计费` : ''}</Badge>
+          )}
+        </span>
+      ))}
+    </span>
   );
 }
 
@@ -370,6 +522,12 @@ function ProfileCard({ p, view, onEdit, onChange }: { p: ProviderProfileInfo; vi
           <span className="muted">密钥</span>
           <span>{!p.key.required ? '不需要' : p.key.set ? <span>已设置 <span className="muted small">{p.profile.apiKeySecret}（{p.key.source === 'env' ? '环境变量' : '数据卷'}）</span></span> : <Badge tone="warn">未设置 {p.profile.apiKeySecret}</Badge>}</span>
         </div>
+        {p.profile.protocol !== 'echo' && (
+          <div className="kv-row">
+            <span className="muted">价格</span>
+            <PriceList rows={p.prices} />
+          </div>
+        )}
         <div className="kv-row">
           <span className="muted">服务角色</span>
           <span>{p.roles.length ? p.roles.map((r) => ROLES.find((x) => x[0] === r)?.[1]).join('、') : <span className="muted">无</span>}</span>
@@ -414,7 +572,152 @@ function RoleRouting({ view, onChange }: { view: ProvidersResponse; onChange: (v
   );
 }
 
-/** The 模型 page: provider profiles, the default, per-role routing. */
+/**
+ * Speech-to-text: the web chat's microphone and voice messages on QQ, WeChat and Telegram. Any
+ * OpenAI-compatible /audio/transcriptions endpoint.
+ */
+function SpeechCard() {
+  const { canWrite } = useSession();
+  const r = useApi<SpeechView>('/api/speech');
+  const [draft, setDraft] = useState<SpeechView['settings'] | null>(null);
+  const [apiKey, setApiKey] = useState('');
+  const [test, setTest] = useState<SpeechTestResponse | null>(null);
+  const act = useAction();
+  const testing = useAction();
+  const v = r.data;
+  if (!v) return r.error ? <ErrorText error={r.error} /> : null;
+  const s = draft ?? v.settings;
+  const editing = draft !== null;
+  const noKey = s.apiKeySecret === null;
+  const set = (patch: Partial<SpeechView['settings']>) => setDraft({ ...s, ...patch });
+  const body = (settings: SpeechView['settings']) => ({ settings: { ...settings, baseUrl: settings.baseUrl?.trim() || null }, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) });
+  const save = (settings: SpeechView['settings']) =>
+    void act.run(async () => {
+      r.setData(await api<SpeechView>('PUT', '/api/speech', body(settings)));
+      setDraft(null);
+      setApiKey('');
+      setTest(null);
+    });
+  return (
+    <Card
+      title={
+        <span>
+          语音转文字 {v.ready ? <Badge tone="good">已开启</Badge> : <Badge tone="info">未开启</Badge>}
+        </span>
+      }
+      actions={
+        canWrite &&
+        !editing && (
+          <Button small onClick={() => setDraft({ ...v.settings })}>
+            {v.settings.baseUrl ? '编辑' : '设置'}
+          </Button>
+        )
+      }
+    >
+      <p className="muted small">网页聊天的麦克风（点按听写、按住说话），以及 QQ、微信、Telegram 里的语音消息，都用它转成文字。任何 OpenAI 兼容的 /audio/transcriptions 接口都可以。这里没设置或转写失败时，QQ、微信用它们自带的识别文字。</p>
+      {!editing ? (
+        <div className="kv">
+          <div className="kv-row">
+            <span className="muted">接口</span>
+            <span className="mono small">{v.settings.baseUrl ?? '未设置'}</span>
+          </div>
+          {v.settings.baseUrl && (
+            <>
+              <div className="kv-row">
+                <span className="muted">模型</span>
+                <span className="mono small">{v.settings.model}</span>
+              </div>
+              <div className="kv-row">
+                <span className="muted">语言</span>
+                <span>{v.settings.language ?? '自动识别'}</span>
+              </div>
+              <div className="kv-row">
+                <span className="muted">密钥</span>
+                <span>{!v.key.required ? '不需要' : v.key.set ? <span>已设置 <span className="muted small">{v.settings.apiKeySecret}</span></span> : <Badge tone="warn">未设置 {v.settings.apiKeySecret}</Badge>}</span>
+              </div>
+            </>
+          )}
+          {v.problem && v.settings.baseUrl && <div className="error-text small">{v.problem}</div>}
+        </div>
+      ) : (
+        <form
+          className="form-grid"
+          onSubmit={(e) => {
+            e.preventDefault();
+            save(s);
+          }}
+        >
+          <Field label="服务">
+            <select
+              value=""
+              onChange={(e) => {
+                const p = v.presets.find((x) => x.id === e.target.value);
+                if (p) set({ baseUrl: p.baseUrl || null, model: p.model, apiKeySecret: p.noKey ? null : (v.settings.apiKeySecret ?? 'SPEECH_API_KEY') });
+              }}
+            >
+              <option value="">选择预设填入…</option>
+              {v.presets.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                  {p.note ? `（${p.note}）` : ''}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="接口地址" hint="一般以 /v1 结尾，会在后面加 /audio/transcriptions">
+            <input value={s.baseUrl ?? ''} onChange={(e) => set({ baseUrl: e.target.value })} placeholder="https://api.siliconflow.cn/v1" required />
+          </Field>
+          <Field label="API Key" hint={noKey ? '这个接口不需要密钥' : v.key.set ? `已保存在秘密 ${String(s.apiKeySecret)}；留空保持不变` : `保存为秘密 ${String(s.apiKeySecret)}，不写进配置文件`}>
+            <div className="row">
+              <input className="grow" type="password" autoComplete="off" value={apiKey} disabled={noKey} onChange={(e) => setApiKey(e.target.value)} placeholder={noKey ? '不需要' : v.key.set ? '••••••（已保存）' : 'sk-…'} />
+              <label className="check">
+                <input type="checkbox" checked={noKey} onChange={(e) => set({ apiKeySecret: e.target.checked ? null : 'SPEECH_API_KEY' })} />
+                无需密钥
+              </label>
+            </div>
+          </Field>
+          <Field label="模型">
+            <input value={s.model} onChange={(e) => set({ model: e.target.value })} placeholder="FunAudioLLM/SenseVoiceSmall" required />
+          </Field>
+          <Field label="语言" hint="留空自动识别；中文填 zh，英文填 en">
+            <input value={s.language ?? ''} onChange={(e) => set({ language: e.target.value.trim() || null })} placeholder="自动" maxLength={3} />
+          </Field>
+          <div className="row">
+            <Button
+              small
+              busy={testing.busy}
+              onClick={() =>
+                void testing.run(async () => {
+                  setTest(null);
+                  setTest(await post<SpeechTestResponse>('/api/speech/test', body(s)));
+                })
+              }
+            >
+              测试
+            </Button>
+            {test && (test.ok ? <span className="small"><Badge tone="good">可用</Badge> {test.ms} ms</span> : <span className="small"><Badge tone="bad">失败</Badge> <span className="error-text">{test.error}</span></span>)}
+            <div className="spacer" />
+            {v.settings.baseUrl && (
+              <Button kind="danger" onClick={() => save({ ...v.settings, baseUrl: null, model: '' })}>
+                关闭
+              </Button>
+            )}
+            <Button kind="ghost" onClick={() => (setDraft(null), setTest(null), setApiKey(''))}>
+              取消
+            </Button>
+            <Button kind="primary" type="submit" busy={act.busy}>
+              保存
+            </Button>
+          </div>
+          <ErrorText error={testing.error} />
+        </form>
+      )}
+      <ErrorText error={act.error} />
+    </Card>
+  );
+}
+
+/** The 模型 page: provider profiles, the default, per-role routing, speech-to-text. */
 export function Providers() {
   const { canWrite } = useSession();
   const r = useApi<ProvidersResponse>('/api/providers');
@@ -449,6 +752,7 @@ export function Providers() {
         </div>
       )}
       {view.profiles.length > 0 && <RoleRouting view={view} onChange={r.setData} />}
+      <SpeechCard />
       {editing !== null && (
         <Drawer title={editing === 'new' ? '添加供应商' : `编辑 ${editing.id}`} onClose={() => setEditing(null)}>
           <ProviderEditor view={view} initial={editing === 'new' ? null : editing} onSaved={saved} onCancel={() => setEditing(null)} />

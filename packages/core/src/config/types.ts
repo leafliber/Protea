@@ -6,6 +6,7 @@ import type { McpSettings } from '../mcp/settings.js';
 import type { BoardSettings } from '../memory/settings.js';
 import type { VisionSettings } from '../blobs/settings.js';
 import type { ChatSettings } from '../chat/settings.js';
+import type { SpeechSettings } from '../speech/settings.js';
 import type { PermissionSettings } from '../permissions/policy.js';
 import type { PluginHostSettings } from '../plugins/settings.js';
 
@@ -119,7 +120,10 @@ export interface ProviderProfile {
   maxRetries: number;
   /** Extra HTTP headers sent with every request (not secret: they are shown in the console). */
   headers: Record<string, string>;
-  /** USD per million tokens by model; overrides the built-in table (Claude models only). */
+  /**
+   * USD per million tokens by model name, or by a pattern with "*" ("glm-5.3*"); wins over the
+   * built-in table (providers/pricing.ts). A model with neither has no cost estimate.
+   */
   pricing: Record<string, ModelPricing>;
   /** Which roles' models can see images; `vision: true` in config.yaml sets all three. Others get a line of text instead. */
   vision: Record<ModelRole, boolean>;
@@ -136,11 +140,16 @@ export interface ProvidersSettings {
   profiles: Record<string, ProviderProfile>;
 }
 
+/** USD per million tokens. */
 export interface ModelPricing {
-  /** USD per million tokens. */
   input: number;
   output: number;
-  cacheRead: number;
+  /** Cache hits; unset: the input price. */
+  cacheRead?: number;
+  /** Cache writes; unset: Claude's rule (1.25x input for 5 minutes, 2x for 1 hour). */
+  cacheWrite?: number;
+  /** Other rates once a request's prompt (input + cache) passes `above` tokens; the highest passed applies. */
+  tiers?: Array<{ above: number; input: number; output: number; cacheRead?: number }>;
 }
 
 export interface PluginSettings {
@@ -212,6 +221,8 @@ export interface ProteaConfig {
   vision: VisionSettings;
   /** What a chat reply may carry (docs/40-plan/09-chat-rich-display.md). */
   chat: ChatSettings;
+  /** Speech-to-text for voice input (web chat microphone, platform voice messages). */
+  speech: SpeechSettings;
   /** Persona directory, relative to the data directory. */
   persona: { dir: string };
   /**

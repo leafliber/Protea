@@ -49,6 +49,12 @@ import {
   Scheduler,
   SkillRegistry,
   SecretStore,
+  SpeechService,
+  SPEECH_PRESETS,
+  DEFAULT_SPEECH_SETTINGS,
+  normalizeSpeech,
+  silentWav,
+  type SpeechSettings,
   SessionRepo,
   SystemSegments,
   ToolDispatcher,
@@ -75,6 +81,8 @@ import {
   contextLimits,
   PROTOCOL_DEFAULT_URL,
   PROVIDER_PRESETS,
+  PRICES_CHECKED,
+  findPricing,
   compactProfile,
   createProvider,
   defaultProfile,
@@ -132,11 +140,11 @@ import {
   type ProviderRouter,
   type ToolGuard,
 } from '@protea/core';
-import { authenticate, createControlApp, createWebSocketEndpoint, startControlServer, type AuthDeps, type ControlServer, type ProviderOps } from '@protea/control';
+import { authenticate, createControlApp, createWebSocketEndpoint, startControlServer, type AuthDeps, type ControlServer, type ProviderOps, type SpeechOps } from '@protea/control';
 import { ConsolePlugin } from '@protea/plugin-console';
 import { WebchatPlugin } from '@protea/plugin-webchat';
 import { CronPlugin } from '@protea/plugin-cron';
-import { PROVIDER_PROTOCOLS, type Level, type ModelRole, type ProviderProtocolName, type ProvidersResponse, type ScheduleRun, type StatusResponse } from '@protea/protocol';
+import { MODEL_ROLES, PROVIDER_PROTOCOLS, type Level, type ModelPriceRow, type ModelRole, type ProviderProtocolName, type ProvidersResponse, type SpeechView, type ScheduleRun, type StatusResponse } from '@protea/protocol';
 import { acquireLock } from './lock.js';
 
 export const VERSION = '0.1.0';
@@ -423,8 +431,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     }),
     publicUrl: () => config.control.publicUrl,
   });
+  // Speech-to-text: the web chat's microphone and voice messages on chat platforms.
+  const speech = new SpeechService({ settings: () => config.speech, secret: (name) => secrets.get(name), log: log.child({ component: 'speech' }) });
   const plugins = new PluginHost({
     blobs,
+    speech,
     chat,
     store,
     bus,
@@ -1203,9 +1214,30 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       const e = secrets.list().find((x) => x.name === p.apiKeySecret);
       return { required: true, set: !!e, source: e?.source ?? null };
     };
+    const pricesOf = (id: string, p: ProviderProfile, used: ReturnType<typeof usage.modelsSince>): ModelPriceRow[] => {
+      const rows = new Map<string, ModelPriceRow>();
+      const row = (model: string): ModelPriceRow => {
+        let x = rows.get(model);
+        if (!x) {
+          const found = findPricing(model, p.pricing);
+          x = { model, roles: [], calls: 0, unpricedCalls: 0, source: found?.source ?? null, ...(found ? { key: found.key, pricing: found.pricing } : {}) };
+          rows.set(model, x);
+        }
+        return x;
+      };
+      for (const role of MODEL_ROLES) if (p.models[role]) row(p.models[role]).roles.push(role);
+      for (const u of used) {
+        if (u.provider !== id) continue;
+        const x = row(u.model);
+        x.calls += u.calls;
+        x.unpricedCalls += u.unpricedCalls;
+      }
+      return [...rows.values()];
+    };
     const view = (): ProvidersResponse => {
       const states = r.states();
       const h = r.health();
+      const used = usage.modelsSince(clock.now() - 7 * 86_400_000);
       return {
         default: config.providers.default,
         roles: config.providers.roles,
@@ -1217,10 +1249,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
           key: keyOf(st.profile),
           ready: st.health.ready,
           ...(st.health.problem !== undefined ? { problem: st.health.problem } : {}),
+          prices: st.profile.protocol === 'echo' ? [] : pricesOf(st.id, st.profile, used),
         })),
         presets: PROVIDER_PRESETS.map((x) => ({ ...x })),
         protocols: PROVIDER_PROTOCOLS.map((id) => ({ id, label: PROTOCOL_LABELS[id], defaultUrl: PROTOCOL_DEFAULT_URL[id] })),
         defaults: Object.fromEntries(PROVIDER_PROTOCOLS.map((id) => [id, defaultProfile(id, 'new')])) as unknown as ProvidersResponse['defaults'],
+        pricesChecked: PRICES_CHECKED,
         ready: h.ready,
         ...(h.problem !== undefined ? { problem: h.problem } : {}),
       };
@@ -1276,6 +1310,51 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
     };
   };
 
+  // Speech-to-text settings for the control API (/api/speech): `speech` in config.yaml, the key as a secret.
+  const speechOperations = (): SpeechOps => {
+    const keyOf = (s: SpeechSettings): SpeechView['key'] => {
+      if (s.apiKeySecret === null) return { required: false, set: false, source: null };
+      const e = secrets.list().find((x) => x.name === s.apiKeySecret);
+      return { required: true, set: !!e, source: e?.source ?? null };
+    };
+    const view = (): SpeechView => {
+      const s = config.speech;
+      const st = speech.status();
+      return { settings: { ...s }, key: keyOf(s), ready: st.ready, ...(st.problem !== undefined ? { problem: st.problem } : {}), presets: SPEECH_PRESETS.map((x) => ({ ...x })) };
+    };
+    return {
+      view,
+      put: async (req) => {
+        const s = normalizeSpeech(req.settings);
+        // config.yaml keeps only what differs from the defaults.
+        const changed = Object.fromEntries(Object.entries(s).filter(([k, v]) => JSON.stringify(v) !== JSON.stringify(DEFAULT_SPEECH_SETTINGS[k as keyof SpeechSettings])));
+        replaceConfigValue(dataDir, ['speech'], Object.keys(changed).length > 0 ? changed : undefined, env);
+        let key: 'stored' | 'removed' | 'kept' = 'kept';
+        if (s.apiKeySecret && typeof req.apiKey === 'string' && req.apiKey.trim() !== '') {
+          secrets.set(s.apiKeySecret, req.apiKey.trim());
+          key = 'stored';
+        } else if (s.apiKeySecret && req.apiKey === null) {
+          secrets.delete(s.apiKeySecret);
+          key = 'removed';
+        }
+        await reloadConfig();
+        log.info({ baseUrl: s.baseUrl, model: s.model, key }, 'speech settings saved');
+        return view();
+      },
+      test: async (req) => {
+        try {
+          const s = req.settings ? normalizeSpeech(req.settings) : config.speech;
+          const r = await speech.transcribe(silentWav(), 'audio/wav', { source: 'console test' }, { settings: s, ...(req.apiKey ? { apiKey: req.apiKey } : {}) });
+          return { ok: true, ms: r.ms, text: r.text };
+        } catch (err) {
+          return { ok: false, error: errorMessage(err) };
+        }
+      },
+      transcribe: (audio, mime, language, actor) => speech.transcribe(audio, mime, { source: actor, ...(language ? { language } : {}) }),
+    };
+  };
+  const speechOps = speechOperations();
+
   // Console accounts. Until the first admin account exists, a one-time setup code (printed at
   // start, kept in secrets/PROTEA_SETUP_CODE) lets the console create it.
   const setupPending = accounts.setupRequired();
@@ -1306,6 +1385,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   const app = createControlApp({
     auth: authDeps,
     ...(providerOps ? { providers: providerOps } : {}),
+    speech: speechOps,
     audit,
     metrics,
     // control is a cold section: these keep their start-up values until a restart.

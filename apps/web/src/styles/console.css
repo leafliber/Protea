@@ -1334,3 +1334,58 @@ ul.plain {
   color: var(--good);
   background: var(--good-soft);
 }
+
+/* —— Model prices (模型 page) —— */
+.price-list {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.price-fields {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0;
+  min-width: 0;
+}
+
+.price-fields legend {
+  padding: 0 4px;
+  font-weight: 600;
+}
+
+.price-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) repeat(3, minmax(0, 1fr)) 2.5em;
+  gap: 6px;
+  align-items: center;
+}
+
+.price-head {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.price-row input {
+  min-width: 0;
+}
+
+.price-model {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  .price-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) 2.5em;
+  }
+  .price-model {
+    grid-column: 1 / -1;
+  }
+  .price-head > :first-child {
+    display: none;
+  }
+}

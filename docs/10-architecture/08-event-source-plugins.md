@@ -88,6 +88,7 @@ Long messages: split at ~3500 characters. Use tg_react for lightweight acknowled
 **telegram**（秘密 `TELEGRAM_BOT_TOKEN`；在 `owner.identities` 加 `{ plugin: telegram, senderKey: "telegram:<你的用户 id>" }`）：
 - 长轮询 `getUpdates`，每个更新先入库（`dedupeKey: update:<id>`），再把偏移量写入 kv，因此崩溃重启只会重读、不会丢；网络故障按 1 s→30 s 退避，遵守 `retry_after`。
 - 主人私聊 → `chat.message`，L1 `flush`（编辑过的消息是 `telegram.edited`，其余见下，都用 `telegram.*` 类型）；消息正好是停止词（默认 `stop`、`wait`、`停`、`停下`、`等一下`、`别说了`，可配 `stopWords`）→ L1 `interrupt`；`/approve aN`、`/deny aN` → 审批决定，不产生消息事件；陌生人私聊 → L2 `flush`；群里 @机器人或回复机器人 → L2 `flush`；其他群消息 → L4 `store`（`groupMentionsOnly: false` 时为 L2）。
+- 主人的语音、音频与圆形视频：设置了语音转文字时下载后转写，写成 `[voice] <文字>`；Telegram 没有自带转写，没设置时写明未转写（ADR-0026）。
 - 主人私聊的 chat id 从主人的第一条消息学到（或配置 `ownerChatId`）。对话平台：`chat_send` 的 `telegram`（发给主人，超过 3500 字符自动分段）。工具：`tg_send_chat`（发给其他聊天，默认需要审批）、`tg_react`。
 - 配置：`apiBase`（`x-hot: false`）、`pollTimeoutSec`、`ownerChatId`、`stopWords`、`groupMentionsOnly`。
 
@@ -106,7 +107,7 @@ Long messages: split at ~3500 characters. Use tg_react for lightweight acknowled
 **wechat**（决策见 [ADR-0016](../20-decisions/ADR-0016-wechat-and-plugin-sign-in.md)；秘密 `WECHAT_BOT_TOKEN` 和主人身份由扫码登录写入）：
 - 协议由腾讯的 `@tencent-weixin/openclaw-weixin` 实现。启动时 `notifystart`，长轮询 `getupdates`，事件入库后才把 `get_updates_buf` 写入 kv，崩溃重启只会重读；停止时 `notifystop`。网络或服务错误先等 2 s，连续 3 次后等 30 s。
 - 主人私聊 → `chat.message`，L1 `flush`；消息正好是停止词 → L1 `interrupt`；`/approve aN`、`/deny aN`、`/mode` 与 Telegram 相同，不产生消息事件。非主人的私聊和带 `group_id` 的消息 → `wechat.message`，L4 `store`，不唤醒模型。`dedupeKey` 是 `msg:<message_id>`。
-- 内容：图片解密后存 blob（只取主人的），失败时退回文字占位；语音用微信的转写文字，没有转写时占位；文件和视频只有占位；引用的内容拼进正文。
+- 内容：图片解密后存 blob（只取主人的），失败时退回文字占位；语音写成 `[voice] <文字>`：设置了语音转文字时下载语音（SILK 由宿主解码）自己转写，否则或失败时用微信的转写文字（它对非普通话常不准）；说出来的话不当作审批答复或命令（ADR-0026）；文件和视频只有占位；引用的内容拼进正文。
 - 对话平台：`chat_send` 的 `wechat`，发给主人，超过 4000 字符自动分段，`reply_to` 忽略，文本经官方的 Markdown 过滤。**机器人不能先开口**：发送要带主人最新一条消息的 `context_token`。没有 token、`ret=-2`（回复窗口关闭）时都返回失败回执，模型应改走其他平台。社区实测称窗口约 24 小时、每条入站后最多约 10 条回复，没有官方说明，代码不依赖这些数字。
 - 会话过期（`errcode -14`）：收发暂停 1 小时后重试，健康检查报告原因，推一条 L2 的 `wechat.session_expired`（每次过期只推一次）。
 - 配置：`apiBase`、`cdnBase`（均 `x-hot: false`，测试用）、`stopWords`。
@@ -117,11 +118,11 @@ Long messages: split at ~3500 characters. Use tg_react for lightweight acknowled
 - 协议由腾讯的 `@tencent-connect/qqbot-nodejs` 实现：取 access token 并自动刷新，连 WebSocket 网关（心跳、断线重连）。网关会话存 kv，重启后 RESUME，平台补发期间的消息。连接失败从 5 s 退避到 5 min。
 - 扫码：插件生成密钥、创建绑定任务，把 `connect.html` 链接作为二维码交给控制台。主人用手机 QQ 扫码确认后，平台建好机器人；插件用密钥解开 AppSecret，调用 `login/complete`。二维码过期自动换新，最多 3 张；8 分钟没完成算超时。
 - 主人私聊 → `chat.message`，L1 `flush`；消息正好是停止词 → L1 `interrupt`；`/approve aN`、`/deny aN`、`/mode` 与微信相同，不产生消息事件。非主人私聊 → `qq.message`，L4 `store`。群消息：`groups` 关（默认）时 L4 `store`；开时 @机器人的群消息 → `qq.message`，L2 `flush`，其余 L4 `store`。频道消息 L4 `store`。`dedupeKey` 是 `msg:<id>`；消息按到达顺序逐条处理。
-- 内容：主人的图片下载后存 blob，失败时附一行说明；别人的图片只有 `[image]` 占位；语音用 QQ 的转写；文件和视频只有占位；引用的内容拼进正文；表情转成文字。
+- 内容：主人的图片下载后存 blob，失败时附一行说明；别人的图片只有 `[image]` 占位；语音写成 `[voice] <文字>`：设置了语音转文字时用 QQ 给的 WAV（没有则 SILK 原件）自己转写，否则或失败时用 QQ 的识别文字（`asr_refer_text`），只转写主人私聊的语音；文件和视频只有占位；引用的内容拼进正文；表情转成文字。
 - 对话平台：`chat_send` 的 `qq`，纯文本（`markdown: none`），超过 5000 字符自动分段，`reply_to` 忽略。回复带主人最新一条消息的 msg_id（被动回复）；被拒后改发不带 msg_id 的消息，再被拒就返回失败回执，模型应改走其他平台。还没收到过主人的消息时直接返回"不能先开口"。
 - 回复带的东西（[17-chat-and-console.md](17-chat-and-console.md) §2–§3）：
   - **图片**：文字之后逐张上传（`/v2/users/{openid}/files`）再发富媒体消息，同样先试被动回复。每张图算一条回复，占被动回复的额度。
-  - **选项**：单选发成内联按钮（回调型，`data` 是 `choice:<序号>`），主人按下后插件 5 秒内确认（`/interactions/{id}`），推一条带 `meta.answer` 的 `chat.message`；别人或群里按的确认为"无权限"，过期的确认为"失败"。没有选项文字的回复里，按钮跟在最后一段文字上。QQ 拒绝按钮时（很多机器人没有这项权限）只试这一次，不影响被动回复，改发编号列表；多选总是编号列表。主人回复编号（多选用空格或逗号隔开）或原样的标签就是回答；主人发别的消息，选项就失效。打开的选项存 kv（`choices`），重启后按钮仍然有效。
+  - **选项**：单选发成内联按钮（回调型，`data` 是 `choice:<序号>`）。QQ 只在 markdown 消息（`msg_type: 2`）下面显示按钮，纯文本消息上的按钮会被静默丢掉，所以带按钮的消息（选项与审批请求）都用 markdown 发送（ADR-0026）。主人按下后插件 5 秒内确认（`/interactions/{id}`），推一条带 `meta.answer` 的 `chat.message`；别人或群里按的确认为"无权限"，过期的确认为"失败"。没有选项文字的回复里，按钮跟在最后一段文字上。QQ 拒绝按钮时（很多机器人没有这项权限）只试这一次，不影响被动回复，改发编号列表；多选总是编号列表。主人回复编号（多选用空格或逗号隔开）或原样的标签就是回答；主人发别的消息，选项就失效。打开的选项存 kv（`choices`），重启后按钮仍然有效。
   - **草稿**：用 QQ 的私聊流式消息（`stream_messages`，同一条消息原地改写），间隔 500 ms，只在主人最新一条消息 4.5 分钟内开始（QQ 要求 5 分钟内）；正式发送时把同一条流式消息写完，图片和选项接在后面。撤回草稿时把流式消息改成"（这条回复没有写完，已撤回）"并结束它（流式消息不能删除）。QQ 不让流式时，第一帧就失败，回复整条发送。流式写到一半失败时，已经显示的部分留在那里，回复另发一条，主人会看到两条。
   - **小组件**：不声明。QQ 不能运行 HTML；把网页里小组件页面的链接发过去，又要在 q.qq.com 上把地址加进白名单，没有验证过。
 - 工具 `qq_group_reply {message_id, text}`（只在 `groups` 开时提供，默认需要审批）：在群里回复一条投递过的 @消息。

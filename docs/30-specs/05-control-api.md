@@ -43,6 +43,17 @@
 | POST | `/api/providers/test` | `ProbeProviderRequest`：`{ id, profile?, apiKey?, role? }`。对档案（已保存的，或表单里尚未保存的 `profile`，可带刚输入的 `apiKey`）的模型发一个很小的请求（最多 256 个输出 token）→ `{ ok: true, ms, model, reply?, stopReason? }` 或 `{ ok: false, ms, kind, error, status? }`。不重试、60 s 超时；`apiKey` 只在内存里用一次 |
 | POST | `/api/providers/models` | 同上的请求体；返回该接口的模型名（`GET /v1/models`）→ `{ ok: true, models }` |
 
+`ProvidersResponse` 还带 `pricesChecked`（内置价格的核对日期），每个档案带 `prices: ModelPriceRow[]`：当前角色用的与最近 7 天用过的模型，`{ model, roles, calls, unpricedCalls, source: custom|builtin|null, key?, pricing? }`。价格在 `PUT /api/providers/:id` 的 `profile.pricing` 里修改（ADR-0026）。
+
+## 语音转文字
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/speech` | `SpeechView`：`{ settings, key: { required, set, source }, ready, problem?, presets }`。只读角色可看 |
+| PUT | `/api/speech` | `{ settings, apiKey? }`：校验后写进 `config.yaml` 的 `speech`（只写与默认值不同的键）；`apiKey` 为字符串时存为 `settings.apiKeySecret`，null 删除；`settings.baseUrl: null` 关闭 → 新的 `SpeechView`；无效 400 |
+| POST | `/api/speech/test` | `{ settings?, apiKey? }`：把一秒静音发给接口（表单里尚未保存的设置也可以）→ `{ ok: true, ms, text }` 或 `{ ok: false, error }` |
+| POST | `/api/speech/transcribe` | 请求体就是录音，`Content-Type: audio/*`（`?language=` 可选）→ `{ text, ms }`。没有设置 409 `not_configured`，太大 413，格式不支持 415，转写服务失败 502 `speech_failed`。网页聊天的麦克风用它；日志不记文字 |
+
 ## 状态
 ## 状态
 

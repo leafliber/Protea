@@ -61,6 +61,8 @@ plugin → host : result {}
 | `events/query` | `{ filter, limit }` | `{ events }`（仅本插件来源） |
 | `blob/put` | `{ dataBase64, mime? }` | `{ handle, mime, size }`；只收图片（PNG、JPEG、WebP、GIF），类型按内容判断，上限 `vision.maxImageKb`，不是图片或超限时报 `InvalidParams` |
 | `blob/get` | `{ handle }` | `{ dataBase64, mime, size }`；句柄是内容摘要，知道句柄的插件才读得到 |
+| `speech/status` | `{}` | `{ ready }`：是否设置了语音转文字；下载录音前先问（ADR-0026） |
+| `speech/transcribe` | `{ dataBase64, mime, language? }` | `{ ok: true, text, ms }` 或 `{ ok: false, code: not_configured\|too_large\|unsupported\|failed, error }`；SILK（QQ、微信）由宿主解码。只应转写主人的语音 |
 | `log` | `{ level, msg, fields }`（通知） | — |
 | `usage/report` | `{ service, units, cost? }`（通知） | — |
 | `kv/get` / `kv/set` / `kv/delete` | `{ key, value? }` | |
