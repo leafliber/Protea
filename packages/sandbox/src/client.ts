@@ -1,5 +1,5 @@
 import net from 'node:net';
-import { RPC_ERRORS, RpcError, RpcPeer } from '@protea/protocol';
+import { MAX_MESSAGE_BYTES, RPC_ERRORS, RpcError, RpcPeer } from '@protea/protocol';
 import { SANDBOX_METHODS as M, SANDBOX_PROTOCOL_VERSION, type HelloResult, type JobEnded, type JobInfo, type JobStartParams, type ShellRunParams, type ShellRunResult } from './protocol.js';
 
 export interface SandboxClientOptions {
@@ -153,6 +153,10 @@ export class SandboxClient {
   /** A foreground command. Cancelling asks the agent to stop it, so the partial output still comes back. */
   async run(params: ShellRunParams, signal?: AbortSignal): Promise<ShellRunResult> {
     const peer = await this.ready();
+    if (params.stdinBase64 !== undefined) {
+      if (!this.hello?.binaryStdin) throw new Error('update the sandbox to support image stdin');
+      if (Buffer.byteLength(JSON.stringify(params)) > MAX_MESSAGE_BYTES - 128) throw new Error('the image exceeds the sandbox message size limit');
+    }
     const call = peer.request<ShellRunResult>(M.shellRun, params);
     if (!signal) return call;
     const onAbort = (): void => {

@@ -130,6 +130,7 @@ export const STARTER_CONFIG_YAML = `# Protea configuration. Every key is optiona
 #   maxImageKb: 1536
 #   maxImagesPerMessage: 4
 #   blobRetentionDays: 30     # 0 keeps stored images
+#   downloadBaseUrl: null     # optional HTTPS address for remote tools to download a cached image
 
 # chat:
 #   widgets: true             # replies may carry an inline widget (HTML/SVG in a sandbox frame)
@@ -143,7 +144,7 @@ export const STARTER_CONFIG_YAML = `# Protea configuration. Every key is optiona
 # mcp:
 #   servers:                  # add with "protea mcp add"; tools appear as mcp__<server>__<tool>
 #     fetch: { command: uvx, args: [mcp-server-fetch] }
-#     files: { command: npx, args: ["-y", "@modelcontextprotocol/server-filesystem", "/data/workspace"], trust: low }
+#     files: { command: npx, args: ["-y", "@modelcontextprotocol/server-filesystem", "/data/workspace"], trust: low }  # initializeTimeoutMs defaults to at least 120000 for npx
 
 # skills:
 #   disabled: []              # names hidden from the catalog; skills live in /data/skills/<name>/SKILL.md

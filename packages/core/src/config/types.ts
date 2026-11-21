@@ -125,7 +125,7 @@ export interface ProviderProfile {
    * built-in table (providers/pricing.ts). A model with neither has no cost estimate.
    */
   pricing: Record<string, ModelPricing>;
-  /** Which roles' models can see images; `vision: true` in config.yaml sets all three. Others get a line of text instead. */
+  /** Which roles can see images. Roles with vision disabled receive cached file references. */
   vision: Record<ModelRole, boolean>;
   anthropic: AnthropicOptions;
   openai: OpenAiOptions;

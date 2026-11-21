@@ -63,7 +63,7 @@ socket 文件权限 `0600`，属主 uid 1000。
 
 | 工具 | 作用 | 标志 |
 |---|---|---|
-| `sh_run {command, cwd?, timeoutSec?, stdin?}` | 前台命令，返回退出码与输出；当前目录、环境变量、函数延续到下一条 | 副作用、可中断 |
+| `sh_run {command, cwd?, timeoutSec?, stdin?, stdinImage?}` | 前台命令，返回退出码与输出。`stdinImage` 可把一张缓存图片的原始字节交给程序 | 副作用、可中断 |
 | `sh_job_start {command, name?, cwd?}` | 启动后台任务，返回任务号 | 副作用 |
 | `sh_job_list` | 列出任务及状态 | 只读 |
 | `sh_job_logs {id, tailKb?}` | 读任务日志的末尾 | 只读 |
@@ -125,7 +125,7 @@ socket 文件权限 `0600`，属主 uid 1000。
 
 - 顺序：脱敏 → 录制 → 解析图片 → HTTP。录制文件与日志里只有引用。
 - 档案的 `vision`：布尔值，或按角色 `{ main, fork, cheap }`。控制台「模型」页可勾选。
-- 不支持视觉时，图片块渲染为一行占位：类型、大小、句柄，以及"当前模型看不到图片"。
+- 文本模型收到图片文件的类型、大小、blob 句柄和可用的短期下载地址。`sh_run` 可以用 `stdinImage` 把原始字节交给沙箱里的程序，工具执行沿用 Shell 的权限设置。能访问下载地址的 MCP 或其他工具也可以按需取文件。
 - Anthropic：图片块原样进入 user 消息与 `tool_result` 的内容数组。
 - `openai-chat`：user 消息变成分段内容（`text` + `image_url` 的 data URL）；回执里的图片放进这一轮所有 tool 消息之后的一条 user 消息，并标明来自哪次调用。
 - `openai-responses`：同样的做法，分段类型为 `input_text`、`input_image`。
@@ -138,6 +138,7 @@ socket 文件权限 `0600`，属主 uid 1000。
 | `vision.maxImageKb` | 1536 | 单张图片的大小上限，超过的写成占位 |
 | `vision.maxImagesPerMessage` | 4 | 一个回执或一个事件最多带几张 |
 | `vision.blobRetentionDays` | 30 | blob 的保留期；过期后引用解析为"图片已不再保存" |
+| `vision.downloadBaseUrl` | `null` | 为远程工具生成下载链接的 HTTPS 基础地址。默认使用回环地址 |
 
 不在服务端缩图：浏览器视口固定为 1280×800，Telegram 选尺寸档，webchat 在浏览器端缩小。
 
@@ -145,6 +146,7 @@ socket 文件权限 `0600`，属主 uid 1000。
 
 - `GET /api/blobs/:handle`（仅管理员）：控制台的运行流、会话页与对话页用它显示图片。
 - `POST /api/blobs`（仅管理员，受 `maxImageKb` 限制）：webchat 上传。
+- 签名下载每个链接只对应一张图，有效期为 5 至 10 分钟。控制面地址白名单同样适用。链接有效期间应作为访问凭据处理。[控制 API](../30-specs/05-control-api.md)
 
 不包含：`chat_send` 发图片给主人（出站附件）。
 
@@ -174,7 +176,7 @@ socket 文件权限 `0600`，属主 uid 1000。
 - [x] 浏览器：导航、快照、截图走通，Chromium 自带沙箱开启（`chrome://sandbox`）；打不开 `file:///data/secrets/…`，写不到根目录之外；`browser_run_code_unsafe` 不在工具表里。
 - [x] 真实守护进程 + 真实 Playwright：截图以字节到达模型请求，转录与 `provider.jsonl` 里只有引用。
 - [x] 对话页贴图：3000×2000 的 PNG 缩到 1568 宽上传，发送后气泡里显示。
-- [x] 非视觉模型收到占位；同一段带图片的历史两次请求字节相同。
+- [x] 非视觉模型可按文件引用读取缓存图片。同一段视觉历史两次请求的图片字节相同。
 - [x] 带时限的批准在时限内放行同族调用、到期后重新询问，审计里有每次调用与授权编号。
 - [x] `pnpm typecheck`、`pnpm test` 通过。
 - [ ] 登录态在容器重启后保留（档案确认在数据卷上，真实站点待 T12）。

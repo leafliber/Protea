@@ -118,6 +118,7 @@ export * from './util/child-process.js';
 export * from './util/tokens.js';
 export * from './blobs/settings.js';
 export * from './blobs/store.js';
+export * from './blobs/downloads.js';
 export * from './blobs/tools.js';
 export * from './providers/images.js';
 export * from './mcp/presets.js';

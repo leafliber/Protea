@@ -250,6 +250,7 @@ export class SandboxAgent {
     peer
       .handle(M.hello, (): HelloResult => ({
         protocolVersion: SANDBOX_PROTOCOL_VERSION,
+        binaryStdin: true,
         instance: this.index.instance,
         workspace: this.o.workspace,
         home: this.o.home,
@@ -311,6 +312,7 @@ export class SandboxAgent {
   }
 
   private async run(p: ShellRunParams, signal: AbortSignal): Promise<ShellRunResult> {
+    const stdin = p.stdinBase64 === undefined ? p.stdin : Buffer.from(p.stdinBase64, 'base64');
     const key = sessionKey(p.session);
     const state = this.sessionDir(key);
     const dir = this.explicitCwd(p.cwd);
@@ -323,7 +325,7 @@ export class SandboxAgent {
       cwd: this.o.workspace,
       env: this.env(p.env),
       timeoutMs: p.timeoutMs,
-      ...(p.stdin !== undefined ? { stdin: p.stdin } : {}),
+      ...(stdin !== undefined ? { stdin } : {}),
       captureBytes: p.captureBytes,
       signal,
       exitGraceMs: EXIT_GRACE_MS,

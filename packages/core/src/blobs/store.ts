@@ -58,6 +58,12 @@ export class BlobStore {
     return path.join(this.o.dir, digest.slice(0, 2), digest);
   }
 
+  putBase64Image(data: string, source?: string): PutResult {
+    const max = this.o.maxImageBytes();
+    if (data.length > 4 * Math.ceil(max / 3)) return { ok: false, reason: `image is over the limit of ${Math.floor(max / 1024)} KB` };
+    return this.putImage(Buffer.from(data, 'base64'), source);
+  }
+
   /** Store an image. The type comes from the bytes; a file that is not an image is refused. */
   putImage(bytes: Buffer, source?: string): PutResult {
     const mime = sniffImageMime(bytes);
@@ -67,10 +73,14 @@ export class BlobStore {
     const digest = crypto.createHash('sha256').update(bytes).digest('hex');
     const file = this.file(digest);
     if (!fs.existsSync(file)) {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      const tmp = path.join(path.dirname(file), `.tmp-${digest}-${process.pid}`);
-      fs.writeFileSync(tmp, bytes, { mode: 0o600 });
-      fs.renameSync(tmp, file);
+      fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+      const tmp = path.join(path.dirname(file), `.tmp-${crypto.randomUUID()}`);
+      try {
+        fs.writeFileSync(tmp, bytes, { flag: 'wx', mode: 0o600 });
+        fs.renameSync(tmp, file);
+      } finally {
+        fs.rmSync(tmp, { force: true });
+      }
     }
     const now = this.o.clock.now();
     const handle = `blob:${digest}`;
@@ -94,9 +104,19 @@ export class BlobStore {
   get(handle: string): { bytes: Buffer; mime: string; size: number } | null {
     const info = this.info(handle);
     if (!info) return null;
+    const digest = handle.slice('blob:'.length);
     try {
-      const bytes = fs.readFileSync(this.file(handle.slice('blob:'.length)));
-      return { bytes, mime: info.mime, size: bytes.length };
+      const fd = fs.openSync(this.file(digest), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+      try {
+        const stat = fs.fstatSync(fd);
+        if (!stat.isFile() || stat.size !== info.size) return null;
+        const bytes = Buffer.alloc(info.size);
+        if (fs.readSync(fd, bytes, 0, info.size, 0) !== info.size || sniffImageMime(bytes) !== info.mime) return null;
+        if (crypto.createHash('sha256').update(bytes).digest('hex') !== digest) return null;
+        return { bytes, mime: info.mime, size: info.size };
+      } finally {
+        fs.closeSync(fd);
+      }
     } catch {
       return null;
     }

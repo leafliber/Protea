@@ -166,6 +166,7 @@ vision:                                # 对话里的图片（ADR-0014）；模�
   maxImageKb: 1536                     # 单张图片的上限，超过的写成占位文字
   maxImagesPerMessage: 4               # 一个工具回执或一个事件最多带几张
   blobRetentionDays: 30                # 保留期，过期后引用显示"图片已不再保存"；0 一直保留
+  downloadBaseUrl: null                # 远程工具下载缓存图片所用的 HTTPS 地址。默认只生成回环下载地址
 
 chat:                                  # 回复可以带什么（17-chat-and-console.md §2）；热更新
   widgets: true                        # chat_send 可以带内联小组件（模型写的 HTML，在沙箱外壳里运行，14-security-and-permissions.md §8.1）
@@ -190,7 +191,8 @@ mcp:                                   # MCP 服务器（docs/10-architecture/09
       url: https://api.githubcopilot.com/mcp/
       auth: { type: oauth }            # 或 { type: bearer, token: "${secret:GITHUB_MCP_TOKEN}" }
   # 每个服务器还可设：enabled、transport（stdio | streamable-http | sse）、env、cwd、headers、
-  # tools: { allow, deny }、toolTimeoutMs（60000）、envPrompt、alwaysLoad（true = 工具永不延迟加载）、descriptionOverrides、subscribe、
+  # initializeTimeoutMs（握手，毫秒；npx 默认至少 120000）、toolTimeoutMs（60000）、tools: { allow, deny }、
+  # envPrompt、alwaysLoad（true = 工具永不延迟加载）、descriptionOverrides、subscribe、
   # memoryMb（这个服务器进程树的内存上限，默认用 pluginHost.limits.memoryMb）、
   # roots（声明给服务器的根目录，相对数据目录，默认 [workspace]）
   pingIntervalMs: 30000                # 连续 3 次 ping 失败 → 重启；0 关闭

@@ -152,6 +152,48 @@ describe('first-run setup, accounts and provider profiles', () => {
     expect(removed.json.ready).toBe(false);
   }, 30_000);
 
+  it('gives a text-only model a scoped download for a chat attachment', async () => {
+    const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+    const dir = dataDir(`providers:\n  default: fake\n  profiles:\n    fake: { protocol: openai-chat, baseUrl: ${modelUrl}, apiKeySecret: null, models: { main: fake-large }, vision: false }\n`);
+    const d = await startDaemon({ dataDir: dir, listen: '127.0.0.1:0', env: { PROTEA_OBSERVABILITY__RECORD_PROVIDER: 'full' }, processMetrics: false, announce: () => undefined });
+    running.push(d);
+    const api = client(d, { token: d.adminToken });
+    const upload = await api<{ handle: string; mime: string }>('POST', '/api/blobs', { dataBase64: png.toString('base64') });
+    const other = await api<{ handle: string }>('POST', '/api/blobs', { dataBase64: Buffer.from('GIF89a').toString('base64') });
+    expect(upload.status).toBe(201);
+    expect(other.status).toBe(201);
+
+    const before = calls.length;
+    expect((await api('POST', '/api/chat/messages', { text: 'Look at this', images: [upload.json] })).status).toBe(201);
+    const modelMessage = () => calls.slice(before).flatMap((c) => c.body['messages'] as Array<{ content: unknown }>).find((m) => typeof m.content === 'string' && m.content.includes(upload.json.handle));
+    await waitUntil(() => modelMessage() !== undefined, 'the model received the file address');
+    const content = modelMessage()?.content as string;
+    expect(content).toContain('sh_run.stdinImage');
+    expect(content).not.toContain(png.toString('base64'));
+    const address = new URL(content.match(/https?:\/\/[^\s]+\/api\/blob-downloads\/[^\s]+/)?.[0] as string);
+
+    const download = await fetch(address);
+    expect(download.status).toBe(200);
+    expect(download.headers.get('content-type')).toBe('image/png');
+    expect(download.headers.get('content-disposition')).toBe('attachment; filename="image.png"');
+    expect(download.headers.get('cache-control')).toContain('no-store');
+    expect(download.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(Buffer.from(await download.arrayBuffer())).toEqual(png);
+
+    expect((await fetch(new URL(address.pathname, address))).status).toBe(404);
+    const substituted = new URL(address);
+    substituted.pathname = `/api/blob-downloads/${encodeURIComponent(other.json.handle)}`;
+    expect((await fetch(substituted)).status).toBe(404);
+    expect((await fetch(`${d.url}/api/blobs/${encodeURIComponent(upload.json.handle)}`)).status).toBe(401);
+
+    const record = path.join(d.runDir, 'provider.jsonl');
+    await waitUntil(() => fs.existsSync(record), 'the provider recording');
+    const requestLog = fs.readFileSync(record, 'utf8');
+    expect(requestLog).toContain(upload.json.handle);
+    expect(requestLog).not.toContain(address.href);
+    expect(requestLog).not.toContain(png.toString('base64'));
+  });
+
   it('manages accounts: a read-only account looks but cannot change, passwords change, the last admin stays', async () => {
     const dir = dataDir();
     const d = await startDaemon({ dataDir: dir, listen: '127.0.0.1:0', env: {}, processMetrics: false, announce: () => undefined });

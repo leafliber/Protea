@@ -83,7 +83,16 @@ export function createShellPlugin(): PluginDefinition<ShellConfig> {
   const tools: PluginTool<any, ShellConfig>[] = [
     {
       name: 'sh_run',
-      approval: { title: { zh: '运行命令', en: 'Run a command' }, target: 'command', fields: { cwd: { zh: '目录', en: 'In' }, timeoutSec: { zh: '超时（秒）', en: 'Timeout (s)' }, stdin: { zh: '标准输入', en: 'Standard input' } } },
+      approval: {
+        title: { zh: '运行命令', en: 'Run a command' },
+        target: 'command',
+        fields: {
+          cwd: { zh: '目录', en: 'In' },
+          timeoutSec: { zh: '超时（秒）', en: 'Timeout (s)' },
+          stdin: { zh: '标准输入', en: 'Standard input' },
+          stdinImage: { zh: '输入图片', en: 'Input image' },
+        },
+      },
       description:
         'Run a non-interactive shell command and return its exit code and output. With the sandbox the shell keeps going between calls: the current directory, exported variables and functions carry over. Long output is cut in the middle; a command that runs past the timeout is killed with everything it started. For anything that should keep running, use sh_job_start.',
       inputSchema: {
@@ -95,18 +104,33 @@ export function createShellPlugin(): PluginDefinition<ShellConfig> {
           cwd: { type: 'string', description: 'Directory to run in, absolute or relative to the workspace (default: where the last command ended).' },
           timeoutSec: { type: 'integer', minimum: 1, description: 'Shorter timeout for this call (capped by the configured one).' },
           stdin: { type: 'string', maxLength: 1_000_000, description: 'Text written to standard input.' },
+          stdinImage: {
+            type: 'string',
+            pattern: '^blob:[a-f0-9]{64}$',
+            description: 'Cached image handle. Passes the original file to the command as binary stdin. Use with an image-processing program and omit stdin.',
+          },
         },
       },
       flags: { sideEffect: true, interruptible: true },
       // The dispatcher's own timeout must outlast the command's.
       timeoutMs: 3_660_000,
-      handler: async (i: { command: string; cwd?: string; timeoutSec?: number; stdin?: string }, ctx, host) => {
+      handler: async (i: { command: string; cwd?: string; timeoutSec?: number; stdin?: string; stdinImage?: string }, ctx, host) => {
+        if (i.stdin !== undefined && i.stdinImage !== undefined) return { text: 'choose either stdin or stdinImage', failed: true };
         const s = settings(host);
         if (running >= s.maxConcurrent) return { text: `not run: ${running} commands are already running (maxConcurrent ${s.maxConcurrent}); wait for them`, failed: true };
         const timeoutSec = Math.min(i.timeoutSec ?? s.timeoutSec, s.timeoutSec);
         const maxBytes = s.maxOutputKb * 1024;
         running++;
         try {
+          let image: Buffer | undefined;
+          if (i.stdinImage !== undefined) {
+            try {
+              image = (await host.blobs.get(i.stdinImage)).data;
+            } catch (err) {
+              return { text: `could not read cached image: ${(err as Error).message}`, failed: true };
+            }
+            ctx.signal.throwIfAborted();
+          }
           host.log.info('running a command', { callId: ctx.callId, backend: s.backend, chars: i.command.length });
           if (s.backend === 'sandbox') {
             return await guarded(async () => {
@@ -120,6 +144,7 @@ export function createShellPlugin(): PluginDefinition<ShellConfig> {
                   env: s.env,
                   ...(i.cwd !== undefined ? { cwd: i.cwd } : {}),
                   ...(i.stdin !== undefined ? { stdin: i.stdin } : {}),
+                  ...(image !== undefined ? { stdinBase64: image.toString('base64') } : {}),
                 },
                 ctx.signal,
               );
@@ -134,13 +159,14 @@ export function createShellPlugin(): PluginDefinition<ShellConfig> {
           } catch (err) {
             return { text: `not run: ${(err as Error).message}`, failed: true };
           }
+          const stdin = image ?? i.stdin;
           const r = await runCommand({
             shell: s.shell ?? '/bin/sh',
             command: i.command,
             cwd,
             env: commandEnv(ws, s.env),
             timeoutMs: timeoutSec * 1000,
-            ...(i.stdin !== undefined ? { stdin: i.stdin } : {}),
+            ...(stdin !== undefined ? { stdin } : {}),
             captureBytes: maxBytes * 4,
             signal: ctx.signal,
           });

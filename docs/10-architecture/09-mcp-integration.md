@@ -87,7 +87,7 @@ mcp:
 
 ## 7. 健康与故障
 
-- 握手（`initialize`）超时为 `pluginHost.initializeTimeoutMs`（默认 20 s），失败计一次崩溃；运行中每 `mcp.pingIntervalMs`（默认 30 s）`ping`，连续 3 次失败 → 断开并重启。
+- 握手（`initialize`）超时沿用 `pluginHost.initializeTimeoutMs`（默认 20 秒）。通过 `npx` 直接启动的服务器至少等 120 秒，给首次下载留时间。单个服务器可以用 `initializeTimeoutMs` 指定握手超时，单位为毫秒。握手失败计一次崩溃。运行中每 `mcp.pingIntervalMs`（默认 30 秒）发送一次 `ping`，连续 3 次失败后断开并重启。
 - 崩溃（进程退出、连接断开、启动失败）后按 `pluginHost.restartBackoffMs` 退避重启，运行满 `stableAfterMs` 后计数清零；连续 `maxCrashes`（默认 5）次 → `failed`，记 L2 `flush` 事件 `mcp.failed`，`/readyz` 报告原因。每次崩溃记 L4 `store` 事件 `mcp.crashed`。缺少秘密等配置问题直接 `failed`，不重试。
 - 工具调用超时默认 60 s（`toolTimeoutMs`），超时回执 `timed out`，服务器不重启。
 - 服务器在调用中途退出时，该调用返回 `failed: the MCP server … exited during the call`；断开期间的调用回执"不可用（原因）"；模型可重试。

@@ -6,6 +6,13 @@ export interface VisionSettings {
   maxImagesPerMessage: number;
   /** Stored images older than this are removed; 0 keeps them. */
   blobRetentionDays: number;
+  /** HTTPS base URL for download links used by remote tools. Null keeps links on loopback. */
+  downloadBaseUrl: string | null;
 }
 
-export const DEFAULT_VISION_SETTINGS: VisionSettings = { maxImageKb: 1536, maxImagesPerMessage: 4, blobRetentionDays: 30 };
+export const DEFAULT_VISION_SETTINGS: VisionSettings = { maxImageKb: 1536, maxImagesPerMessage: 4, blobRetentionDays: 30, downloadBaseUrl: null };
+
+export function parseDownloadBaseUrl(value: unknown): URL | null {
+  const url = typeof value === 'string' ? URL.parse(value) : null;
+  return url?.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash ? url : null;
+}

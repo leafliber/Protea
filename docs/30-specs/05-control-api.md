@@ -73,6 +73,7 @@
 | GET | `/api/widgets/:id` | `WidgetResponse` `{ id, title, code }`：一个内联小组件的代码，供对话窗口交给沙箱外壳。只读账号可读。永远是 JSON，没有任何接口把它当网页返回；不存在 404 |
 | GET | `/api/blobs/:handle` | 图片内容（管理员；只读账号只能读对话里出现过的图片，其他 403；`x-content-type-options: nosniff`）；不存在或已过期 404 |
 | POST | `/api/blobs` | 存一张图片（仅管理员）：`{ dataBase64 }` → 201 `{ handle, mime, size }`；类型按内容判断，不是图片或超过 `vision.maxImageKb` 时 422 |
+| GET | `/api/blob-downloads/:handle?expires=&signature=` | 用短期签名下载指定缓存图片。响应是附件并禁止缓存。缺少签名、已过期或图片不存在时均返回 404。默认接受来自回环地址的连接，远程下载需配置 `vision.downloadBaseUrl` |
 | POST | `/api/chat/messages` | 主人在 `webchat` 里说话：`{ text, images?: [{ handle, mime }], answer?: { to, labels }, trigger?: flush \| interrupt }`（`answer`：这条消息回答了回复 `to`（它的 `callId`）的选项，写进事件的 `meta.answer`）（有图片时 `text` 可为空；图片要先上传，否则 400）→ 同 `POST /api/events` 的回执 |
 | GET | `/api/chat?platform=&before=&limit=` | 一个对话的历史（`platform` 默认 `webchat`，`all` 为全部平台）：`ChatHistoryResponse` `{ items, batches, before }`。`items` 由旧到新，每条带 `platform`，是 `chat.message` 事件（`kind: owner`，带 `cursor`、`state`、`sender`）与 `chat_send` 发出的消息（`kind: reply`，审批提示为 `notice`；回复带 `callId`，以及发出时带的 `images`、`choices`、`widget: { id, title }`）；主人的消息回答了选项时带 `answer`；分界之前的 `console` 对话算作 `webchat`；`batches` 是这些条目所在批的结局（`endReason`、`sources`、`replied`，`model_error` 时带 `error`）。`before` 取更早的一页（为 null 表示没有更多），`limit` ≤ 200，默认 50 |
 | GET | `/api/chat/batches?ids=a,b` | `{ batches }`：这些批的结局（同上；至多 100 个，未知的省略）。控制台在 `batch.ended` 后用它刷新状态 |

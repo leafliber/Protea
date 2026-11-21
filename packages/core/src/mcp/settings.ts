@@ -31,6 +31,8 @@ export interface McpServerSettings {
   trust: McpTrust;
   /** Globs over the server's own tool names; `deny` wins over `allow`. */
   tools: { allow?: string[]; deny?: string[] };
+  /** MCP handshake timeout. Defaults to pluginHost.initializeTimeoutMs, with at least 120 s for npx. */
+  initializeTimeoutMs?: number;
   toolTimeoutMs: number;
   /** stdio: resident-memory limit of this server's process tree; pluginHost.limits.memoryMb otherwise. */
   memoryMb?: number;
@@ -145,6 +147,13 @@ export function normalizeMcpServer(id: string, raw: unknown): McpServerSettings 
     if (!isObject(tools)) throw new Error(`${at}.tools must be { allow?, deny? }`);
     if (tools['allow'] !== undefined) out.tools.allow = stringList(tools['allow'], `${at}.tools.allow`);
     if (tools['deny'] !== undefined) out.tools.deny = stringList(tools['deny'], `${at}.tools.deny`);
+  }
+  if (raw['initializeTimeoutMs'] !== undefined) {
+    const t = raw['initializeTimeoutMs'];
+    if (typeof t !== 'number' || !Number.isInteger(t) || t < 1 || t > 2_147_483_647) {
+      throw new Error(`${at}.initializeTimeoutMs must be an integer from 1 to 2147483647`);
+    }
+    out.initializeTimeoutMs = t;
   }
   if (raw['toolTimeoutMs'] !== undefined) {
     const t = raw['toolTimeoutMs'];

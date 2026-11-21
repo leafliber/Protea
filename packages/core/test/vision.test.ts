@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { blobImageBlock, type ContentBlock, type EventEnvelope, type ToolUseBlock, type TranscriptMessage } from '@protea/protocol';
 import {
   BROWSER_DENIED_TOOLS,
+  BlobDownloads,
   BlobStore,
   ImageResolvingProvider,
   ScriptedProvider,
@@ -38,7 +39,7 @@ function store(maxBytes = 1024) {
   const { db } = openDatabase(path.join(dir, 'protea.db'));
   let now = Date.parse('2026-11-10T00:00:00Z');
   const blobs = new BlobStore({ dir: path.join(dir, 'blobs'), db, clock: { now: () => now }, maxImageBytes: () => maxBytes });
-  return { dir, blobs, advance: (ms: number) => (now += ms) };
+  return { dir, blobs, clock: { now: () => now }, advance: (ms: number) => (now += ms) };
 }
 
 const put = (blobs: BlobStore, bytes = PNG) => {
@@ -75,6 +76,42 @@ describe('blob store', () => {
     expect(blobs.get(a.handle)).toBeNull();
     expect(blobs.get(fresh.handle)).not.toBeNull();
     expect(fs.existsSync(path.join(dir, 'blobs', a.handle.slice(5, 7), a.handle.slice(5)))).toBe(false);
+  });
+
+  it('refuses to serve a replaced or symlinked cache file', () => {
+    const { dir, blobs } = store();
+    const b = put(blobs);
+    const file = path.join(dir, 'blobs', b.handle.slice(5, 7), b.handle.slice(5));
+    const replaced = Buffer.from(PNG);
+    replaced[replaced.length - 1] = 0;
+    fs.writeFileSync(file, replaced);
+    expect(blobs.get(b.handle)).toBeNull();
+
+    const other = path.join(dir, 'other.png');
+    fs.writeFileSync(other, PNG);
+    fs.unlinkSync(file);
+    fs.symlinkSync(other, file);
+    expect(blobs.get(b.handle)).toBeNull();
+  });
+
+  it('limits downloads by address, expiry, and the configured base URL', () => {
+    const { blobs, clock, advance } = store();
+    const b = put(blobs);
+    let publicUrl: string | null = null;
+    const downloads = new BlobDownloads({ blobs, clock, localUrl: () => 'http://127.0.0.1:7788', publicUrl: () => publicUrl });
+    const read = (url: URL, address: string) => downloads.read(b.handle, url.searchParams.get('expires') ?? undefined, url.searchParams.get('signature') ?? undefined, address);
+    const local = new URL(downloads.url(b.handle) as string);
+    expect(read(local, '127.0.0.1')?.bytes).toEqual(PNG);
+    expect(read(local, '192.0.2.10')).toBeNull();
+    expect(downloads.url(b.handle)).toBe(local.href);
+
+    publicUrl = 'https://protea.example/reverse-proxy/';
+    const remote = new URL(downloads.url(b.handle) as string);
+    expect(remote.pathname).toBe(`/reverse-proxy/api/blob-downloads/${encodeURIComponent(b.handle)}`);
+    expect(read(local, '192.0.2.10')).toBeNull();
+    expect(read(remote, '192.0.2.10')?.bytes).toEqual(PNG);
+    advance(Number(remote.searchParams.get('expires')) - clock.now());
+    expect(read(remote, '192.0.2.10')).toBeNull();
   });
 });
 
@@ -140,12 +177,25 @@ describe('images on the way to the model', () => {
     expect(bytes(inner.calls[0]?.messages[0]?.content[1] as ContentBlock)).toBe(PNG.toString('base64'));
   });
 
-  it('turns into a line of text when the model cannot see or the image is gone', () => {
+  it('gives a text-only model references for attachments, including tool results and inline images', () => {
     const { blobs } = store();
     const b = put(blobs);
-    const msg: TranscriptMessage[] = [{ role: 'user', content: [blobImageBlock(b.handle, b.mime)] }];
-    expect(resolveImageBlocks(msg, blobs, false)[0]?.content[0]).toEqual({ type: 'text', text: `[image image/png, ${b.handle}: the current model cannot see images]` });
+    const jpeg = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: JPEG.toString('base64') } };
+    const messages: TranscriptMessage[] = [
+      { role: 'user', content: [blobImageBlock(b.handle, b.mime)] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: [jpeg] }] },
+    ];
+    const address = (handle: string) => `http://127.0.0.1/${handle}`;
+    const result = resolveImageBlocks(messages, blobs, false, address);
+    expect(result[0]?.content[0]).toEqual({ type: 'text', text: expect.stringContaining(address(b.handle)) });
+    const tool = result[1]?.content[0]?.['content'] as ContentBlock[];
+    expect(tool[0]).toMatchObject({ type: 'text', text: expect.stringContaining('image/jpeg') });
+    const jpegHandle = String(tool[0]?.['text']).match(/blob:[a-f0-9]{64}/)?.[0] as string;
+    expect(blobs.get(jpegHandle)?.bytes).toEqual(JPEG);
+    expect(messages[1]?.content[0]?.['content']).toEqual([jpeg]);
+
     const gone: TranscriptMessage[] = [{ role: 'user', content: [blobImageBlock(`blob:${'b'.repeat(64)}`, 'image/png')] }];
+    expect(String(resolveImageBlocks(gone, blobs, false, address)[0]?.content[0]?.['text'])).toContain('no longer stored');
     expect(String(resolveImageBlocks(gone, blobs, true)[0]?.content[0]?.['text'])).toContain('no longer stored');
   });
 

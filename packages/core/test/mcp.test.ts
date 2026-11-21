@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mcpToolName, normalizeMcpServer, renderCallResult, type ToolDef } from '../src/index.js';
 import { waitFor } from './helpers.js';
 import { fakeAuthServer, httpMcpServer, mcpHarness, stdioServer } from './mcp-fixtures.js';
@@ -33,6 +34,7 @@ describe('MCP settings and names', () => {
     expect(() => normalizeMcpServer('x', {})).toThrow(/command is required/);
     expect(() => normalizeMcpServer('x', { url: 'ftp://h' })).toThrow(/http/);
     expect(() => normalizeMcpServer('x', { command: 'x', trust: 'total' })).toThrow(/trust/);
+    expect(() => normalizeMcpServer('x', { command: 'npx', initializeTimeoutMs: 0 })).toThrow(/initializeTimeoutMs/);
   });
 
   it('namespaces tool names and keeps them within the API limits', () => {
@@ -54,6 +56,27 @@ describe('MCP settings and names', () => {
 });
 
 describe('MCP manager over stdio', () => {
+  it('gives npx a longer handshake and honors a per-server override', async () => {
+    const h = harness();
+    const npx = path.join(h.dataDir, 'npx');
+    fs.symlinkSync(process.execPath, npx);
+    const connect = vi.spyOn(Client.prototype, 'connect');
+    try {
+      await h.mcp.apply({ fx: stdioServer({ command: npx }) });
+      expect(h.mcp.get('fx')?.state).toBe('running');
+      expect(connect).toHaveBeenLastCalledWith(expect.anything(), { timeout: 120_000 });
+
+      await h.mcp.apply({ fx: stdioServer({ command: npx, initializeTimeoutMs: 7_500 }) });
+      expect(h.mcp.get('fx')?.state).toBe('running');
+      expect(connect).toHaveBeenLastCalledWith(expect.anything(), { timeout: 7_500 });
+
+      await h.mcp.apply({ fx: stdioServer() });
+      expect(connect).toHaveBeenLastCalledWith(expect.anything(), { timeout: 10_000 });
+    } finally {
+      connect.mockRestore();
+    }
+  });
+
   it('connects, registers namespaced tools with flags from annotations, and calls them', async () => {
     const h = harness();
     await h.mcp.apply({ fx: stdioServer() });

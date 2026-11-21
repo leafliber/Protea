@@ -42,6 +42,15 @@ describe('config', () => {
     fs.writeFileSync(path.join(dir, 'config.yaml'), 'session:\n  rounds: { soft: 5, hard: 2 }\n');
     expect(() => loadConfig(dir, {})).toThrow(/rounds/);
   });
+
+  it('accepts only an HTTPS base URL for remote image downloads', () => {
+    const dir = tmpDir();
+    expect(loadConfig(dir, {}).config.vision.downloadBaseUrl).toBeNull();
+    for (const url of ['http://protea.example', 'https://user:secret@protea.example', 'https://protea.example/?key=x']) {
+      expect(() => loadConfig(dir, { PROTEA_VISION__DOWNLOAD_BASE_URL: url })).toThrow(/vision.downloadBaseUrl/);
+    }
+    expect(loadConfig(dir, { PROTEA_VISION__DOWNLOAD_BASE_URL: 'https://protea.example' }).config.vision.downloadBaseUrl).toBe('https://protea.example');
+  });
 });
 
 describe('secrets', () => {

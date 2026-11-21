@@ -44,6 +44,8 @@ export interface JobEnded {
 
 export interface HelloResult {
   protocolVersion: number;
+  /** Agents that can pass binary data to a command's stdin. */
+  binaryStdin?: true;
   instance: string;
   workspace: string;
   home: string;
@@ -56,6 +58,8 @@ export interface ShellRunParams {
   command: string;
   cwd?: string;
   stdin?: string;
+  /** Binary stdin, instead of stdin text. */
+  stdinBase64?: string;
   timeoutMs: number;
   captureBytes: number;
   env?: Record<string, string>;

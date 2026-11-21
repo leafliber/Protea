@@ -1,5 +1,5 @@
 import { isImageBlock, isToolResultBlock, type ContentBlock, type ImageBlock, type ModelRole, type TranscriptMessage } from '@protea/protocol';
-import type { BlobStore } from '../blobs/store.js';
+import type { BlobInfo, BlobStore } from '../blobs/store.js';
 import type { GenerateOptions, Provider, ProviderHealth, ProviderRequest, ProviderResponse } from './types.js';
 
 function placeholder(b: ImageBlock, note: string): ContentBlock {
@@ -7,12 +7,36 @@ function placeholder(b: ImageBlock, note: string): ContentBlock {
   return { type: 'text', text: `[image ${b.source.media_type}${handle}: ${note}]` };
 }
 
-/** Replace stored images by their bytes, or by a line of text. The same request always gives the same bytes. */
-export function resolveImageBlocks(messages: readonly TranscriptMessage[], blobs: Pick<BlobStore, 'get'>, vision: boolean): TranscriptMessage[] {
+function fileReference(info: BlobInfo, downloadUrl?: (handle: string) => string | undefined): ContentBlock {
+  const url = downloadUrl?.(info.handle);
+  const download = url ? `\nShort-lived download URL for image-processing tools\n${url}` : '';
+  return {
+    type: 'text',
+    text: `Cached image file ${info.handle} (${info.mime}, ${info.size} bytes). Use the handle as sh_run.stdinImage if available.${download}`,
+  };
+}
+
+type ImageStore = Pick<BlobStore, 'get' | 'info' | 'putBase64Image'>;
+
+/** Send image bytes to visual models and file references to text-only models. */
+export function resolveImageBlocks(
+  messages: readonly TranscriptMessage[],
+  blobs: ImageStore,
+  vision: boolean,
+  downloadUrl?: (handle: string) => string | undefined,
+): TranscriptMessage[] {
   const resolve = (b: ContentBlock): ContentBlock => {
     if (isImageBlock(b)) {
+      if (!vision) {
+        if (b.source.type === 'blob') {
+          const info = blobs.info(b.source.handle);
+          return info ? fileReference(info, downloadUrl) : placeholder(b, 'no longer stored');
+        }
+        if (b.source.type !== 'base64' || typeof b.source.data !== 'string') return placeholder(b, 'no supported image data');
+        const stored = blobs.putBase64Image(b.source.data, 'provider');
+        return stored.ok ? fileReference(stored.blob, downloadUrl) : placeholder(b, stored.reason);
+      }
       if (b.source.type !== 'blob') return b;
-      if (!vision) return placeholder(b, 'the current model cannot see images');
       const found = blobs.get(b.source.handle);
       if (!found) return placeholder(b, 'no longer stored');
       return { type: 'image', source: { type: 'base64', media_type: found.mime, data: found.bytes.toString('base64') } };
@@ -33,8 +57,9 @@ export function resolveImageBlocks(messages: readonly TranscriptMessage[], blobs
 export class ImageResolvingProvider implements Provider {
   constructor(
     private readonly inner: Provider,
-    private readonly blobs: Pick<BlobStore, 'get'>,
+    private readonly blobs: ImageStore,
     private readonly vision: (role: ModelRole) => boolean,
+    private readonly downloadUrl?: (handle: string) => string | undefined,
   ) {}
 
   get id(): string {
@@ -62,7 +87,7 @@ export class ImageResolvingProvider implements Provider {
   }
 
   private resolved(req: ProviderRequest): ProviderRequest {
-    return { ...req, messages: resolveImageBlocks(req.messages, this.blobs, this.vision(req.role)) };
+    return { ...req, messages: resolveImageBlocks(req.messages, this.blobs, this.vision(req.role), this.downloadUrl) };
   }
 
   countTokens(req: ProviderRequest, opts: { signal: AbortSignal }): Promise<number | undefined> {

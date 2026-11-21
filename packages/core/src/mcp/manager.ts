@@ -99,6 +99,7 @@ interface Entry {
 const RESOURCE_OWNER = 'mcp';
 const STDERR_TAIL = 20;
 const MAX_PAGES = 50;
+const NPX_INITIALIZE_TIMEOUT_MS = 120_000;
 /** How much of a server's `instructions` is kept. */
 const MAX_INSTRUCTIONS_CHARS = 2000;
 const LOG_LEVELS = { debug: 'debug', info: 'info', notice: 'info', warning: 'warn', error: 'error', critical: 'error', alert: 'error', emergency: 'error' } as const;
@@ -549,7 +550,10 @@ export class McpManager implements PromptSource {
     e.client = client;
     e.transport = transport;
     try {
-      await client.connect(transport, { timeout: sup.initializeTimeoutMs });
+      // An uncached npx install has to finish before the process can answer initialize.
+      const npx = e.settings.transport === 'stdio' && /(?:^|[\\/])npx(?:\.(?:cmd|exe))?$/i.test(e.settings.command ?? '');
+      const timeout = e.settings.initializeTimeoutMs ?? (npx ? Math.max(sup.initializeTimeoutMs, NPX_INITIALIZE_TIMEOUT_MS) : sup.initializeTimeoutMs);
+      await client.connect(transport, { timeout });
     } catch (err) {
       if (gen !== e.generation) return;
       await this.closeQuietly(e);

@@ -135,6 +135,22 @@ describe('sh_* through the sandbox', () => {
     };
   }
 
+  it('passes a cached image to a sandbox command as its original bytes', async () => {
+    const { h, stop } = await withSandbox();
+    try {
+      const handle = `blob:${'a'.repeat(64)}`;
+      h.blobs.set(handle, { data: Buffer.from('89504e470d0a1a0a0000000d', 'hex'), mime: 'image/png' });
+      const r = await h.callTool('sh_run', { command: 'od -An -tx1', stdinImage: handle });
+      expect(r.failed).toBeFalsy();
+      expect(r.text).toMatch(/89\s+50\s+4e\s+47\s+0d\s+0a\s+1a\s+0a\s+00\s+00\s+00\s+0d/);
+      expect(await h.callTool('sh_run', { command: 'printf ran', stdinImage: `blob:${'b'.repeat(64)}` })).toMatchObject({ failed: true, text: expect.stringContaining('could not read cached image') });
+      expect(await h.callTool('sh_run', { command: 'printf ran', stdinImage: handle, stdin: 'text' })).toMatchObject({ failed: true });
+    } finally {
+      await h.stop();
+      await stop();
+    }
+  });
+
   it('keeps the shell going, runs jobs, and tells the session when one ends', async () => {
     const { h, stop } = await withSandbox();
     try {

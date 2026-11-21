@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   HOST_TO_PLUGIN,
+  MAX_MESSAGE_BYTES,
   PLUGIN_TO_HOST,
   RPC_ERRORS,
   RpcError,
@@ -1047,7 +1048,7 @@ export class PluginHost {
         const blobs = this.o.blobs;
         if (!blobs) throw new RpcError(RPC_ERRORS.Internal, 'blobs are not available');
         const p = params as BlobPutParams;
-        const r = blobs.putImage(Buffer.from(str(p.dataBase64, 'dataBase64'), 'base64'), e.id);
+        const r = blobs.putBase64Image(str(p.dataBase64, 'dataBase64'), e.id);
         if (!r.ok) throw new RpcError(RPC_ERRORS.InvalidParams, r.reason);
         return { handle: r.blob.handle, mime: r.blob.mime, size: r.blob.size } satisfies BlobPutResult;
       },
@@ -1057,6 +1058,7 @@ export class PluginHost {
         const handle = str((params as BlobGetParams).handle, 'handle');
         const found = blobs.get(handle);
         if (!found) throw new RpcError(RPC_ERRORS.InvalidParams, `${handle} is not stored`);
+        if (4 * Math.ceil(found.size / 3) > MAX_MESSAGE_BYTES - 256) throw new RpcError(RPC_ERRORS.InvalidParams, 'the image exceeds the plugin message size limit');
         return { dataBase64: found.bytes.toString('base64'), mime: found.mime, size: found.size } satisfies BlobGetResult;
       },
       [PLUGIN_TO_HOST.speechStatus]: () => ({ ready: this.o.speech?.status().ready ?? false }),

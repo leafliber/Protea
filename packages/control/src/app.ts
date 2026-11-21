@@ -23,14 +23,19 @@ import {
   type MemoryOverview,
   type MemorySearchHit,
 } from '@protea/protocol';
-import { BROWSER_SERVER_ID, PermissionModeError, type BlobStore, type ChangeRequestService, type PermissionModes, type WidgetStore } from '@protea/core';
 import {
+  BROWSER_SERVER_ID,
   BoardError,
+  IMAGE_DOWNLOAD_PATH,
   MemoryError,
+  PermissionModeError,
   type ApprovalService,
   type AuditLog,
+  type BlobDownloads,
+  type BlobStore,
   type Board,
   type Bus,
+  type ChangeRequestService,
   type Cidr,
   type DreamRunner,
   type EventStore,
@@ -41,12 +46,14 @@ import {
   type MemoryAccess,
   type MemoryIndex,
   type MemoryStore,
+  type PermissionModes,
   type ResidentMemory,
   type OutputLog,
   type PluginHost,
   type PushResult,
   type SkillRegistry,
   type Transcript,
+  type WidgetStore,
 } from '@protea/core';
 import { addressGate } from './allow.js';
 import { actorOf, principal, registerAccountRoutes, registerAuthRoutes, requireAuth, type AuthDeps } from './auth.js';
@@ -68,6 +75,8 @@ export interface ControlDeps extends Omit<OpsDeps, 'store' | 'audit'> {
   store: EventStore;
   /** Stored images (GET and POST /api/blobs). */
   blobs?: BlobStore;
+  /** Scoped file downloads for non-vision models. */
+  blobDownloads?: BlobDownloads;
   /** Inline widgets of chat replies (GET /api/widgets/:id). */
   widgets?: WidgetStore;
   /** The MCP server entry of the bundled browser. */
@@ -234,6 +243,21 @@ export function createControlApp(d: ControlDeps): Hono {
     }
   });
 
+  // A signed link lets an image-processing tool read one cached file without console credentials.
+  app.get(`${IMAGE_DOWNLOAD_PATH}/:handle`, (c) => {
+    const headers = { 'cache-control': 'private, no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff' };
+    const found = d.blobDownloads?.read(c.req.param('handle') ?? '', c.req.query('expires'), c.req.query('signature'), clientAddress(c));
+    if (!found) return c.json({ error: { code: 'not_found', message: 'no such image download' } }, 404, headers);
+    return new Response(new Uint8Array(found.bytes), {
+      headers: {
+        ...headers,
+        'content-type': found.mime,
+        'content-disposition': `attachment; filename="image.${found.mime.slice('image/'.length)}"`,
+        'content-security-policy': "default-src 'none'; sandbox",
+      },
+    });
+  });
+
   registerAuthRoutes(app, d.auth, clientAddress);
   const guard = requireAuth(d.auth);
   app.use('/api/*', guard);
@@ -343,7 +367,7 @@ export function createControlApp(d: ControlDeps): Hono {
     if (!d.blobs) return c.json({ error: { code: 'not_found', message: 'blobs are not available' } }, 404);
     const body = (await c.req.json().catch(() => null)) as { dataBase64?: unknown } | null;
     if (typeof body?.dataBase64 !== 'string' || body.dataBase64 === '') return c.json({ error: { code: 'bad_request', message: 'dataBase64 is required' } }, 400);
-    const r = d.blobs.putImage(Buffer.from(body.dataBase64, 'base64'), 'console');
+    const r = d.blobs.putBase64Image(body.dataBase64, 'console');
     if (!r.ok) return c.json({ error: { code: 'invalid_image', message: r.reason } }, 422);
     return c.json({ handle: r.blob.handle, mime: r.blob.mime, size: r.blob.size }, 201);
   });

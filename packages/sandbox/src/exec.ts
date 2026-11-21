@@ -90,7 +90,7 @@ export function runCommand(o: {
   cwd: string;
   env: Record<string, string>;
   timeoutMs: number;
-  stdin?: string;
+  stdin?: string | Buffer;
   captureBytes: number;
   signal?: AbortSignal;
   exitGraceMs?: number;

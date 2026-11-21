@@ -43,7 +43,7 @@ export function changeTools(changes: ChangeRequestService): ToolSpec<never>[] {
           type: 'object',
           description:
             'For add and update: the whole entry (update replaces the old one). A local server: { command, args?, env? }. A remote one: { url, auth?: { type: "bearer", token: "${secret:NAME}" } | { type: "oauth" }, headers? }. ' +
-            'Optional: trust (low | normal | high), tools: { allow?, deny? }, toolTimeoutMs, envPrompt (when to use it), alwaysLoad.',
+            'Optional: trust (low | normal | high), tools: { allow?, deny? }, initializeTimeoutMs, toolTimeoutMs, envPrompt (when to use it), alwaysLoad.',
         },
         reason: REASON,
       },

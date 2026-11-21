@@ -60,7 +60,7 @@ OpenAI 风格协议的映射（`toChatMessages` / `toResponsesInput`）：
 - 不声明工具搜索（`supportsToolSearch` 为假）：延迟的工具走客户端模式（§5），请求里只有加载的工具与 `tool_search` / `tool_call`；不做精确计数（交接按估算）、`req.compaction` 被忽略。上下文窗口取 `contextWindow`，默认 128000。
 - 错误：401/403 → `config`，404 → `fatal`，429 与 5xx/408/409、连接错误、超时 → `retryable`（先按 `maxRetries` 退避重试，尊重 `Retry-After`），400/413/422 且消息像"超出上下文" → `overflow`。
 
-**视觉**（[ADR-0014](../20-decisions/ADR-0014-images-as-blob-references.md)）：档案的 `vision` 说明模型能否看图（布尔值或按角色；Anthropic 默认开，OpenAI 协议默认关）。转录只存 blob 引用，`ImageResolvingProvider` 是最内层的包装（脱敏 → 录制 → 解析图片 → 请求）：能看图的角色得到字节，其他角色得到一行占位文字，已过期的图片也是占位。同一段历史每次解析结果相同，前缀缓存不受影响。
+档案的 `vision` 按角色控制图片输入，Anthropic 默认开启，OpenAI 协议默认关闭。转录保存 blob 引用。`ImageResolvingProvider` 在脱敏和请求录制之后，给视觉模型填入图片字节，给文本模型填入缓存句柄和可用的短期下载地址。地址在同一个五分钟窗口内稳定，图片清理后会显示已过期。[ADR-0014](../20-decisions/ADR-0014-images-as-blob-references.md)
 
 **预设**（`PROVIDER_PRESETS`）：Anthropic、OpenAI（Responses）、DeepSeek、通义千问（阿里云百炼兼容模式）、Kimi（Moonshot）、智谱 GLM、OpenRouter、Ollama（本机，无密钥）、Anthropic 兼容接口、自定义。预设只给协议与地址（Claude 另给模型）；地址是写作时各厂商文档的默认值，以厂商文档为准。其他厂商的模型名不预设（会过时），用"获取模型列表"（`GET {baseUrl}/models`）选。
 

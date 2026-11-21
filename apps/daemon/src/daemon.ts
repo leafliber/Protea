@@ -101,6 +101,7 @@ import {
   gitBackup,
   isoInZone,
   kernelTools,
+  BlobDownloads,
   BlobStore,
   ImageResolvingProvider,
   browserPreset,
@@ -377,10 +378,17 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
   // Invariant I-7: no request carries a secret value, whatever path it took into the context.
   const redactedNames = new Set<string>();
   const blobs = new BlobStore({ dir: path.join(dataDir, 'blobs'), db, clock, maxImageBytes: () => config.vision.maxImageKb * 1024 });
+  let controlUrl = '';
+  const blobDownloads = new BlobDownloads({ blobs, clock, localUrl: () => controlUrl, publicUrl: () => config.vision.downloadBaseUrl });
   // Profiles per role (providers.*); rebuilt when their settings or keys change, no restart needed.
   const router: ProviderRouter | null = opts.provider ? null : createProvider(() => config.providers, secrets);
-  // Innermost wrapper: nothing outside it sees image bytes.
-  const baseProvider: Provider = new ImageResolvingProvider(opts.provider ?? (router as ProviderRouter), blobs, (role) => (router ? router.visionFor(role) : true));
+  // Resolve images and sign file URLs after redaction and request recording.
+  const baseProvider: Provider = new ImageResolvingProvider(
+    opts.provider ?? (router as ProviderRouter),
+    blobs,
+    (role) => router?.visionFor(role) ?? true,
+    (handle) => blobDownloads.url(handle),
+  );
   const fallbackProfile = defaultProfile('anthropic');
   const effortOf = (role: ModelRole, level: Level = 2) =>
     router ? router.effort(role, level) : role === 'main' ? fallbackProfile.effort.main[level] : fallbackProfile.effort[role];
@@ -486,10 +494,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
 
   // Permissions, approvals and audit (docs/10-architecture/14-security-and-permissions.md).
   // MCP servers (docs/10-architecture/09-mcp-integration.md); they start in the background below.
-  let controlUrl = '';
   const mcp = new McpManager({
     keepImage: (data, server) => {
-      const r = blobs.putImage(Buffer.from(data, 'base64'), `mcp:${server}`);
+      const r = blobs.putBase64Image(data, `mcp:${server}`);
       return r.ok ? { handle: r.blob.handle, mime: r.blob.mime } : { reason: r.reason };
     },
     tools,
@@ -1526,6 +1533,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<Daemon> {
       }),
     pushChat: (req, senderKey) => webchatPlugin.receive(req.text, { senderKey, ...(req.trigger ? { trigger: req.trigger } : {}), ...(req.images ? { blobs: req.images } : {}), ...(req.answer ? { answer: req.answer } : {}) }),
     blobs,
+    blobDownloads,
     widgets,
     browserPreset: (o) =>
       browserPreset({

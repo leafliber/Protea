@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
 import { LEVELS, type Level } from '@protea/protocol';
+import { parseDownloadBaseUrl } from '../blobs/settings.js';
 import { normalizeMcpServer } from '../mcp/settings.js';
 import { normalizeProviders } from '../providers/profiles.js';
 import { normalizeSpeech } from '../speech/settings.js';
@@ -140,6 +141,9 @@ function validate(cfg: ProteaConfig, warnings: string[]): void {
   if (!(vision.maxImageKb > 0)) throw new Error('vision.maxImageKb must be positive');
   if (!Number.isInteger(vision.maxImagesPerMessage) || vision.maxImagesPerMessage < 0) throw new Error('vision.maxImagesPerMessage must be a non-negative integer');
   if (!(vision.blobRetentionDays >= 0)) throw new Error('vision.blobRetentionDays must not be negative');
+  if (vision.downloadBaseUrl !== null && !parseDownloadBaseUrl(vision.downloadBaseUrl)) {
+    throw new Error('vision.downloadBaseUrl must be an HTTPS base URL without credentials, a query, or a fragment');
+  }
   const chat = cfg.chat;
   if (typeof chat.widgets !== 'boolean') throw new Error('chat.widgets must be true or false');
   if (!(Number.isInteger(chat.widgetMaxKb) && chat.widgetMaxKb >= 1 && chat.widgetMaxKb <= 1024)) throw new Error('chat.widgetMaxKb must be an integer from 1 to 1024');
