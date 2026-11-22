@@ -98,7 +98,7 @@ socket 文件权限 `0600`，属主 uid 1000。
 1. 预置条目的 `tools.deny` 含 `browser_run_code_unsafe`；安全检查清单的测试固定这一条。
 2. 本地文件：根目录只给 `workspace/browser`（沙箱写不了），`file://` 导航被拒绝；`scripts/sandbox-smoke.sh` 固定（打开 `file:///data/secrets/…` 必须失败）。
 3. Chromium 自带沙箱：`docker/seccomp-chromium.json` 让它能在容器里建立；建不起来时可以配置 `--no-sandbox`，此时控制台持续显示警告。
-4. 资源：`docker/docker-compose.browser.yml` 覆盖主服务——镜像目标 `browser`、`mem_limit: 2g`、`pids_limit: 1024`、`shm_size: 512m`、seccomp 配置。MCP 服务器可以单独设内存上限（`mcp.servers.<id>.limits.memoryMb`，预置条目 1536），否则默认的 512 MB 会把 Chromium 的进程树当作超限杀掉。
+4. 资源：`docker/docker-compose.browser.yml` 覆盖主服务——镜像目标 `browser`、`mem_limit: 4g`、`pids_limit: 1024`、`shm_size: 1g`、seccomp 配置。MCP 服务器可以单独设内存上限（`mcp.servers.<id>.limits.memoryMb`，预置条目 3072），否则默认的 512 MB 会把 Chromium 的进程树当作超限杀掉。
 5. 网络：把控制面地址加进 `--blocked-origins`（不是安全边界，只防误操作）。
 
 ## 4. 视觉支持

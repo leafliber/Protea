@@ -74,7 +74,7 @@ cd docker && docker compose -f docker-compose.yml -f docker-compose.browser.yml 
 docker compose exec protea protea mcp preset browser
 ```
 
-覆盖文件把主服务换成 `browser` 镜像，内存 2 GB、`pids_limit` 1024、`shm_size` 512 MB，并加上 `seccomp-chromium.json`（Docker 默认配置加上 Chromium 沙箱需要的 `clone`、`unshare`、`setns`、`chroot` 的命名空间用法）。启用浏览器后主容器的最低配置是 2 GB。用 `docker run` 部署时自己加 `--security-opt seccomp=…`、`--shm-size`、`--memory`、`--pids-limit`。
+覆盖文件把主服务换成 `browser` 镜像，内存 4 GB、`pids_limit` 1024、`shm_size` 1 GB，并加上 `seccomp-chromium.json`（Docker 默认配置加上 Chromium 沙箱需要的 `clone`、`unshare`、`setns`、`chroot` 的命名空间用法）。启用浏览器后主容器的最低配置是 4 GB（浏览器条目自己的上限是 3072 MB）。用 `docker run` 部署时自己加 `--security-opt seccomp=…`、`--shm-size`、`--memory`、`--pids-limit`。
 
 宿主不允许非特权用户命名空间时（部分内核的 `kernel.apparmor_restrict_unprivileged_userns=1` 等），Chromium 的沙箱建不起来，可以 `protea mcp preset browser --no-sandbox`，控制台会持续警告。
 

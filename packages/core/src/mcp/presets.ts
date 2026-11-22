@@ -53,7 +53,7 @@ export function browserPreset(o: BrowserPresetOptions): Record<string, unknown> 
     ...(o.browsersPath ? { env: { PLAYWRIGHT_BROWSERS_PATH: o.browsersPath } } : {}),
     roots: [BROWSER_FILES_DIR],
     trust: 'normal',
-    memoryMb: 1536,
+    memoryMb: 3072,
     toolTimeoutMs: 120_000,
     tools: { deny: [...BROWSER_DENIED_TOOLS] },
     envPrompt: BROWSER_ENV_PROMPT,
