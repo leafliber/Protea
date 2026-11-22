@@ -3,7 +3,9 @@
 [![CI](https://github.com/leafliber/Protea/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/leafliber/Protea/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](LICENSE)
 
-Protea 是一个可以自行部署、持续运行的个人 AI 助理。聊天、定时任务、邮件、RSS 和 Webhook 都进入同一条事件流。助理按优先级处理事件，可以把耗时工作交给后台会话，让主会话继续响应新的消息。
+Protea 基于 Cortico 项目的事件流设计开发，是一个可以自行部署、持续运行的个人 AI 助理。 [Cortico 项目](https://github.com/Pal-AI-Lab/Cortico) · [设计说明](docs/00-overview/04-reference-cortico.md)
+
+聊天、定时任务、邮件、RSS 和 Webhook 都进入同一条事件流。助理按优先级处理事件，可以把耗时工作交给后台会话，让主会话继续响应新的消息。
 
 ## 主要功能
 
@@ -63,8 +65,6 @@ PROTEA_CONTROL__LISTEN=127.0.0.1:7788 PROTEA_PROVIDERS__DEFAULT=echo pnpm dev
 | 求助、报告故障或提出建议 | [获取帮助](SUPPORT.md) · [GitHub Issues](https://github.com/leafliber/Protea/issues) |
 | 贡献代码或文档 | [贡献指南](CONTRIBUTING.md) · [行为准则](CODE_OF_CONDUCT.md) |
 | 私密报告漏洞 | [安全政策](SECURITY.md) |
-
-Protea 的事件流设计参考了 Cortico。 [参考项目](https://github.com/Pal-AI-Lab/Cortico)
 
 维护者与贡献者见 GitHub。 [@leafliber](https://github.com/leafliber) · [贡献者](https://github.com/leafliber/Protea/graphs/contributors)
 
