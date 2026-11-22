@@ -1,6 +1,6 @@
 # Protea 使用指南
 
-先启动实例、创建管理员并连接模型。下文的 Docker Compose 命令从仓库根目录运行。本地开发时，可用 `PROTEA_DATA_DIR=.dev-data pnpm protea` 执行相同的 CLI 子命令。 [快速开始](../README.md#快速开始)
+先启动实例、创建管理员并连接模型。下文以 Docker Compose 为例，从仓库根目录运行命令。用 `docker run` 启动时，可用 `docker exec protea protea` 执行 CLI 子命令，交互输入用 `docker exec -it protea protea`，复制文件用 `docker cp`。本地开发时，使用 `PROTEA_DATA_DIR=.dev-data pnpm protea`。 [快速开始](../README.md#快速开始)
 
 ## 接入聊天平台
 

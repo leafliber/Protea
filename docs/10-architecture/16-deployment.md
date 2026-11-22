@@ -1,8 +1,8 @@
 # 部署
 
-> 状态：Accepted（M6）· 更新：2026-11-10 · 决策：[ADR-0007](../20-decisions/ADR-0007-single-image-with-node-and-python.md)、[ADR-0009](../20-decisions/ADR-0009-single-uid-with-process-limits.md)、[ADR-0013](../20-decisions/ADR-0013-sandboxed-shell-and-in-container-browser.md)
+> 状态：Accepted（M6）· 更新：2026-11-21 · 决策：[ADR-0007](../20-decisions/ADR-0007-single-image-with-node-and-python.md)、[ADR-0009](../20-decisions/ADR-0009-single-uid-with-process-limits.md)、[ADR-0013](../20-decisions/ADR-0013-sandboxed-shell-and-in-container-browser.md)
 
-> **实现状态（M6）**：`Dockerfile`（仓库根目录，full 与 slim 两个目标）、`docker/entrypoint.sh`、`docker/docker-compose.yml` 与 `docker/Caddyfile`；CLI 的 `migrate`、`healthcheck`、`backup`、`restore`、`replay`；`scripts/container-smoke.sh`（容器冒烟测试）与 `scripts/soak.mjs`（长稳测试）；`.github/workflows/ci.yml` 构建两种镜像、跑冒烟测试并用 Trivy 扫描。镜像还没有发布到镜像仓库，需要自己构建。
+> 默认的 full 镜像已发布到 GHCR，支持 `linux/amd64` 和 `linux/arm64`。发布流程在两种架构上运行容器冒烟测试，并在镜像中记录源码提交。 [GitHub Packages](https://github.com/leafliber/Protea/pkgs/container/protea) · [0.1.0 对应的源码](https://github.com/leafliber/Protea/tree/bcf751059dc3186fcff229be2729e985cd51829b)
 
 ## 1. 单镜像
 
@@ -39,7 +39,7 @@ docker run -d --name protea \
   -p 127.0.0.1:7788:7788 \
   --stop-timeout 40 \
   --restart unless-stopped \
-  protea
+  ghcr.io/leafliber/protea:0.1.0
 ```
 
 - **首次启动**：没有管理员账号时，守护进程把一次性设置码打印到容器日志：`docker logs protea`（或 `docker exec protea protea setup`）。打开控制台，用设置码创建管理员账号，接着在引导里选模型供应商（Anthropic、OpenAI、DeepSeek、通义千问、Kimi、GLM、OpenRouter、Ollama 或任何 OpenAI / Anthropic 兼容接口），填地址、API Key 与模型，测试连接后保存。供应商立即生效，不用重启；以后在「模型」页增加、切换或按角色分配。不开浏览器也可以：`docker exec -it protea protea setup --user admin`，再 `docker exec -it protea protea providers set deepseek --model deepseek-chat --key-stdin`。
@@ -49,10 +49,16 @@ docker run -d --name protea \
 - 控制台在 `http://127.0.0.1:7788/`；不在本机时用 SSH 隧道或下面的 Caddy。
 - 其他秘密：`docker exec -i protea protea secrets set TELEGRAM_BOT_TOKEN`（从 stdin 读），或环境变量 `PROTEA_SECRET_<NAME>`。
 
-`docker/docker-compose.yml`：
+使用 Compose 部署需要 Docker Compose 2.24.0 或更高版本。下面从仓库根目录使用已发布镜像。
 
 ```bash
-cd docker && docker compose up -d                                   # 只监听 127.0.0.1:7788
+PROTEA_IMAGE=ghcr.io/leafliber/protea:0.1.0 docker compose -f docker/docker-compose.yml up -d --no-build
+```
+
+也可以从源码构建镜像，或启用 TLS 配置。
+
+```bash
+cd docker && docker compose up -d --build                           # 只监听 127.0.0.1:7788
 PROTEA_DOMAIN=protea.example.com docker compose --profile tls up -d   # 加 Caddy，自动证书，443
 ```
 
@@ -202,7 +208,7 @@ docker exec protea protea backup --to git@github.com:me/protea-memory.git   # �
 
 ```bash
 docker stop protea
-docker run --rm -v protea-data:/data -v "$PWD":/restore protea restore /restore/protea-backup-….tar.gz --force
+docker run --rm -v protea-data:/data -v "$PWD":/restore ghcr.io/leafliber/protea:0.1.0 restore /restore/protea-backup-….tar.gz --force
 docker start protea
 ```
 

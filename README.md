@@ -15,26 +15,31 @@ Protea 是一个可以自行部署、持续运行的个人 AI 助理。聊天、
 
 ## 快速开始
 
-准备好 Docker 和 Docker Compose 2.24.0 或更高版本。以下命令会从源码构建镜像，并在本机启动 Protea。
+安装 Docker 后即可运行已发布的镜像。镜像支持 `linux/amd64` 和 `linux/arm64`。 [GitHub Packages](https://github.com/leafliber/Protea/pkgs/container/protea)
 
 ```bash
-git clone https://github.com/leafliber/Protea.git
-cd Protea
-docker compose -f docker/docker-compose.yml up -d --build
-docker compose -f docker/docker-compose.yml logs protea
+docker run -d --name protea \
+  -v protea-data:/data \
+  -p 127.0.0.1:7788:7788 \
+  --stop-timeout 40 \
+  --restart unless-stopped \
+  ghcr.io/leafliber/protea:0.1.0
+docker logs protea
 ```
 
 1. 打开 [http://127.0.0.1:7788/](http://127.0.0.1:7788/)，用日志里的**一次性设置码**创建管理员账号。
 2. 在向导中选择模型供应商，填写模型、服务地址和所需凭据，测试连接后保存。
 3. 在对话窗口发一条消息。右上角的「控制台」可以管理模型、事件、插件和定时任务。
 
-应用数据持久化在 Docker 卷中。TLS、沙箱、内置浏览器、升级和备份的操作见 [部署文档](docs/10-architecture/16-deployment.md)。
+应用数据持久化在 Docker 卷中。部署文档涵盖 Compose、TLS、沙箱、内置浏览器、升级和备份。 [部署文档](docs/10-architecture/16-deployment.md)
 
 ## 本地开发
 
 准备好 Node.js 22.13 或更高版本，并使用 `package.json` 指定的 pnpm 11.3.0。需要安装 pnpm 时可运行 `npm install -g pnpm@11.3.0`。然后在仓库根目录执行以下命令。
 
 ```bash
+git clone https://github.com/leafliber/Protea.git
+cd Protea
 pnpm install --frozen-lockfile
 pnpm --filter @protea/web... build
 PROTEA_CONTROL__LISTEN=127.0.0.1:7788 pnpm dev

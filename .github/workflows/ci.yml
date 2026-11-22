@@ -1,7 +1,7 @@
 # CI (docs/40-plan/01-roadmap.md M6): checks, tests and a dependency audit on every push and
 # pull request. The images (full, slim, browser) are built, smoke-tested in a container and
 # scanned only for a release, or when the workflow is started by hand (Actions → ci → Run
-# workflow). Nothing is published: pushing to a registry is a separate, manual step.
+# workflow). The separate publish-container.yml workflow publishes the full image to GHCR.
 name: ci
 
 on:
