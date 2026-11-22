@@ -1,6 +1,7 @@
 {
   "name": "openclaw",
   "version": "2026.8.1",
+  "license": "AGPL-3.0-only",
   "private": true,
   "type": "module",
   "description": "Stands in for the OpenClaw framework (about 200 MB), a peer of @tencent-weixin/openclaw-weixin. Only the imports that package loads at run time.",

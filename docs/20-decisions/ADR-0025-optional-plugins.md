@@ -23,6 +23,6 @@
 
 ## 后果
 
-- 镜像和每个实例的插件列表里不再有 `dida365`。已经在用它的实例（它的配置在 `config.yaml` 的 `plugins.dida365`）升级镜像后它会消失，要按 README 打包安装。令牌照常生效；`config.yaml` 里原来的 `plugins.dida365` 配置留在原处，但安装时不会读它（安装本来就这样），重启一次守护进程后才生效。按 ADR-0022 不为此写迁移。
+- 镜像和每个实例的插件列表里不再有 `dida365`。已经在用它的实例（它的配置在 `config.yaml` 的 `plugins.dida365`）升级镜像后它会消失，要按[使用指南](../usage.md#滴答清单)打包安装。令牌照常生效；`config.yaml` 里原来的 `plugins.dida365` 配置留在原处，但安装时不会读它（安装本来就这样），重启一次守护进程后才生效。按 ADR-0022 不为此写迁移。
 - 数据卷里的插件不会随镜像升级：可选插件更新后要重新打包、卸载、再安装，卸载会删掉 `plugins.<id>` 配置。
 - 开发时（`pnpm protea serve`）同样要先打包安装，不再用 `src/main.ts` 直接运行；改插件代码时用 `pnpm protea dev-plugin optional-plugins/<id>` 调试。

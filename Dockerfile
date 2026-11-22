@@ -64,6 +64,7 @@ ARG VERSION=0.1.0
 LABEL org.opencontainers.image.title="protea" \
       org.opencontainers.image.description="24/7 event-stream personal assistant harness" \
       org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.licenses="AGPL-3.0-only" \
       org.opencontainers.image.source="https://github.com/leafliber/Protea"
 ARG NPM_VERSION=12.2.1
 ARG UNDICI_VERSION=6.29.1
@@ -95,6 +96,7 @@ ENV NODE_ENV=production \
     PROTEA_RUN_AS=1000:1000 \
     TZ=UTC
 COPY --from=builder /out/app /app
+COPY LICENSE /app/LICENSE
 COPY docker/entrypoint.sh /usr/local/bin/protea-entrypoint
 RUN chmod 0755 /usr/local/bin/protea-entrypoint /app/dist/main.js \
  && ln -s /app/dist/main.js /usr/local/bin/protea

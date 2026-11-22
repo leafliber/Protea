@@ -1,0 +1,42 @@
+name: 故障报告
+description: 报告 Protea 中可复现的问题
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交前请搜索已有 Issue。分享之前请移除日志、截图和配置里的凭据与个人信息。
+        安全漏洞请通过 [私密报告入口](https://github.com/leafliber/Protea/security/advisories/new) 提交。
+  - type: input
+    id: version
+    attributes:
+      label: Protea 版本或提交
+      description: 从源码运行时可用 git rev-parse --short HEAD 查看当前提交。
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 运行环境
+      description: 请写明操作系统、部署方式和相关运行时或插件版本。
+      placeholder: Linux arm64 / Docker Compose / full 镜像
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤
+      description: 请提供最少的操作步骤和相关配置。
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: 实际结果与预期
+      description: 请说明发生了什么、原先预期什么，以及是否每次都能复现。
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 脱敏日志或截图
+      description: 可附上相关日志片段、错误信息或截图。
